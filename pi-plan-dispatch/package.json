@@ -1,0 +1,13 @@
+{
+  "name": "pi-plan-dispatch",
+  "version": "0.1.0",
+  "description": "Watch .plans/inbox for orchestrator plans and fan tasks out to headless Pi workers.",
+  "keywords": ["pi-package"],
+  "type": "module",
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=1.3.0"
+  }
+}
