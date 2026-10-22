@@ -1,0 +1,16 @@
+filters:
+  and:
+    - 'type == "finding"'
+    - 'status == "open"'
+views:
+  - type: table
+    name: "Open findings"
+    groupBy:
+      property: severity
+      direction: ASC
+    order:
+      - file.name
+      - severity
+      - repo
+      - source
+      - trace

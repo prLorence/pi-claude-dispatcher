@@ -3,8 +3,96 @@
  * No Pi imports here, so it can be tested on its own.
  */
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { BLOCKED_MARKER, GUARD_ENV } from "./guard.ts";
+
+// ---------- Roles ----------
+
+/**
+ * A role is a named job (implement, review, security, qa) with its own model,
+ * thinking level and prompt. Plans name a role; `.plans/config.json` maps it to
+ * a model, so a provider change is a config change.
+ */
+export interface RoleConfig {
+	model?: string;
+	/** Empty or missing means: do not pass --thinking to Pi */
+	thinking?: string;
+	/** A read-only role may not edit anything; findings go in the final message */
+	readonly?: boolean;
+	/** Appended to the worker prompt as a "## Your role" section */
+	prompt?: string;
+}
+
+export const DEFAULT_ROLES: Record<string, RoleConfig> = {
+	implement: {
+		// No model or thinking: both fall back to the plan and config defaults.
+		prompt: [
+			"You implement exactly one task, in the files you own.",
+			"Read every file before you edit it, then change only what the task asks for, run the checks it names, and report what you actually did.",
+			"Do not refactor nearby code, do not add features nobody asked for, and do not touch files outside your list.",
+		].join("\n"),
+	},
+	review: {
+		model: "opencode-go/minimax-m3.1-flash-free",
+		thinking: "low",
+		readonly: true,
+		prompt: [
+			"You review another engineer's change for one task. You are read-only: inspect with the read tools and `git diff -- <files>`, and never edit anything.",
+			"The checkout may contain unrelated uncommitted edits, so judge only the task's files and instructions.",
+			"Look for wrong behaviour, missed requirements, unhandled edge cases, broken interfaces and invented APIs.",
+			"Do not praise, and do not nitpick style. Reply in the review format: `VERDICT: approve | changes`, then `FINDINGS:` with `- <path>:<line>: <problem>. <fix>.` or `none`.",
+		].join("\n"),
+	},
+	security: {
+		model: "opencode-go/glm-5.3-flash",
+		thinking: "high",
+		readonly: true,
+		prompt: [
+			"You are a security reviewer, and you are read-only.",
+			"Look for injection, unsafe deserialisation, path traversal, authn/authz gaps, secrets in code, unsafe shell use, missing input validation, SSRF and insecure defaults.",
+			"Give every finding a severity, and say `clean` only if you actually read the files.",
+			"Reply in the security format: `VERDICT: clean | issues`, then `FINDINGS:` with `- [high|medium|low] <path>:<line>: <problem>. <fix>.` or `none`.",
+		].join("\n"),
+	},
+	qa: {
+		model: "opencode-go/mimo-v2.6-flash",
+		// Empty thinking: no --thinking flag, because MiMo's levels are unknown.
+		thinking: "",
+		prompt: [
+			"You write and run tests for the behaviour this task describes, in the files you own (test files unless the task says otherwise).",
+			"Read the code under test first, cover the real behaviour and the edge cases, and put any bug you find under NEEDS prefixed `BUG:`.",
+			"Do not change production code, and report the command output you actually saw.",
+		].join("\n"),
+	},
+};
+
+/** Pair review rounds when a plan does not set `pair_rounds:` */
+export const DEFAULT_PAIR_ROUNDS = 2;
+
+function cloneRoles(roles: Record<string, RoleConfig>): Record<string, RoleConfig> {
+	return Object.fromEntries(Object.entries(roles).map(([name, role]) => [name, { ...role }]));
+}
+
+/** Keep only the known RoleConfig fields, so a config typo cannot leak into a role. */
+function roleFrom(value: unknown): RoleConfig {
+	const o = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+	const role: RoleConfig = {};
+	if (typeof o.model === "string") role.model = o.model;
+	if (typeof o.thinking === "string") role.thinking = o.thinking;
+	if (typeof o.readonly === "boolean") role.readonly = o.readonly;
+	if (typeof o.prompt === "string") role.prompt = o.prompt;
+	return role;
+}
+
+/** A user entry for a role overrides only the fields it sets. */
+function mergeRoles(over: unknown): Record<string, RoleConfig> {
+	const merged = cloneRoles(DEFAULT_ROLES);
+	const o = over && typeof over === "object" && !Array.isArray(over) ? (over as Record<string, unknown>) : {};
+	for (const [name, value] of Object.entries(o)) merged[name] = { ...(merged[name] ?? {}), ...roleFrom(value) };
+	return merged;
+}
 
 // ---------- Types ----------
 
@@ -25,6 +113,20 @@ export interface DispatchConfig {
 	piCommand: string;
 	/** Simulate workers instead of calling a model */
 	dryRun: boolean;
+	/** Save each worker's Pi session under .plans/sessions/<plan>/ so it can be reopened (false = ephemeral) */
+	persistSessions: boolean;
+	/** Kill a `verify:` command after this many minutes (0 = no timeout) */
+	verifyTimeoutMinutes: number;
+	/** Register the worker-side `tool_call` guard in worker processes (G2) */
+	workerGuards: boolean;
+	/** Reject a plan whose task lists more files than this */
+	maxFilesPerTask: number;
+	/** Reject a plan whose task body is longer than this many characters */
+	maxTaskChars: number;
+	/** Role name to model, thinking, read-only flag and prompt */
+	roles: Record<string, RoleConfig>;
+	/** Cap on worker runs for one task: implementer runs plus pair reviewer runs */
+	maxRunsPerTask: number;
 }
 
 export const DEFAULT_CONFIG: DispatchConfig = {
@@ -36,6 +138,13 @@ export const DEFAULT_CONFIG: DispatchConfig = {
 	tools: [],
 	piCommand: "pi",
 	dryRun: false,
+	persistSessions: true,
+	verifyTimeoutMinutes: 10,
+	workerGuards: true,
+	maxFilesPerTask: 10,
+	maxTaskChars: 8000,
+	roles: cloneRoles(DEFAULT_ROLES),
+	maxRunsPerTask: 8,
 };
 
 export type TaskState = "pending" | "running" | "done" | "failed" | "skipped";
@@ -46,6 +155,20 @@ export interface PlanTask {
 	dependsOn: string[];
 	model?: string;
 	thinking?: string;
+	/** Role name from the `role:` line (default `implement`) */
+	role?: string;
+	/** Role that reviews this task after it passes (`pair:`); must be read-only */
+	pair?: string;
+	/** Pair review rounds to run before an open review is recorded (1-3, default 2) */
+	pairRounds?: number;
+	/** Implementer re-runs caused by a pair review so far; counted apart from retries */
+	pairRound: number;
+	/** Shell command the dispatcher runs after a successful attempt (exit 0 = verified) */
+	verify?: string;
+	/** Failure output fed to the next attempt */
+	feedback?: string;
+	/** What `feedback` is: a verify failure (default) or review findings */
+	feedbackKind?: "verify" | "review";
 	body: string;
 	state: TaskState;
 	attempts: number;
@@ -61,6 +184,14 @@ export interface Plan {
 	maxParallel?: number;
 	model?: string;
 	thinking?: string;
+	/** Trace id shared by every plan of one user request (defaults to the plan id) */
+	trace: string;
+	/** Id of the plan this one follows up (fix rounds), for span linking */
+	parent?: string;
+	/** 1 for the first plan of a trace, +1 per fix round */
+	round?: number;
+	/** Integration check run once after every task is done */
+	verify?: string;
 	/** Text between frontmatter and the first task: shared context for every worker */
 	context: string;
 	tasks: PlanTask[];
@@ -93,10 +224,42 @@ export function loadConfig(d: Dirs): DispatchConfig {
 	const file = path.join(d.root, "config.json");
 	try {
 		const raw = JSON.parse(fs.readFileSync(file, "utf8"));
-		return { ...DEFAULT_CONFIG, ...raw };
+		return { ...DEFAULT_CONFIG, ...raw, roles: mergeRoles(raw?.roles) };
 	} catch {
-		return { ...DEFAULT_CONFIG };
+		return { ...DEFAULT_CONFIG, roles: cloneRoles(DEFAULT_ROLES) };
 	}
+}
+
+/** Every role name the config knows: the built-ins plus any the user added. */
+export function knownRoles(cfg: DispatchConfig): string[] {
+	return [...new Set([...Object.keys(DEFAULT_ROLES), ...Object.keys(cfg.roles ?? {})])];
+}
+
+/** The role's config, with the built-in defaults for every field the user did not set. */
+export function resolveRole(cfg: DispatchConfig | undefined, name: string): RoleConfig {
+	return { ...(DEFAULT_ROLES[name] ?? {}), ...(cfg?.roles?.[name] ?? {}) };
+}
+
+export interface ResolvedModel {
+	model: string;
+	/** Empty means: do not pass --thinking */
+	thinking: string;
+	role: string;
+}
+
+/**
+ * Pick the model, thinking level and role for a task, highest first:
+ * the task's own `model:`/`thinking:` line, the task's role, the plan
+ * frontmatter, the config defaults. An empty thinking level means no flag.
+ */
+export function resolveModel(cfg: DispatchConfig, plan: Plan, task: PlanTask): ResolvedModel {
+	const role = task.role || "implement";
+	const rc = resolveRole(cfg, role);
+	return {
+		model: task.model || rc.model || plan.model || cfg.model,
+		thinking: task.thinking ?? rc.thinking ?? plan.thinking ?? cfg.thinking ?? "",
+		role,
+	};
 }
 
 // ---------- Parsing ----------
@@ -115,13 +278,22 @@ function stripComment(v: string): string {
 
 export class PlanParseError extends Error {}
 
+export function safeId(v: string): string {
+	return v.replace(/[^\w.-]+/g, "-");
+}
+
 export function parsePlan(text: string, fallbackId: string): Plan {
 	const fm = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
 	if (!fm) throw new PlanParseError("Missing frontmatter (--- ... ---) at top of plan");
 	const meta: Record<string, string> = {};
+	let planVerify: string | undefined;
 	for (const line of fm[1].split(/\r?\n/)) {
 		const m = /^([\w-]+)\s*:\s*(.*)$/.exec(line);
-		if (m) meta[m[1].toLowerCase()] = stripComment(m[2]);
+		if (!m) continue;
+		const key = m[1].toLowerCase();
+		// A verify command is a shell line: `#` is not a comment there.
+		if (key === "verify") planVerify = m[2].trim() || undefined;
+		else meta[key] = stripComment(m[2]);
 	}
 	const rest = text.slice(fm[0].length);
 
@@ -137,22 +309,32 @@ export function parsePlan(text: string, fallbackId: string): Plan {
 		if (seen.has(id)) throw new PlanParseError(`Duplicate task id: ${id}`);
 		seen.add(id);
 
-		const task: PlanTask = { id, files: [], dependsOn: [], body: "", state: "pending", attempts: 0 };
+		const task: PlanTask = { id, files: [], dependsOn: [], body: "", state: "pending", attempts: 0, pairRound: 0 };
 		let i = 1;
 		// Leading "key: value" lines are task metadata; the rest is the body.
 		for (; i < lines.length; i++) {
-			const m = /^(files|depends_on|model|thinking)\s*:\s*(.*)$/i.exec(lines[i].trim());
+			const m = /^(files|depends_on|model|thinking|verify|role|pair|pair_rounds)\s*:\s*(.*)$/i.exec(lines[i].trim());
 			if (!m) {
 				if (lines[i].trim() === "") continue;
 				break;
 			}
 			const key = m[1].toLowerCase();
+			if (key === "verify") {
+				// Raw shell line: `#` is not a comment here.
+				task.verify = m[2].trim() || undefined;
+				continue;
+			}
 			const val = stripComment(m[2]);
 			if (key === "files") task.files = parseList(val);
 			else if (key === "depends_on") task.dependsOn = parseList(val);
 			else if (key === "model") task.model = val;
 			else if (key === "thinking") task.thinking = val;
+			else if (key === "role") task.role = val || undefined;
+			else if (key === "pair") task.pair = val || undefined;
+			// A non-numeric pair_rounds becomes NaN, which preflight rejects.
+			else if (key === "pair_rounds") task.pairRounds = val === "" ? Number.NaN : Number.parseInt(val, 10);
 		}
+		if (task.pair && task.pairRounds === undefined) task.pairRounds = DEFAULT_PAIR_ROUNDS;
 		task.body = lines.slice(i).join("\n").trim();
 		if (!task.body) throw new PlanParseError(`Task ${id} has no instructions`);
 		tasks.push(task);
@@ -164,13 +346,18 @@ export function parsePlan(text: string, fallbackId: string): Plan {
 			if (!seen.has(dep)) throw new PlanParseError(`Task ${t.id} depends on unknown task ${dep}`);
 	detectCycle(tasks);
 
+	const id = safeId(meta["id"] || fallbackId);
 	const mp = meta["max_parallel"] ? Number.parseInt(meta["max_parallel"], 10) : undefined;
 	return {
-		id: (meta["id"] || fallbackId).replace(/[^\w.-]+/g, "-"),
+		id,
+		trace: meta["trace"] ? safeId(meta["trace"]) : id,
+		parent: meta["parent"] ? safeId(meta["parent"]) : undefined,
+		round: meta["round"] && Number.parseInt(meta["round"], 10) > 0 ? Number.parseInt(meta["round"], 10) : undefined,
 		status: (meta["status"] || "").toLowerCase(),
 		maxParallel: mp && mp > 0 ? mp : undefined,
 		model: meta["model"] || undefined,
 		thinking: meta["thinking"] || undefined,
+		verify: planVerify,
 		context,
 		tasks,
 	};
@@ -210,6 +397,65 @@ export function filesOverlap(a: string[], b: string[]): boolean {
 			if (x === y || x.startsWith(`${y}/`) || y.startsWith(`${x}/`)) return true;
 		}
 	return false;
+}
+
+/**
+ * Reject an unsafe or oversized plan before any worker starts (G4).
+ * Returns human-readable problems; an empty list means the plan may run.
+ * Executable checks on `verify:` commands live with the caller (`commandExists`).
+ */
+export function preflightPlan(plan: Plan, cfg: DispatchConfig): string[] {
+	const errors: string[] = [];
+	const names = knownRoles(cfg).join(", ");
+	for (const task of plan.tasks) {
+		const roleName = task.role || "implement";
+		if (!knownRoles(cfg).includes(roleName)) {
+			errors.push(`Task ${task.id}: unknown role "${roleName}" (known roles: ${names})`);
+		} else if (roleName !== "security" && resolveRole(cfg, roleName).readonly) {
+			errors.push(
+				`Task ${task.id}: role "${roleName}" is read-only; read-only roles other than "security" can only be used as pair: reviewers`,
+			);
+		}
+		if (task.pair) {
+			if (!knownRoles(cfg).includes(task.pair)) {
+				errors.push(`Task ${task.id}: unknown pair role "${task.pair}" (known roles: ${names})`);
+			} else if (resolveRole(cfg, roleName).readonly) {
+				errors.push(`Task ${task.id}: role "${roleName}" is read-only, so it cannot be paired with "${task.pair}"`);
+			} else if (!resolveRole(cfg, task.pair).readonly) {
+				errors.push(`Task ${task.id}: pair role "${task.pair}" is not read-only; a pair reviewer must be a read-only role`);
+			}
+		}
+		if (task.pairRounds !== undefined && !(task.pairRounds >= 1 && task.pairRounds <= 3)) {
+			errors.push(`Task ${task.id}: pair_rounds must be 1 to 3, got ${task.pairRounds}`);
+		}
+		for (const entry of task.files) {
+			const raw = entry.trim();
+			const rel = raw.replace(/\\/g, "/").replace(/^\.\//, "");
+			const segments = rel.split("/");
+			// The filesystem here is case-insensitive, so .GIT is the real .git.
+			const first = segments[0].toLowerCase();
+			if (path.isAbsolute(raw)) {
+				errors.push(`Task ${task.id}: files entry "${raw}" is absolute; use a path relative to the repo root`);
+			} else if (raw.startsWith("~") || raw.startsWith("@")) {
+				errors.push(`Task ${task.id}: files entry "${raw}" uses a ~ or @ prefix, which a worker tool would resolve elsewhere; use a path relative to the repo root`);
+			} else if (raw.includes("://")) {
+				errors.push(`Task ${task.id}: files entry "${raw}" is a URL; use a path relative to the repo root`);
+			} else if (segments.includes("..")) {
+				errors.push(`Task ${task.id}: files entry "${raw}" contains ".."; it must stay inside the repo`);
+			} else if (first === ".git") {
+				errors.push(`Task ${task.id}: files entry "${raw}" is inside .git/, which no worker may touch`);
+			} else if (first === ".plans") {
+				errors.push(`Task ${task.id}: files entry "${raw}" is inside .plans/, which the planner owns`);
+			}
+		}
+		if (task.files.length > cfg.maxFilesPerTask) {
+			errors.push(`Task ${task.id}: ${task.files.length} files listed (max ${cfg.maxFilesPerTask}); split it into smaller tasks`);
+		}
+		if (task.body.length > cfg.maxTaskChars) {
+			errors.push(`Task ${task.id}: body is ${task.body.length} chars (max ${cfg.maxTaskChars}); split it into smaller tasks`);
+		}
+	}
+	return errors;
 }
 
 /**
@@ -259,26 +505,250 @@ export function isPlanFinished(plan: Plan): boolean {
 
 // ---------- Worker ----------
 
+/** One tool call a worker made, as seen in Pi's JSON event stream. */
+export interface ToolRecord {
+	name: string;
+	/** file path argument, if the tool had one */
+	path?: string;
+	/** short command or detail, for the trace */
+	detail?: string;
+	isError?: boolean;
+	/** first 300 chars of the tool result text */
+	result?: string;
+	/** true when the result carried the guard's BLOCKED_MARKER */
+	blocked?: boolean;
+}
+
 export interface WorkerResult {
 	ok: boolean;
 	output: string;
 	cost: number;
 	error?: string;
+	model?: string;
+	thinking?: string;
+	stopReason?: string;
+	tokens?: { input: number; output: number; total: number };
+	tools?: ToolRecord[];
+	/** true when no model was called */
+	dry?: boolean;
+	/** The worker's saved Pi session, when persistSessions is on */
+	session?: WorkerSession;
 }
 
-export function buildWorkerPrompt(plan: Plan, task: PlanTask): string {
+export interface WorkerSession {
+	id: string;
+	/** absolute directory holding the session file */
+	dir: string;
+	/** session file, found after the worker exits */
+	file?: string;
+}
+
+/** Shell command that reopens a worker's session in Pi, run from the repo root. */
+export function resumeCommand(cwd: string, s: WorkerSession): string {
+	return `pi --session ${s.id} --session-dir ${path.relative(cwd, s.dir) || "."}`;
+}
+
+/**
+ * Pi requires a session id of `^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$`.
+ * safeId can leave a `-` or `.` at either end (and maps `!` to one), so trim
+ * anything that is not a letter or digit off both ends. `x` if nothing is left.
+ */
+function sessionIdPart(v: string): string {
+	const trimmed = safeId(v).replace(/^[^A-Za-z0-9]+/, "").replace(/[^A-Za-z0-9]+$/, "");
+	return trimmed || "x";
+}
+
+/** Short stable hash, so two task ids that sanitise to the same part never collide. */
+function shortHash(v: string): string {
+	return createHash("sha256").update(v).digest("hex").slice(0, 8);
+}
+
+/** One session per task attempt, so a retry never appends to a failed attempt's history. */
+export function sessionFor(cwd: string, cfg: DispatchConfig, plan: Plan, task: PlanTask): WorkerSession | undefined {
+	if (!cfg.persistSessions || cfg.dryRun) return undefined;
+	const planId = sessionIdPart(plan.id);
+	const part = sessionIdPart(task.id);
+	const taskId = part === task.id ? task.id : `${part}-${shortHash(task.id)}`;
+	return { id: `${planId}.${taskId}.a${task.attempts}`, dir: path.join(cwd, ".plans", "sessions", planId) };
+}
+
+/**
+ * Move old session files for this id out of the way before a worker starts.
+ * `pi --session-id` would otherwise reopen the old conversation on a re-run of
+ * the same plan, so keep the history under `.prev-<timestamp>` instead.
+ */
+function retireSession(s: WorkerSession) {
+	let names: string[] = [];
+	try {
+		names = fs.readdirSync(s.dir).filter((n) => n.endsWith(`_${s.id}.jsonl`));
+	} catch {
+		// First run: the session directory does not exist yet.
+		return;
+	}
+	const stamp = Date.now();
+	for (const n of names) fs.renameSync(path.join(s.dir, n), path.join(s.dir, `${n}.prev-${stamp}`));
+}
+
+function findSessionFile(s: WorkerSession): string | undefined {
+	try {
+		return fs.readdirSync(s.dir).find((n) => n.endsWith(`_${s.id}.jsonl`));
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Pi prints `Warning: No project session found with id '<id>'; creating a new
+ * session with that id.` on a first run. It is noise in a failure message, so
+ * drop those lines and let the real error (or "no reply") show.
+ */
+function dropSessionWarning(text: string): string {
+	return text
+		.split("\n")
+		.filter((line) => !line.trim().startsWith("Warning: No project session found"))
+		.join("\n");
+}
+
+export function buildWorkerPrompt(plan: Plan, task: PlanTask, cfg: DispatchConfig = DEFAULT_CONFIG): string {
 	const owned = task.files.length
 		? `You own ONLY these paths: ${task.files.join(", ")}.\nDo not edit any other file. Other workers are editing other files at the same time. If you truly need a change elsewhere, don't make it: describe it under NEEDS.`
 		: "No file list was given for this task; keep changes minimal and focused.";
+	const retry = task.feedback ? retrySection(task.feedback, task.feedbackKind) : "";
+	const rolePrompt = resolveRole(cfg, task.role || "implement").prompt;
+	const role = rolePrompt ? `## Your role\n${rolePrompt}` : "";
+	const grounding = [
+		"## Grounding rules",
+		"- Read every file before you edit it. Never edit from memory.",
+		"- Never invent function names, APIs, file paths or package names. Verify them by reading the code or searching for them.",
+		"- If something you need is missing or unclear, stop and put it under NEEDS instead of guessing.",
+		"- Only report test results from commands you actually ran, and quote the real output line.",
+		"- Do not claim a change you did not make.",
+	].join("\n");
 	return [
 		`You are a worker executing one task from plan "${plan.id}".`,
 		plan.context ? `## Plan context\n${plan.context}` : "",
 		`## Your task: ${task.id}\n${task.body}`,
+		retry,
+		role,
 		`## Rules\n${owned}\nDo not commit to git. Run the relevant tests or checks before finishing if the task names them.`,
+		grounding,
 		`## Final message format\nEnd with exactly these sections:\nSTATUS: done | failed\nCHANGED: <files you changed, one per line>\nTESTS: <commands run and result>\nNOTES: <anything the reviewer should know>\nNEEDS: <changes needed outside your files, or "none">`,
 	]
 		.filter(Boolean)
 		.join("\n\n");
+}
+
+/**
+ * The retry section: a verify failure or review findings. `verify` (or unset,
+ * for plans written before the field existed) is a failed check, `review` is a
+ * reviewer's finding list that the implementer either fixes or answers.
+ */
+function retrySection(feedback: string, kind: PlanTask["feedbackKind"]): string {
+	if (kind === "review") {
+		return `## A reviewer found problems with your change\n${feedback}\nFix the cause of each finding, or explain under NOTES why a finding is wrong. Do not re-run the same thing blindly.`;
+	}
+	return `## Your previous attempt failed verification\n${feedback}\nFix the cause of the failure. Do not re-run the same thing blindly.`;
+}
+
+/** Text of a tool result, whatever shape Pi handed us. */
+function toolResultText(value: unknown): string {
+	if (typeof value === "string") return value;
+	if (Array.isArray(value)) return value.map(toolResultText).filter(Boolean).join("\n");
+	if (!value || typeof value !== "object") return "";
+	const obj = value as Record<string, unknown>;
+	if (Array.isArray(obj.content)) return toolResultText(obj.content);
+	if (typeof obj.text === "string") return obj.text;
+	if (typeof obj.output === "string") return obj.output;
+	if (typeof obj.message === "string") return obj.message;
+	return "";
+}
+
+/** What runWorker and smokeTestModel read from Pi's JSON event stream. */
+interface WorkerStreamState {
+	finalText: string;
+	cost: number;
+	stopReason: string;
+	errorMessage: string;
+	tokens: { input: number; output: number; total: number };
+	tools: ToolRecord[];
+	/** stdout lines that were not JSON, e.g. "No API key found" */
+	plain: string;
+}
+
+function createWorkerStream(onText?: (text: string) => void): { state: WorkerStreamState; handle: (line: string) => void } {
+	const state: WorkerStreamState = {
+		finalText: "",
+		cost: 0,
+		stopReason: "",
+		errorMessage: "",
+		tokens: { input: 0, output: 0, total: 0 },
+		tools: [],
+		plain: "",
+	};
+	const toolById = new Map<string, ToolRecord>();
+
+	const handle = (line: string) => {
+		if (!line.trim()) return;
+		let ev: any;
+		try {
+			ev = JSON.parse(line);
+		} catch {
+			// Pi prints some errors (e.g. "No API key found") as plain text.
+			state.plain += `${line}\n`;
+			if (state.plain.length > 20_000) state.plain = state.plain.slice(-20_000);
+			return;
+		}
+		if (ev.type === "tool_execution_start") {
+			const a = ev.args || {};
+			const rec: ToolRecord = {
+				name: String(ev.toolName ?? "unknown"),
+				path: a.path ?? a.file_path ?? a.filePath ?? a.file,
+				detail: typeof a.command === "string" ? a.command.slice(0, 160) : undefined,
+			};
+			state.tools.push(rec);
+			if (ev.toolCallId) toolById.set(ev.toolCallId, rec);
+		} else if (ev.type === "tool_execution_end") {
+			const rec = toolById.get(ev.toolCallId);
+			if (!rec) return;
+			if (ev.isError) rec.isError = true;
+			const text = toolResultText(ev.result);
+			if (!text) return;
+			rec.result = text.slice(0, 300);
+			// Only a real error that the guard wrote counts: a normal result (say, a
+			// read of guard.ts) can quote the marker without being blocked.
+			if (ev.isError === true && text.startsWith(BLOCKED_MARKER)) rec.blocked = true;
+		} else if (ev.type === "message_end" && ev.message?.role === "assistant") {
+			const msg = ev.message;
+			const text = (msg.content || [])
+				.filter((p: any) => p.type === "text")
+				.map((p: any) => p.text)
+				.join("\n")
+				.trim();
+			if (text) state.finalText = text;
+			state.cost += msg.usage?.cost?.total || 0;
+			state.tokens.input += msg.usage?.input || 0;
+			state.tokens.output += msg.usage?.output || 0;
+			state.tokens.total += msg.usage?.totalTokens || 0;
+			if (msg.stopReason) state.stopReason = msg.stopReason;
+			if (msg.errorMessage) state.errorMessage = msg.errorMessage;
+			if (text && onText) onText(text);
+		}
+	};
+
+	return { state, handle };
+}
+
+/** Env for a worker process: no second watcher, plus the guard policy when enabled. */
+function workerEnv(cfg: DispatchConfig, task: PlanTask): NodeJS.ProcessEnv {
+	const env: NodeJS.ProcessEnv = { ...process.env, PI_PLAN_DISPATCH_WORKER: "1" };
+	if (cfg.workerGuards) {
+		const readonly = resolveRole(cfg, task.role || "implement").readonly === true;
+		env[GUARD_ENV] = JSON.stringify({ files: task.files, bash: true, readonly });
+	} else {
+		// Never inherit a parent worker's policy: a nested worker gets its own or none.
+		delete env[GUARD_ENV];
+	}
+	return env;
 }
 
 export function runWorker(
@@ -288,8 +758,9 @@ export function runWorker(
 	task: PlanTask,
 	signal: AbortSignal,
 	onLine?: (line: string) => void,
+	opts?: { prompt?: string },
 ): Promise<WorkerResult> {
-	const prompt = buildWorkerPrompt(plan, task);
+	const prompt = opts?.prompt ?? buildWorkerPrompt(plan, task, cfg);
 
 	if (cfg.dryRun) {
 		return new Promise((resolve) => {
@@ -299,6 +770,7 @@ export function runWorker(
 					resolve({
 						ok: true,
 						cost: 0,
+						dry: true,
 						output: `STATUS: done\nCHANGED: (dry run, nothing changed)\nTESTS: none\nNOTES: Dry run. Worker would have received:\n\n${prompt}\nNEEDS: none`,
 					}),
 				ms,
@@ -310,18 +782,21 @@ export function runWorker(
 		});
 	}
 
-	const model = task.model || plan.model || cfg.model;
-	const thinking = task.thinking || plan.thinking || cfg.thinking;
-	const args = ["--mode", "json", "-p", "--no-session", "--model", model];
+	const { model, thinking } = resolveModel(cfg, plan, task);
+	const args = ["--mode", "json", "-p"];
+	const session = sessionFor(cwd, cfg, plan, task);
+	if (session) {
+		retireSession(session);
+		args.push("--session-id", session.id, "--session-dir", session.dir, "--name", `${plan.id}/${task.id}`);
+	} else args.push("--no-session");
+	args.push("--model", model);
 	if (thinking) args.push("--thinking", thinking);
 	if (cfg.tools.length) args.push("--tools", cfg.tools.join(","));
 	args.push(prompt);
 
 	return new Promise((resolve) => {
-		let finalText = "";
-		let cost = 0;
-		let stopReason = "";
-		let errorMessage = "";
+		const stream = createWorkerStream((text) => onLine?.(text.split("\n")[0].slice(0, 120)));
+		const state = stream.state;
 		let stderr = "";
 		let buffer = "";
 		let settled = false;
@@ -330,8 +805,9 @@ export function runWorker(
 			cwd,
 			shell: false,
 			stdio: ["ignore", "pipe", "pipe"],
-			// Workers must not start their own plan watcher.
-			env: { ...process.env, PI_PLAN_DISPATCH_WORKER: "1" },
+			// Workers must not start their own plan watcher, and (unless disabled)
+			// they register the tool_call guard from PI_PLAN_DISPATCH_GUARD.
+			env: workerEnv(cfg, task),
 		});
 
 		const finish = (r: WorkerResult) => {
@@ -342,7 +818,7 @@ export function runWorker(
 		};
 
 		const kill = (why: string) => {
-			errorMessage = why;
+			state.errorMessage = why;
 			proc.kill("SIGTERM");
 			setTimeout(() => {
 				if (!proc.killed) proc.kill("SIGKILL");
@@ -351,30 +827,7 @@ export function runWorker(
 		const timeout = setTimeout(() => kill(`timed out after ${cfg.timeoutMinutes} min`), cfg.timeoutMinutes * 60_000);
 		signal.addEventListener("abort", () => kill("aborted"), { once: true });
 
-		const handle = (line: string) => {
-			if (!line.trim()) return;
-			let ev: any;
-			try {
-				ev = JSON.parse(line);
-			} catch {
-				// Pi prints some errors (e.g. "No API key found") as plain text.
-				stderr += `${line}\n`;
-				return;
-			}
-			if (ev.type === "message_end" && ev.message?.role === "assistant") {
-				const msg = ev.message;
-				const text = (msg.content || [])
-					.filter((p: any) => p.type === "text")
-					.map((p: any) => p.text)
-					.join("\n")
-					.trim();
-				if (text) finalText = text;
-				cost += msg.usage?.cost?.total || 0;
-				if (msg.stopReason) stopReason = msg.stopReason;
-				if (msg.errorMessage) errorMessage = msg.errorMessage;
-				if (text && onLine) onLine(text.split("\n")[0].slice(0, 120));
-			}
-		};
+		const handle = stream.handle;
 
 		proc.stdout.on("data", (d) => {
 			buffer += d.toString();
@@ -386,19 +839,121 @@ export function runWorker(
 			stderr += d.toString();
 			if (stderr.length > 20_000) stderr = stderr.slice(-20_000);
 		});
-		proc.on("error", (e) => finish({ ok: false, cost, output: finalText, error: `could not start '${cfg.piCommand}': ${e.message}` }));
+		proc.on("error", (e) =>
+			finish({
+				ok: false,
+				cost: state.cost,
+				output: state.finalText,
+				model,
+				thinking,
+				tokens: state.tokens,
+				tools: state.tools,
+				session,
+				error: `could not start '${cfg.piCommand}': ${e.message}`,
+			}),
+		);
 		proc.on("close", (code) => {
 			if (buffer.trim()) handle(buffer);
-			const selfReportedFail = /^STATUS:\s*failed/im.test(finalText);
-			const noOutput = !finalText;
+			const selfReportedFail = /^STATUS:\s*failed/im.test(state.finalText);
+			const noOutput = !state.finalText;
 			const failed =
-				code !== 0 || stopReason === "error" || stopReason === "aborted" || !!errorMessage || selfReportedFail || noOutput;
-			const why =
-				errorMessage ||
+				code !== 0 || state.stopReason === "error" || state.stopReason === "aborted" || !!state.errorMessage || selfReportedFail || noOutput;
+				const why =
+				state.errorMessage ||
 				(selfReportedFail ? "worker reported STATUS: failed" : "") ||
-				stderr.trim().slice(-2000) ||
+				dropSessionWarning(`${stderr}${state.plain}`).trim().slice(-2000) ||
 				(noOutput ? "worker produced no reply" : `exit code ${code}`);
-			finish({ ok: !failed, cost, output: finalText, error: failed ? why : undefined });
+			if (session) session.file = findSessionFile(session);
+			finish({
+				ok: !failed,
+				cost: state.cost,
+				output: state.finalText,
+				error: failed ? why : undefined,
+				model,
+				thinking,
+				stopReason: state.stopReason,
+				tokens: state.tokens,
+				tools: state.tools,
+				session,
+			});
+		});
+	});
+}
+
+export interface SmokeResult {
+	ok: boolean;
+	error?: string;
+	cost: number;
+	seconds: number;
+}
+
+/** How long one smoke-test call may take. */
+const SMOKE_TEST_TIMEOUT_MS = 90_000;
+const SMOKE_TEST_PROMPT = "Reply with the single word OK";
+
+/**
+ * One tiny real call for a (model, thinking) pair, so a wrong model id or an
+ * unsupported thinking level shows up before a plan runs. Empty thinking means
+ * no --thinking flag. Any assistant reply counts as a pass: the call happened.
+ */
+export function smokeTestModel(cwd: string, cfg: DispatchConfig, model: string, thinking: string): Promise<SmokeResult> {
+	const started = Date.now();
+	const args = ["--mode", "json", "-p", "--no-session", "--model", model];
+	if (thinking) args.push("--thinking", thinking);
+	args.push(SMOKE_TEST_PROMPT);
+
+	return new Promise((done) => {
+		const stream = createWorkerStream();
+		let stderr = "";
+		let buffer = "";
+		let settled = false;
+		let timedOut = false;
+		let timer: NodeJS.Timeout | undefined;
+		let escalate: NodeJS.Timeout | undefined;
+
+		const finish = (error?: string) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			clearTimeout(escalate);
+			const seconds = Math.round((Date.now() - started) / 100) / 10;
+			done({ ok: !error, error, cost: stream.state.cost, seconds });
+		};
+
+		const proc = spawn(cfg.piCommand, args, {
+			cwd,
+			shell: false,
+			stdio: ["ignore", "pipe", "pipe"],
+			env: { ...process.env, PI_PLAN_DISPATCH_WORKER: "1" },
+		});
+
+		timer = setTimeout(() => {
+			timedOut = true;
+			proc.kill("SIGTERM");
+			escalate = setTimeout(() => proc.kill("SIGKILL"), 5000);
+		}, SMOKE_TEST_TIMEOUT_MS);
+
+		proc.stdout.on("data", (d) => {
+			buffer += d.toString();
+			const lines = buffer.split("\n");
+			buffer = lines.pop() || "";
+			for (const l of lines) stream.handle(l);
+		});
+		proc.stderr.on("data", (d) => {
+			stderr += d.toString();
+			if (stderr.length > 20_000) stderr = stderr.slice(-20_000);
+		});
+		proc.on("error", (e) => finish(`could not start '${cfg.piCommand}': ${e.message}`));
+		proc.on("close", (code) => {
+			if (buffer.trim()) stream.handle(buffer);
+			const state = stream.state;
+			if (timedOut) return finish(`no reply within ${SMOKE_TEST_TIMEOUT_MS / 1000}s`);
+			const noise = `${stderr}${state.plain}`.trim().slice(-500);
+			if (state.errorMessage) return finish(state.errorMessage);
+			if (state.stopReason === "error" || state.stopReason === "aborted") return finish(`stop reason: ${state.stopReason}`);
+			if (code !== 0) return finish(noise || `exit code ${code}`);
+			if (!state.finalText) return finish(noise || "the model produced no reply");
+			finish();
 		});
 	});
 }
@@ -415,6 +970,7 @@ export function writeTaskResult(outDir: string, task: PlanTask, r: WorkerResult)
 		`- duration: ${secs}s`,
 		`- cost: $${(task.cost || 0).toFixed(4)}`,
 		task.files.length ? `- files: ${task.files.join(", ")}` : "- files: (none listed)",
+		r.session ? `- session: \`${r.session.id}\`${r.session.file ? ` (${r.session.file})` : ""}` : "",
 		r.error ? `- error: ${r.error}` : "",
 		"",
 		"## Worker report",
@@ -427,7 +983,7 @@ export function writeTaskResult(outDir: string, task: PlanTask, r: WorkerResult)
 	fs.writeFileSync(path.join(outDir, `${task.id}.md`), `${body}\n`);
 }
 
-export function writeSummary(outDir: string, plan: Plan) {
+export function writeSummary(outDir: string, plan: Plan, extra: string[] = []) {
 	const total = plan.tasks.reduce((s, t) => s + (t.cost || 0), 0);
 	const counts = (s: TaskState) => plan.tasks.filter((t) => t.state === s).length;
 	const lines = [
@@ -435,6 +991,7 @@ export function writeSummary(outDir: string, plan: Plan) {
 		"",
 		`done ${counts("done")} · failed ${counts("failed")} · skipped ${counts("skipped")} · cost $${total.toFixed(4)}`,
 		"",
+		...extra,
 		"| task | state | attempts | report |",
 		"|---|---|---|---|",
 		...plan.tasks.map((t) => `| ${t.id} | ${t.state} | ${t.attempts} | [${t.id}.md](./${t.id}.md) |`),

@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "harness_repo": "git@github.com:prLorence/pi-claude-dispatcher.git",
+  "boot_budget_tokens": 4000,
+  "min_node": 24,
+  "sync_push": "auto"
+}

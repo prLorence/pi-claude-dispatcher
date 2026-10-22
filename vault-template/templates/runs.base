@@ -1,0 +1,25 @@
+filters:
+  and:
+    - 'type == "run"'
+views:
+  - type: table
+    name: "Runs"
+    order:
+      - file.name
+      - repo
+      - status
+      - gate
+      - trace
+      - file.mtime
+  - type: table
+    name: "Failed"
+    filters:
+      and:
+        - 'status == "failed"'
+    order:
+      - file.name
+      - repo
+      - status
+      - gate
+      - trace
+      - file.mtime

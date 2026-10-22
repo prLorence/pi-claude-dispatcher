@@ -1,0 +1,14 @@
+filters:
+  and:
+    - 'type == "finding"'
+views:
+  - type: table
+    name: "By fingerprint"
+    groupBy:
+      property: fingerprint
+      direction: ASC
+    order:
+      - file.name
+      - trace
+      - repo
+      - status
