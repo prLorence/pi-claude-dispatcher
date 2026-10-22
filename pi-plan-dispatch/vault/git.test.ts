@@ -182,6 +182,7 @@ test("lintVault skips .git and index.md in the secret scan", async () => {
 		const vault = path.join(root, "vault");
 		initVault(vault);
 		fs.writeFileSync(path.join(vault, "index.md"), `generated ${secretText()}\n`);
+		fs.writeFileSync(path.join(vault, ".git", "leaked-object"), `committed ${secretText()}\n`);
 		const secrets = lintVault(vault).filter((finding) => finding.code === "secret");
 		assert.deepEqual(secrets, []);
 	});
@@ -422,6 +423,20 @@ test("syncPush stages managed files and reports unmanaged ones", async () => {
 		const status = gitRun(vault, ["status", "--porcelain"]);
 		assert.match(status, /\?\? notes\.txt/);
 		assert.match(status, /\?\? plans\/stray\.txt/);
+	});
+});
+
+test("syncPush stages a .gitkeep file in a type folder", async () => {
+	await withTemp((root) => {
+		const remote = makeRemote(root);
+		const vault = path.join(root, "vault");
+		initVault(vault);
+		publish(vault, remote);
+		fs.writeFileSync(path.join(vault, "plans", ".gitkeep"), "\n");
+		const result = syncPush(vault, { summary: "keep" });
+		assert.equal(result.code, 0);
+		assert.deepEqual(result.unmanaged, []);
+		assert.equal(gitRun(vault, ["show", "--name-only", "--format=", "HEAD"]).trim(), "plans/.gitkeep");
 	});
 });
 

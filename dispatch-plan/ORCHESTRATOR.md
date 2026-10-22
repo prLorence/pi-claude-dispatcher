@@ -10,6 +10,7 @@ and Pi workers write all the code. Steps 1 to 8 are the whole flow for one reque
    config or docs in the repo, not even a one-line fix. You write only plans, specs and traces
    under `.plans/`. There is no break-glass switch yet; an enforcing hook is planned. You may
    read files, run read-only commands and answer questions.
+   Exception: the vault. You also write the vault, only through vault.mjs (see the vault rules below).
 
 2. **Clarify.** For any non-trivial request, run the `grilling` skill until the requirements
    are clear. Save the spec at `.plans/specs/<trace>.md` using the spec format in
@@ -74,8 +75,65 @@ and Pi workers write all the code. Steps 1 to 8 are the whole flow for one reque
    `parent:` set and the same spec, and take it through steps 3 to 5 again. Stop after 3 fix
    rounds, so the last plan id ends in `-r4`, or when the same finding repeats, and ask the
    user. Do not commit unless the user asks.
+   Exception: vault sync push commits to the vault repo only, never to a project repo.
 
 8. **Stay out of the checkout.** Nobody edits the repository while a plan runs, including you:
    workers share one checkout, so an outside edit shows up as an unowned change and can fail the
    gate.
+```
+
+Paste the block below directly under the block above, in the same `CLAUDE.md` or `~/.claude/CLAUDE.md`.
+
+```markdown
+## Vault rules (agent-vault)
+
+The vault is the agent memory: an Obsidian vault in its own git repo, with notes, a log and a
+schema. You are the only role that writes it, and only through the CLI at
+`node ~/.claude/skills/dispatch-plan/vault.mjs`. Workers have no vault access at all.
+
+1. **Session start.** Run `vault.mjs resolve`. If it succeeds, run `vault.mjs repo check`: exit
+   `3` means this repo's mode is `none`. When both are fine, run `vault.mjs sync pull` then
+   `vault.mjs boot` and read the boot text before you plan. Otherwise skip every vault step for
+   the whole request and say so once.
+
+2. **Write after the run, never before.** A run includes a plan rejected before it ran. Write
+   only through `vault.mjs`, never with an editor, and only what the repo mode allows. `full`
+   allows everything. `meta` allows `run`, `decision` and `lesson` notes only, and the CLI builds
+   the `run` body from `--set` fields, so never pass `--body-stdin` for a `meta` run. `none`
+   allows nothing. The notes are: a `run` note for the plan; for a `full` repo a `plan` note
+   holding the plan text; one `finding` note per reviewer, pair, security, plan-audit or gate
+   finding, with `fingerprint` = `<repo slug>:<repo-relative file or ->:<slug(title)>`; and
+   `decision` or `lesson` notes only for a fact that outlives the trace. Then `log append`.
+
+3. **Push.** After the `log append`, run `vault.mjs sync push` when `sync_push` in the vault's
+   `harness.json` is `auto`. When it is `manual`, commit nothing and tell the user a push is due.
+
+4. **Close findings.** When a fix round of a trace passes the gate, close every open finding of
+   that trace with `vault.mjs note status <basename> closed`.
+
+5. **Privacy.** Never put the slug, or the `owner/name`, of a `none` repo into a note, a log
+   line or a commit summary. The CLI rejects it and `lint` blocks the push.
+
+6. **Obsidian skills.** Use the `obsidian-markdown` skill whenever you write or edit note text
+   yourself: properties, wikilinks, callouts, embeds. Use the `obsidian-bases` skill when you
+   write or edit a `.base` view in `templates/`. Notes still go through the CLI.
+
+7. **Graphify.** Use it only in `full` repos, to explore a codebase and distil
+   `graphify-out/GRAPH_REPORT.md` into a `codebase` note through the CLI. Before the first run in
+   a repo, append `graphify-out/` to that repo's `.git/info/exclude`, so the folder never shows up
+   as an unowned change. Never run `graphify install --project` or `graphify hook install` in a
+   project repo. `graph.json`, `graph.html` and the rest of `graphify-out/` never enter the vault.
+
+8. **Plans stay in `.plans/`.** A plan is not stored in the vault before it runs; plans keep
+   using `.plans/inbox/`. The vault gets the `plan` note after the run, in a `full` repo only.
+
+9. **Never write the user's personal vault**, `obsidian-v2`, and no other vault but the agent one.
+
+10. **Trace the vault calls.** Pass `--trace <T> --root <repo root>` to every vault command you
+    run for a request, because the CLI writes its `vault.*` trace events only when it gets both
+    flags. The session-start `sync pull` and `boot` have no trace yet and may omit them.
+
+A finding basename is `<trace>-f-<8 hex>`, where the 8 hex are the first 8 characters of the
+sha1 of the fingerprint. Compute it like this, with the fingerprint in single quotes:
+`printf %s '<fingerprint>' | shasum | cut -c1-8`.
 ```

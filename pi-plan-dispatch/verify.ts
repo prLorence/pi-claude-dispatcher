@@ -34,6 +34,17 @@ export interface VerifyResult {
 
 const quote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
+/**
+ * The environment of the verify child: no AGENT_VAULT, and marked as a worker
+ * so the vault CLI refuses every command.
+ */
+const verifyEnv = (): NodeJS.ProcessEnv => {
+	const env = { ...process.env };
+	delete env.AGENT_VAULT;
+	env.PI_PLAN_DISPATCH_WORKER = "1";
+	return env;
+};
+
 const isDirectory = (p: string) => {
 	try {
 		return statSync(p).isDirectory();
@@ -82,6 +93,7 @@ export function runVerify(cwd: string, command: string, timeoutMinutes: number, 
 		// down whatever `sh -c` started (a backgrounded verify, a shell pipeline).
 		const proc = spawn("sh", ["-c", command], {
 			cwd,
+			env: verifyEnv(),
 			detached: true,
 			stdio: ["ignore", "pipe", "pipe"],
 		});

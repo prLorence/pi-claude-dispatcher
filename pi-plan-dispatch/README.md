@@ -27,8 +27,8 @@ pi            # then /login and pick OpenCode Go, or set the key per Pi's provid
 pi install ./pi-plan-dispatch                        # as a package
 cp -r pi-plan-dispatch ~/.pi/agent/extensions/       # or as a global extension
 
-# 3. The Claude Code skill, orchestrator rules, trace and preflight CLIs
-mkdir -p ~/.claude/skills/dispatch-plan && cp dispatch-plan/SKILL.md dispatch-plan/ORCHESTRATOR.md dispatch-plan/trace.mjs dispatch-plan/preflight.mjs dispatch-plan/config-init.mjs ~/.claude/skills/dispatch-plan/
+# 3. The Claude Code skill, orchestrator rules, trace, preflight, config and vault CLIs
+mkdir -p ~/.claude/skills/dispatch-plan && cp dispatch-plan/SKILL.md dispatch-plan/ORCHESTRATOR.md dispatch-plan/trace.mjs dispatch-plan/preflight.mjs dispatch-plan/config-init.mjs dispatch-plan/vault.mjs dispatch-plan/vault-admin.mjs dispatch-plan/vault-events.mjs ~/.claude/skills/dispatch-plan/
 
 # 4. The plan-auditor subagent, and removal of the superseded agents
 mkdir -p ~/.claude/agents && cp dispatch-plan/agents/plan-auditor.md ~/.claude/agents/
@@ -36,6 +36,10 @@ rm -f ~/.claude/agents/planner.md ~/.claude/agents/auditor.md
 
 # 5. The orchestrator rules
 # paste the block from dispatch-plan/ORCHESTRATOR.md into CLAUDE.md or ~/.claude/CLAUDE.md
+
+# 6. The agent vault, once: create it (`vault init`), then wire this machine to it (`vault setup`)
+node dispatch-plan/vault.mjs init            # first machine only
+node dispatch-plan/vault.mjs setup --path <vault>
 ```
 
 Add `.plans/` to your `.gitignore`.
@@ -175,6 +179,10 @@ Before any worker starts, the extension rejects the plan, moves it to `.plans/fa
 - a task lists more than `maxFilesPerTask` files (default 10);
 - a task body is longer than `maxTaskChars` characters (default 8000);
 - a `verify:` executable cannot be found.
+
+### Worker isolation: the vault
+
+Workers never reach the agent vault. The dispatcher builds their environment itself: it sets `PI_PLAN_DISPATCH_WORKER=1` and removes `AGENT_VAULT`, so a worker cannot inherit the parent's vault, and it passes the vault's realpath to the guard in `PI_PLAN_DISPATCH_VAULT`. The CLI refuses every command while `PI_PLAN_DISPATCH_WORKER` is set, the guard denies any tool call whose path is inside the vault, and preflight rejects a `files:` entry that leaves the repo through a symlink. `verify:` commands get the same two variables, so a test cannot write the vault either. What the vault is, and how the orchestrator and the `plan-auditor` use it, is in [docs/vault.md](../docs/vault.md). A worker's shell can still reach any path the OS allows; the sync staging rule and the range lint are the backstop.
 
 ## Plan format notes
 

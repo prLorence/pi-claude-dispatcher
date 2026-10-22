@@ -105,6 +105,40 @@ test("runVerify: abort kills the run but is not a timeout", async () => {
 	assert.ok(early.durationMs < 5_000);
 });
 
+test("runVerify: the child env drops AGENT_VAULT and marks itself a worker", async () => {
+	const dir = tmp();
+	const savedVault = process.env.AGENT_VAULT;
+	const savedWorker = process.env.PI_PLAN_DISPATCH_WORKER;
+	try {
+		process.env.AGENT_VAULT = path.join(dir, "vault");
+		delete process.env.PI_PLAN_DISPATCH_WORKER;
+		const r = await runVerify(dir, 'printf "%s:%s" "${AGENT_VAULT-unset}" "${PI_PLAN_DISPATCH_WORKER-unset}"', 1);
+		assert.equal(r.ok, true);
+		assert.equal(r.output, "unset:1");
+	} finally {
+		if (savedVault === undefined) delete process.env.AGENT_VAULT;
+		else process.env.AGENT_VAULT = savedVault;
+		if (savedWorker === undefined) delete process.env.PI_PLAN_DISPATCH_WORKER;
+		else process.env.PI_PLAN_DISPATCH_WORKER = savedWorker;
+	}
+});
+
+test("runVerify: the child env keeps the rest of the environment", async () => {
+	const dir = tmp();
+	const home = path.join(dir, "home");
+	fs.mkdirSync(home);
+	const savedHome = process.env.HOME;
+	try {
+		process.env.HOME = home;
+		const r = await runVerify(dir, 'printf "%s:%s" "$HOME" "${PATH:+set}"', 1);
+		assert.equal(r.ok, true);
+		assert.equal(r.output, `${home}:set`);
+	} finally {
+		if (savedHome === undefined) delete process.env.HOME;
+		else process.env.HOME = savedHome;
+	}
+});
+
 test("createVerifyLock: overlapping calls run strictly one at a time, in call order", async () => {
 	const lock = createVerifyLock();
 	const log: string[] = [];

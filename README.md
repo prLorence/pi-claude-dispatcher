@@ -13,7 +13,7 @@ You talk to one Claude Code session, Sonnet 5.5, which clarifies the request int
 
 ## The rule
 
-Claude models, Sonnet and Opus included, never write code, tests, scripts, config or docs in the repository. The orchestrator writes only artifacts under `.plans/`: the spec, the plans and the traces. It never commits. There is no break-glass switch yet; an enforcing hook is planned, so for now it is a rule.
+Claude models, Sonnet and Opus included, never write code, tests, scripts, config or docs in the repository. The orchestrator writes only artifacts under `.plans/`: the spec, the plans and the traces. It never commits. The agent vault is the one exception: the orchestrator writes it, but only through the vault CLI (see [The vault](#the-vault)). There is no break-glass switch yet; an enforcing hook is planned, so for now it is a rule.
 
 ## Architecture
 
@@ -59,13 +59,13 @@ flowchart TB
     planAudit -- "plan.audit" --> traces
 ```
 
-Full picture, including the planned agent-vault, Graphify and permissions hook: [docs/architecture.md](docs/architecture.md).
+Full picture, including the agent vault, the planned Graphify and the permissions hook: [docs/architecture.md](docs/architecture.md).
 
 ### Roles
 
 | Role | Model | Where it runs | Job |
 |---|---|---|---|
-| Orchestrator | Sonnet 5.5 | Claude Code main session | Talks to you, clarifies with the `grilling` skill into a spec, writes the plan, runs the plan audit, gets your approval, waits and reports the gate. Writes only under `.plans/`. |
+| Orchestrator | Sonnet 5.5 | Claude Code main session | Talks to you, clarifies with the `grilling` skill into a spec, writes the plan, runs the plan audit, gets your approval, waits and reports the gate. Writes only under `.plans/`, and the vault through `vault.mjs`. |
 | `plan-auditor` | Opus 5.5 | `plan-auditor` subagent | Fresh-context, read-only review of the plan against the spec and the repo. Returns a verdict and severity-tagged findings. Never reviews worker results. |
 | Workers | DeepSeek V4.1 Flash (default) | headless `pi` processes started by the extension | Implement one task each, inside the files the plan gave them. |
 
@@ -75,6 +75,10 @@ These two Claude-side roles are separate from the worker roles (`implement`,
 `security`, `qa`, and read-only pair reviewers such as `review`) that plans name and
 `.plans/config.json` maps to cheap models. See [docs/roles.md](docs/roles.md) for the
 worker role model.
+
+## The vault
+
+The agents also keep memory outside any one repo. The agent vault is an Obsidian vault in its own git repo, cloned next to this repo, with notes for plans, runs, findings, decisions, lessons, projects and codebases. The orchestrator is the only role that writes it, and only through `dispatch-plan/vault.mjs`. The `plan-auditor` reads it with `vault.mjs boot`. Pi workers have no vault access: the dispatcher strips `AGENT_VAULT` from a worker's environment and sets `PI_PLAN_DISPATCH_WORKER=1`, which makes the CLI refuse every command, and the guard blocks any tool path inside the vault. The plain-English guide, including the CLI contract, the repo modes, sync and the new-machine steps, is [docs/vault.md](docs/vault.md).
 
 ## How a request flows
 
@@ -123,8 +127,8 @@ Requirements: [Pi](https://pi.dev) 1.3.0 or newer (`@earendil-works/pi-coding-ag
 pi install ./pi-plan-dispatch                        # as a package
 cp -r pi-plan-dispatch ~/.pi/agent/extensions/       # or as a global extension
 
-# 2. The Claude Code skill runtime files (also the trace CLI and the preflight CLI)
-mkdir -p ~/.claude/skills/dispatch-plan && cp dispatch-plan/SKILL.md dispatch-plan/ORCHESTRATOR.md dispatch-plan/trace.mjs dispatch-plan/preflight.mjs dispatch-plan/config-init.mjs ~/.claude/skills/dispatch-plan/
+# 2. The Claude Code skill runtime files (also the trace, preflight, config and vault CLIs)
+mkdir -p ~/.claude/skills/dispatch-plan && cp dispatch-plan/SKILL.md dispatch-plan/ORCHESTRATOR.md dispatch-plan/trace.mjs dispatch-plan/preflight.mjs dispatch-plan/config-init.mjs dispatch-plan/vault.mjs dispatch-plan/vault-admin.mjs dispatch-plan/vault-events.mjs ~/.claude/skills/dispatch-plan/
 
 # 3. The plan-auditor agent
 mkdir -p ~/.claude/agents && cp dispatch-plan/agents/plan-auditor.md ~/.claude/agents/
@@ -134,6 +138,10 @@ rm -f ~/.claude/agents/planner.md ~/.claude/agents/auditor.md
 
 # 5. Orchestrator rules: paste the block from dispatch-plan/ORCHESTRATOR.md
 #    into the project's CLAUDE.md, then set the main session to Sonnet 5.5
+
+# 6. The agent vault: create it once (`vault init`), then wire this machine to it (`vault setup`)
+node dispatch-plan/vault.mjs init            # first machine only
+node dispatch-plan/vault.mjs setup --path <vault>
 ```
 
 Copy the runtime files by name: the `dispatch-plan/` folder also holds `archive/` and the tests, which must not be installed. The installed skill folder must be refreshed after pulling changes, because `trace.mjs` and `preflight.mjs` are called from `~/.claude/skills/dispatch-plan/`; a missing module means a stale install.

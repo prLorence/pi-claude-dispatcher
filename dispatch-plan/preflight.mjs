@@ -87,7 +87,7 @@ function fallbackId(file) {
  * the order the dispatcher checks them.
  */
 function collectProblems(core, verify, plan, cfg, root) {
-	const errors = core.preflightPlan(plan, cfg);
+	const errors = core.preflightPlan(plan, cfg, root);
 	const warnings = [];
 	const checks = [["plan", plan.verify], ...plan.tasks.map((task) => [`task ${task.id}`, task.verify])];
 	for (const [label, command] of checks) {

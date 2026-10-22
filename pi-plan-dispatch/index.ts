@@ -263,7 +263,7 @@ export default function (pi: ExtensionAPI) {
 
 		// Preflight (G4): refuse an unsafe or oversized plan before any worker starts.
 		const cfg = config();
-		const problems = preflightPlan(plan, cfg);
+		const problems = preflightPlan(plan, cfg, cwd);
 		for (const [label, command] of [["plan", plan.verify], ...plan.tasks.map((t) => [`task ${t.id}`, t.verify])] as [string, string | undefined][]) {
 			if (!command) continue;
 			if (!commandExists(cwd, command)) problems.push(`${label}: verify command not found: ${command.split(/\s+/)[0]}`);

@@ -5,17 +5,23 @@
  * security) may not edit anything at all. No Pi imports and no local imports,
  * so a worker can load this on its own.
  *
+ * A tool path whose realpath is the vault folder or inside it is always
+ * refused, whatever the rest of the policy says (read, grep and ls alike), so a
+ * worker has no read or write access to the knowledge vault.
+ *
  * Known gap: shell writes cannot be policed reliably (`sh -c "..."`, scripts,
  * an editor). For read-only roles the obvious shapes are denied below, but that
  * is best-effort only: the dirty-file snapshot taken before and after a reviewer
  * run is the real backstop, backed by the gate.
  */
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const BLOCKED_MARKER = "BLOCKED by pi-plan-dispatch:";
 export const GUARD_ENV = "PI_PLAN_DISPATCH_GUARD";
+export const VAULT_ENV = "PI_PLAN_DISPATCH_VAULT";
 
 export interface GuardPolicy {
 	cwd: string;
@@ -23,6 +29,10 @@ export interface GuardPolicy {
 	bash: boolean;
 	/** A read-only role: every edit-like tool call is refused. */
 	readonly?: boolean;
+	/** Realpath of the vault folder: a tool path inside it is always refused. */
+	vault?: string;
+	/** Only the vault path was given: the vault deny is the only rule. */
+	vaultOnly?: boolean;
 }
 
 export interface GuardDecision {
@@ -36,6 +46,7 @@ const SHELL_TOOL = /bash|shell/i;
 const PATH_KEYS = ["path", "file_path", "filePath", "file"];
 const ALWAYS_DENIED = [".git", ".plans"];
 const READONLY_WHY = "this role is read-only, so no file may be changed here. Put your findings in the final message, or list the change under NEEDS instead.";
+const VAULT_WHY = "is inside the knowledge vault, which no worker may read or write. List what you need from the vault under NEEDS instead.";
 
 const allow = (): GuardDecision => ({ block: false });
 
@@ -265,9 +276,79 @@ function denyReason(command: string): string | undefined {
 	return undefined;
 }
 
+// ---------- Vault deny ----------
+
+/** The vault path from the environment, resolved and with its realpath when it exists. */
+function vaultFromEnv(env: NodeJS.ProcessEnv): string | undefined {
+	const raw = env[VAULT_ENV];
+	if (typeof raw !== "string" || !raw.trim() || !path.isAbsolute(raw)) return undefined;
+	const resolved = path.resolve(raw);
+	try {
+		return fs.realpathSync(resolved);
+	} catch {
+		return resolved;
+	}
+}
+
+/** realpath of the nearest existing ancestor, with the rest of the path appended. */
+function realpathLoose(p: string): string {
+	let head = p;
+	const tail: string[] = [];
+	for (;;) {
+		try {
+			return path.join(fs.realpathSync(head), ...tail.reverse());
+		} catch {
+			const parent = path.dirname(head);
+			if (parent === head) return p;
+			tail.push(path.basename(head));
+			head = parent;
+		}
+	}
+}
+
+/** macOS and Windows have case-insensitive filesystems, so compare the same way. */
+function samePath(a: string, b: string): boolean {
+	const fold = (p: string): string => p.replace(/\\/g, "/");
+	const ci = process.platform === "darwin" || process.platform === "win32";
+	const left = fold(a);
+	const right = fold(b);
+	return ci ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+function insideVault(target: string, vault: string): boolean {
+	if (samePath(target, vault)) return true;
+	const sep = vault.endsWith("/") || vault.endsWith("\\") ? "" : path.sep;
+	const prefix = `${vault}${sep}`;
+	const ci = process.platform === "darwin" || process.platform === "win32";
+	return ci ? target.toLowerCase().startsWith(prefix.toLowerCase()) : target.startsWith(prefix);
+}
+
+/** The vault deny, for every path argument of every tool. A tool with no path argument is untouched. */
+function checkVault(policy: GuardPolicy, args: Record<string, unknown>): GuardDecision | undefined {
+	if (!policy.vault) return undefined;
+	for (const key of PATH_KEYS) {
+		const value = args[key];
+		if (typeof value !== "string" || !value.trim()) continue;
+		const normalised = normaliseArg(value);
+		if (normalised === undefined) continue;
+		const target = realpathLoose(path.resolve(policy.cwd, normalised));
+		if (insideVault(target, policy.vault)) return block(`${value} ${VAULT_WHY}`);
+	}
+	return undefined;
+}
+
 // ---------- Policy ----------
 
 export function policyFromEnv(env: NodeJS.ProcessEnv, cwd: string): GuardPolicy | undefined {
+	const vault = vaultFromEnv(env);
+	const parsed = guardPolicy(env, cwd);
+	if (parsed) return vault === undefined ? parsed : { ...parsed, vault };
+	if (vault === undefined) return undefined;
+	// no guard policy but a vault is known: the vault deny still applies
+	return { cwd, files: [], bash: false, readonly: false, vault, vaultOnly: true };
+}
+
+function guardPolicy(env: NodeJS.ProcessEnv, cwd: string): GuardPolicy | undefined {
 	const raw = env[GUARD_ENV];
 	if (!raw) return undefined;
 	let parsed: unknown;
@@ -320,6 +401,9 @@ function checkBash(policy: GuardPolicy, command: string): GuardDecision {
 
 export function checkToolCall(policy: GuardPolicy, toolName: string, input: unknown): GuardDecision {
 	const args = asRecord(input);
+	const vault = checkVault(policy, args);
+	if (vault) return vault;
+	if (policy.vaultOnly) return allow();
 	if (EDIT_TOOL.test(toolName)) return checkEdit(policy, toolName, args);
 	const isShell = SHELL_TOOL.test(toolName) || typeof args.command === "string";
 	if (isShell) return checkBash(policy, typeof args.command === "string" ? args.command : "");

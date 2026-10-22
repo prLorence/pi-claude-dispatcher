@@ -83,6 +83,22 @@ test("a files entry outside the repo is an error", () => {
 	assert.ok(r.stdout.includes('ERROR: Task a: files entry "../x" contains ".."; it must stay inside the repo'), r.stdout);
 });
 
+test("a files entry behind a symlink out of the repo is an error", () => {
+	const ctx = setup();
+	const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-preflight-outside-"));
+	try {
+		fs.symlinkSync(outside, path.join(ctx.root, "escape"), "dir");
+		const text = `${head()}## task: a\nfiles: escape/new.md\nverify: node --version\n\nDo the thing.\n`;
+		const r = run(ctx, [writePlan(ctx, "p-r1.md", text)]);
+		assert.equal(r.status, 1, r.stdout + r.stderr);
+		assert.ok(r.stdout.includes('ERROR: Task a: files entry "escape/new.md" leaves the repo through a symlink'), r.stdout);
+	} finally {
+		fs.rmSync(ctx.root, { recursive: true, force: true });
+		fs.rmSync(ctx.home, { recursive: true, force: true });
+		fs.rmSync(outside, { recursive: true, force: true });
+	}
+});
+
 test("a missing task verify command is an error", () => {
 	const ctx = setup();
 	const text = `${head("verify: node --version\n")}## task: a\nfiles: docs/a.md\nverify: preflight-missing-cmd --flag\n\nDo the thing.\n`;

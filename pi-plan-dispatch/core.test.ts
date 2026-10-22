@@ -10,6 +10,7 @@ import {
 	DEFAULT_ROLES,
 	buildWorkerPrompt,
 	ensureDirs,
+	findVaultPath,
 	getDirs,
 	knownRoles,
 	loadConfig,
@@ -21,11 +22,12 @@ import {
 	runWorker,
 	sessionFor,
 	smokeTestModel,
+	workerEnv,
 	type DispatchConfig,
 	type Plan,
 	type PlanTask,
 } from "./core.ts";
-import { BLOCKED_MARKER, GUARD_ENV } from "./guard.ts";
+import { BLOCKED_MARKER, GUARD_ENV, VAULT_ENV } from "./guard.ts";
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "pi-core-"));
 
@@ -143,6 +145,37 @@ test("preflightPlan passes a clean plan", () => {
 		]),
 		[],
 	);
+});
+
+test("preflightPlan with a cwd rejects files entries that leave the repo through a symlink", () => {
+	const repo = tmp();
+	const outside = tmp();
+	try {
+		fs.mkdirSync(path.join(repo, "src"), { recursive: true });
+		fs.mkdirSync(path.join(repo, "inner"), { recursive: true });
+		fs.writeFileSync(path.join(repo, "src", "real.ts"), "x\n");
+		fs.writeFileSync(path.join(outside, "existing.md"), "x\n");
+		fs.symlinkSync(outside, path.join(repo, "escape"), "dir");
+		fs.symlinkSync(path.join(repo, "inner"), path.join(repo, "alias"), "dir");
+		fs.symlinkSync(path.join(outside, "existing.md"), path.join(repo, "linked.md"));
+		const check = (entry: string) => preflightPlan(planOf([{ id: "a", files: [entry] }]), DEFAULT_CONFIG, repo);
+
+		// a new file below the escaping link, an existing one, and a file link
+		for (const entry of ["escape/new/deep.md", "escape/existing.md", "linked.md"]) {
+			assert.deepEqual(check(entry), [`Task a: files entry "${entry}" leaves the repo through a symlink`], entry);
+		}
+
+		// a normal new file in a new directory, a link that points inside, a real file
+		assert.deepEqual(check("src/new/deep.ts"), []);
+		assert.deepEqual(check("alias/x.ts"), []);
+		assert.deepEqual(check("src/real.ts"), []);
+
+		// no cwd keeps the old behaviour: the symlink is not followed
+		assert.deepEqual(PREFLIGHT([{ id: "a", files: ["escape/new/deep.md"] }]), []);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+		fs.rmSync(outside, { recursive: true, force: true });
+	}
 });
 
 test("buildWorkerPrompt adds grounding rules and the retry feedback section", () => {
@@ -282,6 +315,141 @@ Edit api.
 	} finally {
 		if (previous === undefined) delete process.env.FAKE_ENV_FILE;
 		else process.env.FAKE_ENV_FILE = previous;
+	}
+});
+
+test("findVaultPath: the env var first, then the config, and no vault is undefined", () => {
+	const dir = tmp();
+	const home = path.join(dir, "home");
+	const envVault = path.join(dir, "env-vault");
+	const configVault = path.join(dir, "config-vault");
+	const configFile = path.join(home, ".config", "agent-vault", "config.json");
+	fs.mkdirSync(envVault, { recursive: true });
+	fs.mkdirSync(configVault, { recursive: true });
+	fs.mkdirSync(path.dirname(configFile), { recursive: true });
+	try {
+		// $AGENT_VAULT wins when it names an existing directory, and comes back as a realpath
+		assert.equal(findVaultPath({ AGENT_VAULT: envVault }, home), fs.realpathSync(envVault));
+
+		// no env var: the `path` of the config file under a temp home
+		fs.writeFileSync(configFile, JSON.stringify({ path: configVault }));
+		assert.equal(findVaultPath({}, home), fs.realpathSync(configVault));
+
+		// an env value that is not an existing directory falls through to the config
+		assert.equal(findVaultPath({ AGENT_VAULT: path.join(dir, "missing") }, home), fs.realpathSync(configVault));
+
+		// a config path that is a file, not a directory, is no vault
+		fs.writeFileSync(configFile, JSON.stringify({ path: path.join(dir, "afile") }));
+		fs.writeFileSync(path.join(dir, "afile"), "x");
+		assert.equal(findVaultPath({}, home), undefined);
+
+		// a garbled config is no vault rather than an error
+		fs.writeFileSync(configFile, "{not json");
+		assert.equal(findVaultPath({}, home), undefined);
+		assert.equal(findVaultPath({ AGENT_VAULT: path.join(dir, "missing") }, home), undefined);
+
+		// nothing configured at all
+		assert.equal(findVaultPath({}, path.join(dir, "empty-home")), undefined);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("workerEnv drops AGENT_VAULT, sets or clears the vault variable and keeps the guard rule", () => {
+	const dir = tmp();
+	const home = path.join(dir, "home");
+	const vault = path.join(dir, "vault");
+	const configFile = path.join(home, ".config", "agent-vault", "config.json");
+	fs.mkdirSync(vault, { recursive: true });
+	fs.mkdirSync(path.dirname(configFile), { recursive: true });
+	fs.writeFileSync(configFile, JSON.stringify({ path: vault }));
+	const plan = parsePlan(`---
+id: p
+---
+ctx
+
+## task: api
+files: src/api.ts
+Edit api.
+`, "x");
+	const task = plan.tasks[0];
+	const parent = { AGENT_VAULT: path.join(dir, "stale-vault"), KEEP: "yes" };
+	try {
+		const env = workerEnv(DEFAULT_CONFIG, task, parent, home);
+		assert.equal(env.PI_PLAN_DISPATCH_WORKER, "1");
+		assert.equal("AGENT_VAULT" in env, false, "the variable is removed, not set to empty");
+		assert.equal(env[VAULT_ENV], fs.realpathSync(vault), "the config's vault replaces the parent's AGENT_VAULT");
+		assert.equal(env.KEEP, "yes", "the rest of the parent env is copied");
+		assert.deepEqual(JSON.parse(env[GUARD_ENV] ?? "null"), { files: ["src/api.ts"], bash: true, readonly: false });
+		assert.equal(parent.AGENT_VAULT, path.join(dir, "stale-vault"), "the parent env is not mutated");
+
+		// guards off: the policy goes, the vault variable stays
+		const off = workerEnv({ ...DEFAULT_CONFIG, workerGuards: false }, task, parent, home);
+		assert.equal("PI_PLAN_DISPATCH_GUARD" in off, false);
+		assert.equal(off[VAULT_ENV], fs.realpathSync(vault));
+		assert.equal(off.PI_PLAN_DISPATCH_WORKER, "1");
+
+		// a parent's own VAULT_ENV is replaced by what the config says now
+		assert.equal(workerEnv(DEFAULT_CONFIG, task, { [VAULT_ENV]: "/stale/vault" }, home)[VAULT_ENV], fs.realpathSync(vault));
+
+		// no vault anywhere: both variables are absent, whatever the parent had
+		const none = workerEnv(DEFAULT_CONFIG, task, { AGENT_VAULT: path.join(dir, "stale-vault"), [VAULT_ENV]: vault }, path.join(dir, "empty-home"));
+		assert.equal("AGENT_VAULT" in none, false);
+		assert.equal("PI_PLAN_DISPATCH_VAULT" in none, false);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("runWorker: the child gets no AGENT_VAULT", async () => {
+	const dir = tmp();
+	const home = path.join(dir, "home");
+	fs.mkdirSync(home, { recursive: true });
+	const envFile = path.join(dir, "env.json");
+	const fake = path.join(dir, "fake-pi.mjs");
+	const reply = {
+		type: "message_end",
+		message: {
+			role: "assistant",
+			content: [{ type: "text", text: "STATUS: done\nCHANGED: none\nTESTS: none\nNOTES: ok\nNEEDS: none" }],
+			stopReason: "stop",
+		},
+	};
+	const script = [
+		"#!/usr/bin/env node",
+		'import fs from "node:fs";',
+		`fs.writeFileSync(${JSON.stringify(envFile)}, JSON.stringify({ agentVault: process.env.AGENT_VAULT ?? null, hasAgentVault: "AGENT_VAULT" in process.env }));`,
+		`console.log(${JSON.stringify(JSON.stringify(reply))});`,
+	].join("\n");
+	fs.writeFileSync(fake, script);
+	fs.chmodSync(fake, 0o755);
+
+	const plan = parsePlan(`---
+id: p
+---
+ctx
+
+## task: api
+files: src/api.ts
+Edit api.
+`, "x");
+	const savedHome = process.env.HOME;
+	const savedVault = process.env.AGENT_VAULT;
+	process.env.HOME = home;
+	process.env.AGENT_VAULT = path.join(dir, "parent-vault");
+	try {
+		const r = await runWorker(dir, { ...DEFAULT_CONFIG, piCommand: fake }, plan, plan.tasks[0], new AbortController().signal);
+		assert.equal(r.ok, true);
+		// The default home is the real one here, so only AGENT_VAULT is asserted.
+		const child = JSON.parse(fs.readFileSync(envFile, "utf8"));
+		assert.equal(child.agentVault, null);
+		assert.equal(child.hasAgentVault, false, "the variable is removed from the child environment");
+	} finally {
+		if (savedHome === undefined) delete process.env.HOME;
+		else process.env.HOME = savedHome;
+		if (savedVault === undefined) delete process.env.AGENT_VAULT;
+		else process.env.AGENT_VAULT = savedVault;
+		fs.rmSync(dir, { recursive: true, force: true });
 	}
 });
 

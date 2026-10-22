@@ -1,7 +1,10 @@
 /** Run with: node --test pi-plan-dispatch/guard.test.ts (Node 24+) */
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { test } from "node:test";
-import { BLOCKED_MARKER, GUARD_ENV, checkToolCall, policyFromEnv, type GuardDecision, type GuardPolicy } from "./guard.ts";
+import { BLOCKED_MARKER, GUARD_ENV, VAULT_ENV, checkToolCall, policyFromEnv, type GuardDecision, type GuardPolicy } from "./guard.ts";
 
 const CWD = "/repo";
 const policy = (files: string[] = [], bash = false): GuardPolicy => ({ cwd: CWD, files, bash, readonly: false });
@@ -420,4 +423,193 @@ test("policyFromEnv returns undefined when unset or malformed", () => {
 	assert.equal(policyFromEnv({ [GUARD_ENV]: "42" }, CWD), undefined);
 	assert.equal(policyFromEnv({ [GUARD_ENV]: "null" }, CWD), undefined);
 	assert.equal(policyFromEnv({ [GUARD_ENV]: "[]" }, CWD), undefined);
+});
+
+// ---------- Vault deny ----------
+
+/** A temp repo and a temp vault, both inside one temp root that `cleanup` removes. */
+function vaultDirs(): { root: string; repo: string; vault: string; realVault: string; cleanup: () => void } {
+	const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "guard-vault-")));
+	const repo = path.join(root, "repo");
+	const vault = path.join(root, "vault");
+	fs.mkdirSync(repo);
+	fs.mkdirSync(vault);
+	return { root, repo, vault, realVault: fs.realpathSync(vault), cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
+}
+
+const vaultPolicy = (vault: string, extra: Partial<GuardPolicy> = {}): GuardPolicy => ({ cwd: CWD, files: [], bash: false, readonly: false, vault, ...extra });
+
+test("policyFromEnv adds the vault path to a guard policy", () => {
+	const dirs = vaultDirs();
+	try {
+		const env = { [GUARD_ENV]: JSON.stringify({ files: ["src/a.ts"], bash: true }), [VAULT_ENV]: dirs.vault };
+		assert.deepEqual(policyFromEnv(env, dirs.repo), { cwd: dirs.repo, files: ["src/a.ts"], bash: true, readonly: false, vault: dirs.realVault });
+		// without a vault the policy is exactly what it was before
+		assert.deepEqual(policyFromEnv({ [GUARD_ENV]: JSON.stringify({ files: ["src/a.ts"] }) }, CWD), { cwd: CWD, files: ["src/a.ts"], bash: false, readonly: false });
+	} finally {
+		dirs.cleanup();
+	}
+});
+
+test("policyFromEnv with only the vault path gives a vault-only policy", () => {
+	const dirs = vaultDirs();
+	try {
+		assert.deepEqual(policyFromEnv({ [VAULT_ENV]: dirs.vault }, dirs.repo), {
+			cwd: dirs.repo,
+			files: [],
+			bash: false,
+			readonly: false,
+			vault: dirs.realVault,
+			vaultOnly: true,
+		});
+		// a malformed guard variable counts as absent, so the vault deny still applies
+		for (const raw of ["", "{not json", "null", "[]"]) {
+			const p = policyFromEnv({ [GUARD_ENV]: raw, [VAULT_ENV]: dirs.vault }, dirs.repo);
+			assert.equal(p?.vaultOnly, true, `expected vault-only for ${JSON.stringify(raw)}`);
+			assert.equal(p?.vault, dirs.realVault);
+		}
+	} finally {
+		dirs.cleanup();
+	}
+});
+
+test("a relative or empty vault path is ignored", () => {
+	const dirs = vaultDirs();
+	try {
+		for (const raw of ["vault", "", "  ", "."]) {
+			assert.equal(policyFromEnv({ [VAULT_ENV]: raw }, dirs.repo), undefined, `expected no policy for ${JSON.stringify(raw)}`);
+			assert.deepEqual(policyFromEnv({ [GUARD_ENV]: JSON.stringify({ files: [] }), [VAULT_ENV]: raw }, CWD), { cwd: CWD, files: [], bash: false, readonly: false });
+		}
+	} finally {
+		dirs.cleanup();
+	}
+});
+
+test("neither the guard variable nor the vault path makes no policy", () => {
+	assert.equal(policyFromEnv({}, CWD), undefined);
+});
+
+test("read and grep tools with a path inside the vault are blocked", () => {
+	const dirs = vaultDirs();
+	try {
+		const p = vaultPolicy(dirs.realVault, { cwd: dirs.repo });
+		const inside = path.join(dirs.vault, "notes/x.md");
+		for (const tool of ["read", "grep", "ls", "find", "edit", "write", "bash"]) {
+			assertBlocked(checkToolCall(p, tool, { path: inside }), /knowledge vault/);
+		}
+		assertBlocked(checkToolCall(p, "read", { path: dirs.vault }), /knowledge vault/);
+		// every path key is checked, not only the first one
+		assertBlocked(checkToolCall(p, "edit", { path: "src/a.ts", file: inside }), /knowledge vault/);
+		assertBlocked(checkToolCall(p, "grep", { path: "src", filePath: inside }), /knowledge vault/);
+	} finally {
+		dirs.cleanup();
+	}
+});
+
+test("a path outside the vault is allowed", () => {
+	const dirs = vaultDirs();
+	try {
+		const p = vaultPolicy(dirs.realVault, { cwd: dirs.root });
+		const outside = path.join(dirs.root, "outside");
+		fs.mkdirSync(outside);
+		assertAllowed(checkToolCall(p, "read", { path: path.join(outside, "x.md") }));
+		// a sibling whose name starts with the vault's name is not inside it
+		const sibling = `${dirs.vault}-other`;
+		fs.mkdirSync(sibling);
+		assertAllowed(checkToolCall(p, "read", { path: path.join(sibling, "x.md") }));
+		// a tool with no path argument is untouched
+		assertAllowed(checkToolCall(p, "read", { query: "x" }));
+	} finally {
+		dirs.cleanup();
+	}
+});
+
+test("a symlink inside the repo that points into the vault is blocked", () => {
+	const dirs = vaultDirs();
+	try {
+		const p = vaultPolicy(dirs.realVault, { cwd: dirs.repo, files: ["."] });
+		fs.symlinkSync(dirs.vault, path.join(dirs.repo, "v"), "dir");
+		assertBlocked(checkToolCall(p, "read", { path: "v/notes/x.md" }), /knowledge vault/);
+		assertBlocked(checkToolCall(p, "edit", { path: "v" }), /knowledge vault/);
+	} finally {
+		dirs.cleanup();
+	}
+});
+
+test("a file: URL form and a ~ form inside the vault are blocked", () => {
+	const dirs = vaultDirs();
+	const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "guard-home-")));
+	const previousHome = process.env.HOME;
+	try {
+		const p = vaultPolicy(dirs.realVault, { cwd: dirs.repo });
+		assertBlocked(checkToolCall(p, "read", { path: `file://${path.join(dirs.vault, "notes/x.md")}` }), /knowledge vault/);
+		assertBlocked(checkToolCall(p, "read", { path: `file://${dirs.vault}/` }), /knowledge vault/);
+		fs.symlinkSync(dirs.vault, path.join(home, "vault"), "dir");
+		process.env.HOME = home;
+		assertBlocked(checkToolCall(p, "read", { path: "~/vault/notes/x.md" }), /knowledge vault/);
+	} finally {
+		if (previousHome === undefined) delete process.env.HOME;
+		else process.env.HOME = previousHome;
+		fs.rmSync(home, { recursive: true, force: true });
+		dirs.cleanup();
+	}
+});
+
+test("a vault-only policy allows edits anywhere except the vault", () => {
+	const dirs = vaultDirs();
+	try {
+		const p: GuardPolicy = { cwd: dirs.repo, files: [], bash: false, readonly: false, vault: dirs.realVault, vaultOnly: true };
+		assertAllowed(checkToolCall(p, "edit", { path: path.join(dirs.root, "outside.txt") }));
+		assertAllowed(checkToolCall(p, "edit", { path: ".git/config" }));
+		assertAllowed(checkToolCall(p, "edit", { path: "src/../../outside.txt" }));
+		assertAllowed(checkToolCall(p, "write", {}));
+		// the vault deny is the only rule, so no shell limit either
+		assertAllowed(checkToolCall(p, "bash", { command: "sudo git push origin main" }));
+		assertBlocked(checkToolCall(p, "edit", { path: path.join(dirs.vault, "CLAUDE.md") }), /knowledge vault/);
+	} finally {
+		dirs.cleanup();
+	}
+});
+
+test("a not-yet-existing file inside the vault is blocked", () => {
+	const dirs = vaultDirs();
+	try {
+		const p = vaultPolicy(dirs.realVault, { cwd: dirs.repo });
+		fs.symlinkSync(dirs.vault, path.join(dirs.repo, "v"), "dir");
+		assertBlocked(checkToolCall(p, "edit", { path: "v/new/deep/x.md" }), /knowledge vault/);
+		assertBlocked(checkToolCall(p, "edit", { path: path.join(dirs.vault, "does/not/exist.md") }), /knowledge vault/);
+	} finally {
+		dirs.cleanup();
+	}
+});
+
+test("the vault deny holds for a read-only policy and for an empty files list", () => {
+	const dirs = vaultDirs();
+	try {
+		const inside = path.join(dirs.vault, "x.md");
+		const policies: GuardPolicy[] = [
+			{ cwd: dirs.repo, files: [], bash: true, readonly: true, vault: dirs.realVault },
+			{ cwd: dirs.repo, files: [], bash: false, readonly: false, vault: dirs.realVault },
+			{ cwd: dirs.repo, files: ["."], bash: false, readonly: false, vault: dirs.realVault },
+		];
+		for (const p of policies) {
+			assertBlocked(checkToolCall(p, "read", { path: inside }), /knowledge vault/);
+			assertBlocked(checkToolCall(p, "edit", { path: inside }), /knowledge vault/);
+		}
+	} finally {
+		dirs.cleanup();
+	}
+});
+
+test("the vault deny reason starts with the marker and says where needs go", () => {
+	const dirs = vaultDirs();
+	try {
+		const d = checkToolCall(vaultPolicy(dirs.realVault), "read", { path: path.join(dirs.vault, "x.md") });
+		assertBlocked(d);
+		assert.ok(d.reason!.startsWith(BLOCKED_MARKER), d.reason);
+		assert.match(d.reason!, /knowledge vault/);
+		assert.match(d.reason!, /NEEDS/);
+	} finally {
+		dirs.cleanup();
+	}
 });

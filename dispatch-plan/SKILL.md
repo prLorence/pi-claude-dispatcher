@@ -188,6 +188,10 @@ Run `node ~/.claude/skills/dispatch-plan/trace.mjs report --trace <T>` to render
 - A rejected plan (bad `files:`, over the `maxFilesPerTask` 10 or `maxTaskChars` 8000 limits, unknown `verify:` executable) is a preflight problem, not a review failure: read `.plans/failed/<id>.error.md` and follow the exit-`2` steps in section 6.
 - Write a task-level `verify:` per task and one plan-level integration `verify:`. Nobody commits unless the user asked.
 
+## 10. Vault
+
+The vault is the agent memory: an Obsidian vault in its own git repo, cloned next to this repo, holding notes and a log that outlive one machine. The orchestrator is the only role that writes it, and only through the CLI at `node ~/.claude/skills/dispatch-plan/vault.mjs`; its commands, schema and privacy modes are in `docs/vault.md`. A repo's mode is `full` (all note types), `meta` (`run`, `decision`, `lesson` only) or `none` (nothing); pass `--trace <T> --root <repo root>` to every vault command so the CLI writes its trace events. Workers have no vault access: the dispatcher drops `AGENT_VAULT` from their environment and sets `PI_PLAN_DISPATCH_WORKER=1`, which makes the CLI refuse every command, and the guard denies tool paths inside the vault. The vault's events reach the timeline as actor `vault`: `vault.boot`, `vault.write`, `vault.sync`, `vault.unavailable` and `vault.denied`. The long write rules live in the orchestrator block in `dispatch-plan/ORCHESTRATOR.md`.
+
 ### Install
 
 ```bash

@@ -153,6 +153,7 @@ function cmdReport() {
 // ---------- report rendering ----------
 
 const money = (n) => `$${(n || 0).toFixed(4)}`;
+const dash = (v) => (v === undefined || v === null || v === "" ? "-" : v);
 const clock = (ms) => {
 	const s = Math.max(0, Math.round(ms / 1000));
 	return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
@@ -180,12 +181,30 @@ function detail(e) {
 			return `${d.requirements ?? 0} requirements, ${d.spec}`;
 		case "plan.audit":
 			return `${String(d.verdict).toUpperCase()} audit round ${d.audit_round ?? d.round ?? e.round ?? "-"}: ${d.blockers ?? 0} blocker, ${d.majors ?? 0} major, ${d.minors ?? 0} minor${d.summary ? `: ${d.summary}` : ""}`;
+		case "vault.boot":
+			return `boot ${dash(d.bytes)} bytes, ${dash(d.items)} items${d.truncated ? ", truncated" : ""}`;
+		case "vault.write":
+			return `${dash(d.op)} ${dash(d.type)} ${dash(d.id)}`;
+		case "vault.sync":
+			return `${dash(d.op)}: ${dash(d.result)}`;
+		case "vault.unavailable":
+			return `unavailable: ${dash(d.reason)}`;
+		case "vault.denied":
+			return `denied ${dash(d.type)} note for ${dash(d.repo)}`;
 		default:
 			return d && Object.keys(d).length ? JSON.stringify(d).slice(0, 140) : "";
 	}
 }
 
 const taskKey = (e) => `${e.plan ?? ""}\u0000${e.task ?? ""}`;
+
+// A review event's tokens are sometimes an object and sometimes a plain number;
+// only a finite number may be added, or the table renders [object Object].
+const tokenCount = (t) => {
+	if (Number.isFinite(t?.total)) return t.total;
+	if (Number.isFinite(t)) return t;
+	return 0;
+};
 
 // One row per model seen in task.start or task.review. Costs come from task.end
 // (matched by task and attempt) plus the review event's own cost, so a reviewer
@@ -228,7 +247,7 @@ function modelsTable(events) {
 			const r = row(d.model);
 			r.roles.add(d.reviewer_role || "implement");
 			r.reviews += 1;
-			r.tokens += d.tokens?.total || d.tokens || 0;
+			r.tokens += tokenCount(d.tokens);
 			r.cost += d.cost || 0;
 		} else if (e.kind === "fault" && e.task) {
 			for (const model of taskModels.get(taskKey(e)) || []) {

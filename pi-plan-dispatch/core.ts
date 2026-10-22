@@ -5,8 +5,9 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
-import { BLOCKED_MARKER, GUARD_ENV } from "./guard.ts";
+import { BLOCKED_MARKER, GUARD_ENV, VAULT_ENV } from "./guard.ts";
 
 // ---------- Roles ----------
 
@@ -399,14 +400,51 @@ export function filesOverlap(a: string[], b: string[]): boolean {
 	return false;
 }
 
+/** True when `target` is `root` or lies below it, both already resolved. */
+function insideRepo(root: string, target: string): boolean {
+	return target === root || target.startsWith(root.endsWith(path.sep) ? root : `${root}${path.sep}`);
+}
+
+/**
+ * Follow symlinks in the deepest part of `target` that exists and append the
+ * parts that do not exist yet, then say whether the result is outside `root`.
+ * This closes the symlink route out of the repo, e.g. a link to the vault.
+ */
+function escapesRepo(root: string, target: string): boolean {
+	let base = target;
+	const rest: string[] = [];
+	for (;;) {
+		try {
+			return !insideRepo(root, path.join(fs.realpathSync(base), ...rest));
+		} catch {
+			const parent = path.dirname(base);
+			if (parent === base) return true;
+			rest.unshift(path.basename(base));
+			base = parent;
+		}
+	}
+}
+
 /**
  * Reject an unsafe or oversized plan before any worker starts (G4).
  * Returns human-readable problems; an empty list means the plan may run.
  * Executable checks on `verify:` commands live with the caller (`commandExists`).
+ * With `cwd`, a `files:` entry that leaves the repo through a symlink is
+ * rejected; without it, only the textual checks run.
  */
-export function preflightPlan(plan: Plan, cfg: DispatchConfig): string[] {
+export function preflightPlan(plan: Plan, cfg: DispatchConfig, cwd?: string): string[] {
 	const errors: string[] = [];
 	const names = knownRoles(cfg).join(", ");
+	// Resolved once, so a symlinked checkout still matches. A cwd that cannot be
+	// resolved turns the check off rather than failing the plan.
+	let repo: string | undefined;
+	if (cwd !== undefined) {
+		try {
+			repo = fs.realpathSync(cwd);
+		} catch {
+			repo = undefined;
+		}
+	}
 	for (const task of plan.tasks) {
 		const roleName = task.role || "implement";
 		if (!knownRoles(cfg).includes(roleName)) {
@@ -446,6 +484,8 @@ export function preflightPlan(plan: Plan, cfg: DispatchConfig): string[] {
 				errors.push(`Task ${task.id}: files entry "${raw}" is inside .git/, which no worker may touch`);
 			} else if (first === ".plans") {
 				errors.push(`Task ${task.id}: files entry "${raw}" is inside .plans/, which the planner owns`);
+			} else if (repo !== undefined && escapesRepo(repo, path.resolve(cwd!, rel))) {
+				errors.push(`Task ${task.id}: files entry "${raw}" leaves the repo through a symlink`);
 			}
 		}
 		if (task.files.length > cfg.maxFilesPerTask) {
@@ -738,9 +778,61 @@ function createWorkerStream(onText?: (text: string) => void): { state: WorkerStr
 	return { state, handle };
 }
 
-/** Env for a worker process: no second watcher, plus the guard policy when enabled. */
-function workerEnv(cfg: DispatchConfig, task: PlanTask): NodeJS.ProcessEnv {
-	const env: NodeJS.ProcessEnv = { ...process.env, PI_PLAN_DISPATCH_WORKER: "1" };
+// ---------- Vault ----------
+
+/** An existing directory, as its realpath, so the guard compares like with like. */
+function existingDir(candidate: unknown): string | undefined {
+	if (typeof candidate !== "string" || !candidate.trim()) return undefined;
+	const resolved = path.resolve(candidate);
+	try {
+		return fs.statSync(resolved).isDirectory() ? fs.realpathSync(resolved) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** The vault config as an object; missing, unreadable or malformed counts as empty. */
+function readVaultConfig(file: string): Record<string, unknown> {
+	try {
+		const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+		return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+	} catch {
+		return {};
+	}
+}
+
+/**
+ * The vault folder: $AGENT_VAULT when it names an existing directory, else the
+ * `path` of <home>/.config/agent-vault/config.json when that names one. No
+ * vault is undefined, never an error.
+ */
+export function findVaultPath(env: NodeJS.ProcessEnv, home: string): string | undefined {
+	const fromEnv = existingDir(env.AGENT_VAULT);
+	if (fromEnv) return fromEnv;
+	const config = readVaultConfig(path.join(home, ".config", "agent-vault", "config.json"));
+	return existingDir(config.path);
+}
+
+/**
+ * The vault variables of a worker-like child: no AGENT_VAULT (a worker never
+ * inherits the parent's), and the vault folder in VAULT_ENV, or no variable.
+ */
+function withVaultEnv(env: NodeJS.ProcessEnv, parent: NodeJS.ProcessEnv, home: string): NodeJS.ProcessEnv {
+	delete env.AGENT_VAULT;
+	const vault = findVaultPath(parent, home);
+	if (vault === undefined) delete env[VAULT_ENV];
+	else env[VAULT_ENV] = vault;
+	return env;
+}
+
+/** Env for a worker process: no second watcher, the vault folder, plus the guard policy when enabled. */
+export function workerEnv(
+	cfg: DispatchConfig,
+	task: PlanTask,
+	parent: NodeJS.ProcessEnv = process.env,
+	home: string = os.homedir(),
+): NodeJS.ProcessEnv {
+	const env = withVaultEnv({ ...parent, PI_PLAN_DISPATCH_WORKER: "1" }, parent, home);
 	if (cfg.workerGuards) {
 		const readonly = resolveRole(cfg, task.role || "implement").readonly === true;
 		env[GUARD_ENV] = JSON.stringify({ files: task.files, bash: true, readonly });
@@ -924,7 +1016,8 @@ export function smokeTestModel(cwd: string, cfg: DispatchConfig, model: string, 
 			cwd,
 			shell: false,
 			stdio: ["ignore", "pipe", "pipe"],
-			env: { ...process.env, PI_PLAN_DISPATCH_WORKER: "1" },
+			// A smoke test is a worker too: no vault access, whatever the guard says.
+			env: withVaultEnv({ ...process.env, PI_PLAN_DISPATCH_WORKER: "1" }, process.env, os.homedir()),
 		});
 
 		timer = setTimeout(() => {

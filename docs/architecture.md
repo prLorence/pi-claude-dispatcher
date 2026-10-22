@@ -47,18 +47,18 @@ flowchart TB
   results -->|"wait, gate, report"| orch
   orch -->|"gate, faults, cost"| user
 
-  subgraph vault["agent-vault (planned): Obsidian vault in its own git repo"]
+  subgraph vault["agent-vault (built): Obsidian vault in its own git repo"]
     cli["vault.mjs CLI<br/>schema, allowlist, lock, sync"]
     notes["Notes: plan, run, finding,<br/>lesson, decision, codebase"]
     remote["Private git remote"]
   end
   gfy["Graphify (planned)<br/>code graph, per machine"]
 
-  orch -.->|"only write path"| cli
-  cli -.-> notes
-  notes -.->|"sync pull and push"| remote
-  aud -.->|"boot, read only"| notes
-  disp -.->|"claims plan, sets status"| notes
+  orch -->|"only write path"| cli
+  cli --> notes
+  notes -->|"sync pull and push"| remote
+  aud -->|"boot, read only"| notes
+  disp -.->|"Phase 2: plan queue"| notes
   gfy -.->|"distilled into codebase notes"| cli
   guard["Permissions and hook (planned)<br/>orchestrator: Write only .plans/,<br/>Agent only plan-auditor"]
   guard -.->|"enforces"| orch
@@ -101,7 +101,7 @@ sequenceDiagram
 
 - Three trust levels. The orchestrator plans and approves, the `plan-auditor` checks the plan, and the workers write the code, but the dispatcher does not trust their claims: it re-runs the `verify:` commands, takes git snapshots and the gate decides.
 - Files are the hand-off. Nothing talks to anything else directly, except the orchestrator spawning the `plan-auditor`.
-- The planned layers. The agent-vault adds memory across machines and a plan queue, Graphify feeds it code knowledge, and the permissions hook makes "the orchestrator may only write under `.plans/` and spawn the `plan-auditor`" a real capability.
+- The planned layers. The plan queue, Graphify and the permissions hook are what is left. The vault is built: it is the orchestrator's and the reviewer's memory across machines, and the plan queue on top of it is Phase 2. Graphify feeds code knowledge into it, and the permissions hook makes "the orchestrator may only write under `.plans/`, the vault through the CLI, and spawn the `plan-auditor`" a real capability.
 
 ## Built and planned
 
@@ -113,10 +113,11 @@ Built:
 - The pair and security reviewers.
 - `verify:` commands, the gate, the guards and the traces.
 - The preflight CLI.
+- The agent-vault: CLI, notes and sync.
 
 Planned:
 
-- The agent-vault.
 - Graphify.
 - The permissions hook.
+- The agent-vault plan queue (Phase 2).
 - A web monitor for worker sessions.

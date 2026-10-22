@@ -183,7 +183,11 @@ test(
 	withVault(async ({ root, vault }) => {
 		const other = path.join(root, "other");
 		fs.mkdirSync(other, { recursive: true });
-		const result = run(root, ["resolve", "--json", "--vault", other]);
+		// The configured vault is the one --vault has to beat, so pass it.
+		const configured = run(root, ["resolve", "--json"], { vault });
+		assert.equal(configured.code, 0);
+		assert.equal(JSON.parse(configured.out).path, vault);
+		const result = run(root, ["resolve", "--json", "--vault", other], { vault });
 		assert.equal(result.code, 0);
 		assert.equal(JSON.parse(result.out).path, other);
 		assert.equal(result.out.includes(vault), false);
@@ -284,11 +288,19 @@ test(
 	withVault(async ({ root, vault }) => {
 		write(vault, "harness.json", `${JSON.stringify({ schema: 1, boot_budget_tokens: 12 })}\n`);
 		const project = makeProject(root, "project", "git@github.com:o/n.git");
+		const note = run(root, ["note", "new", "project", "project-demo", "--set", "repos=github.com/o/n"], { vault });
+		assert.equal(note.code, 0, note.err);
 		const result = run(root, ["boot"], { vault, cwd: project });
 		assert.equal(result.code, 0);
 		assert.ok(result.out.startsWith("# Schema\nRules for agents.\n"), result.out);
-		const tiny = run(root, ["boot", "--budget", "2000"], { vault, cwd: project });
-		assert.equal(tiny.code, 0);
+		// 12 tokens is too few for the project item and the index, so harness.json was read.
+		assert.match(result.out, /\[truncated: \d+ items\]/, "the tiny harness budget truncates the items");
+		assert.equal(result.out.includes("=== project project-demo ==="), false);
+		// A roomy budget shows the project note, so the repo came from the working directory.
+		const roomy = run(root, ["boot", "--budget", "2000"], { vault, cwd: project });
+		assert.equal(roomy.code, 0);
+		assert.ok(roomy.out.includes("=== project project-demo ==="), roomy.out);
+		assert.equal(roomy.out.includes("[truncated:"), false);
 		const bad = run(root, ["boot", "--budget", "lots"], { vault, cwd: project });
 		assert.equal(bad.code, 2);
 	}),

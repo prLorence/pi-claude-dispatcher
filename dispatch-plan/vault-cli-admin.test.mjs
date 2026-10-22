@@ -147,15 +147,69 @@ test(
 	withRoot(async ({ root }) => {
 		const vault = makeVault(root);
 		const events = path.join(root, "events");
-		for (const args of [
-			["init", "--path", path.join(root, "second")],
-			["setup", "--path", vault],
-			["doctor", "--vault", vault],
-		]) {
-			const result = run(root, [...args, "--root", events, "--trace", "adm1"]);
-			assert.notEqual(result.code, 64, result.err);
+		// A busy lock makes any command that takes the lock exit 4 before it runs.
+		const lock = path.join(vault, ".git", "agent-vault.lock");
+		fs.writeFileSync(lock, `${JSON.stringify({ pid: process.pid, host: os.hostname(), started: Date.now() })}\n`);
+		try {
+			const cases = [
+				{ args: ["init", "--path", path.join(root, "second")], code: 0 },
+				{ args: ["setup", "--path", vault], code: 0 },
+				{ args: ["doctor", "--vault", vault], code: 1 },
+			];
+			for (const { args, code } of cases) {
+				const result = run(root, [...args, "--root", events, "--trace", "adm1"], { env: { AGENT_VAULT_LOCK_WAIT_MS: "250" } });
+				assert.equal(result.code, code, `${args.join(" ")}: ${result.err}`);
+			}
+		} finally {
+			fs.rmSync(lock, { force: true });
 		}
 		assert.equal(fs.existsSync(path.join(events, ".plans", "traces", "adm1.jsonl")), false);
-		assert.equal(fs.existsSync(path.join(vault, ".git", "agent-vault.lock")), false);
+	}),
+);
+
+test(
+	"all three admin commands list the searched places when the harness is missing",
+	withRoot(async ({ root }) => {
+		// A copy outside the harness repo, so no candidate holds the skill, the dispatcher and the template.
+		const tool = path.join(root, "tool");
+		fs.mkdirSync(tool);
+		for (const name of ["vault.mjs", "vault-admin.mjs", "vault-events.mjs"]) {
+			fs.copyFileSync(path.join(import.meta.dirname, name), path.join(tool, name));
+		}
+		const toolCli = path.join(tool, "vault.mjs");
+		const home = path.join(root, "home");
+		const candidates = [root, path.join(home, "Documents", "repos", "pi-plan-dispatch-phase1")];
+		for (const command of ["init", "setup", "doctor"]) {
+			const result = spawnSync(process.execPath, [toolCli, command], {
+				env: cliEnv(root),
+				cwd: root,
+				encoding: "utf8",
+				timeout: 120_000,
+			});
+			assert.equal(result.status, 1, `${command}: ${result.stderr}`);
+			assert.equal(result.stdout, "", `${command} wrote to stdout instead of failing first`);
+			assert.match(result.stderr, /the harness repo was not found/);
+			for (const candidate of candidates) {
+				assert.ok(result.stderr.includes(`  ${candidate}`), `${command} did not list ${candidate}`);
+			}
+		}
+		// init never ran, so it did not create its default vault either.
+		assert.equal(fs.existsSync(path.join(home, "Documents", "repos", "agent-vault")), false);
+	}),
+);
+
+test(
+	"setup and doctor take the vault path as a string from --vault and from the config",
+	withRoot(async ({ root }) => {
+		const vault = makeVault(root);
+		const setup = run(root, ["setup", "--vault", vault]);
+		assert.equal(setup.code, 0, setup.err);
+		const file = path.join(root, "home", ".config", "agent-vault", "config.json");
+		const config = JSON.parse(fs.readFileSync(file, "utf8"));
+		assert.equal(config.path, vault, "the CLI passed the vault path, not the findVault object");
+		// With no flag the vault comes from findVault, so a string has to reach the doctor.
+		const doctor = run(root, ["doctor"]);
+		assert.match(doctor.out, /vault repo/, doctor.out);
+		assert.equal(doctor.out.includes("fail vault configured"), false, doctor.out);
 	}),
 );
