@@ -197,7 +197,7 @@ test("renderMetaRunBody returns an empty string when no key is present", () => {
 
 test("checkNote allows every type in a full repo", () => {
 	const repos = parseRepos(reposJson());
-	for (const type of ["plan", "run", "finding", "decision", "lesson", "codebase"] as const) {
+	for (const type of ["plan", "run", "finding", "decision", "lesson", "codebase", "spec", "idea"] as const) {
 		assert.deepEqual(checkNote(repos, note(type, { repo: FULL }, "anything goes")), [], type);
 	}
 });
@@ -214,15 +214,85 @@ test("checkNote rejects an unlisted repo, no repo, and a none repo", () => {
 	assert.equal(checkNote(parseRepos(undefined), note("run", { repo: FULL }, "x")).length, 1);
 });
 
-test("checkNote in meta mode allows only run, decision and lesson", () => {
+test("checkNote in meta mode allows only run, decision, lesson and idea", () => {
 	const repos = parseRepos(reposJson());
-	for (const type of ["plan", "finding", "codebase"] as const) {
+	for (const type of ["plan", "finding", "codebase", "spec"] as const) {
 		assert.deepEqual(checkNote(repos, note(type, { repo: META }, "x")), [
 			`${type} notes are not allowed for a meta repo`,
 		]);
 	}
 	assert.deepEqual(checkNote(repos, note("decision", { repo: META }, "plain text")), []);
 	assert.deepEqual(checkNote(repos, note("lesson", { repo: META }, "plain text")), []);
+	assert.deepEqual(checkNote(repos, note("idea", { repo: META }, "plain text")), []);
+});
+
+test("checkNote allows a spec note for a full repo only", () => {
+	const repos = parseRepos(reposJson());
+	const specProps = { repo: FULL, trace: "t-1", status: "confirmed", file: "spec.md" };
+	assert.deepEqual(checkNote(repos, note("spec", specProps, "anything goes")), []);
+	assert.deepEqual(checkNote(repos, note("spec", { ...specProps, repo: META }, "x")), [
+		"spec notes are not allowed for a meta repo",
+	]);
+	assert.deepEqual(checkNote(repos, note("spec", { ...specProps, repo: NONE }, "x")), [
+		`repo ${NONE} is not allowed`,
+	]);
+	assert.deepEqual(checkNote(repos, note("spec", { ...specProps, repo: "-" }, "x")), [
+		"spec notes are not allowed for a meta repo",
+	]);
+});
+
+test("checkNote allows a plain idea body for '-', meta and full repos", () => {
+	const repos = parseRepos(reposJson());
+	for (const repo of ["-", META, FULL]) {
+		assert.deepEqual(checkNote(repos, note("idea", { repo, status: "open" }, "a plain thought")), [], repo);
+	}
+});
+
+test("checkNote rejects a fenced idea body for '-' and meta repos only", () => {
+	const repos = parseRepos(reposJson());
+	const body = "text\n```js\ncode\n```";
+	for (const repo of ["-", META]) {
+		assert.deepEqual(checkNote(repos, note("idea", { repo, status: "open" }, body)), [
+			"meta idea body must not contain fenced code blocks",
+		], repo);
+	}
+	assert.deepEqual(checkNote(repos, note("idea", { repo: FULL, status: "open" }, body)), []);
+});
+
+test("checkNote rejects an idea for a meta repo that names a tracked file", () => {
+	const repos = parseRepos(reposJson());
+	const tracked = new Set(["src/app.ts"]);
+	assert.deepEqual(
+		checkNote(repos, note("idea", { repo: META, status: "open" }, "rework `src/app.ts`"), tracked),
+		["meta idea body must not name a tracked file: src/app.ts"],
+	);
+	assert.deepEqual(
+		checkNote(repos, note("idea", { repo: FULL, status: "open" }, "rework src/app.ts"), tracked),
+		[],
+	);
+});
+
+test("checkNote rejects an idea for a none repo", () => {
+	const repos = parseRepos(reposJson());
+	assert.deepEqual(checkNote(repos, note("idea", { repo: NONE, status: "open" }, "x")), [
+		`repo ${NONE} is not allowed`,
+	]);
+});
+
+test("checkNote leak-checks an idea body and its properties", () => {
+	const repos = parseRepos(reposJson());
+	const both = [
+		`names a repo that is not allowed: ${NONE}`,
+		"names a repo that is not allowed: secret/none",
+	];
+	assert.deepEqual(checkNote(repos, note("idea", { repo: "-", status: "open" }, `about ${NONE}`)), both);
+	assert.deepEqual(
+		checkNote(repos, note("idea", { repo: META, status: "open", project: NONE }, "plain")),
+		both,
+	);
+	assert.deepEqual(checkNote(repos, note("idea", { repo: FULL, status: "open" }, "secret/none again")), [
+		"names a repo that is not allowed: secret/none",
+	]);
 });
 
 test("checkNote meta run body must match the meta fields", () => {

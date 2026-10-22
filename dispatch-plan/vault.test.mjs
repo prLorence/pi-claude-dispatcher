@@ -808,3 +808,361 @@ test("parseArgs takes flags anywhere and collects --set", () => {
 	assert.deepEqual(parseArgs(["resolve", "--nope"]), { error: "unknown flag: --nope" });
 	assert.deepEqual(parseArgs(["resolve", "--vault"]), { error: "--vault needs a value" });
 });
+
+/* The work, restore and config commands: fixtures and helpers. */
+
+const FULL_REMOTE = "git@github.com:o/n.git";
+
+/** A finished trace with its plan results, the record `work add` copies. */
+function makeTrace(project, trace) {
+	const plan = `${trace}-r1`;
+	const lines = [
+		{ ts: "2026-10-23T10:00:00.000Z", actor: "pi-dispatch", kind: "task.start", plan },
+		{ ts: "2026-10-23T10:05:00.000Z", actor: "pi-dispatch", kind: "plan.end", plan },
+	];
+	write(project, `.plans/traces/${trace}.jsonl`, `${lines.map((line) => `${JSON.stringify(line)}\n`).join("")}`);
+	write(project, `.plans/traces/${trace}.md`, `# ${trace}\n`);
+	write(project, `.plans/done/${plan}/_summary.md`, "gate: pass\n");
+	write(project, `.plans/done/${plan}/evidence.json`, "{}\n");
+	write(project, `.plans/done/${plan}/task-a.md`, "task a done\n");
+	write(project, `.plans/done/${plan}/task-a.prompt.md`, "the prompt, never copied\n");
+	write(project, `.plans/running/${plan}/state.json`, "{}\n");
+	write(project, `.plans/inbox/${plan}.md`, "a plan body\n");
+	return plan;
+}
+
+/** The JSON lines of a trace file of a folder that holds `.plans` itself. */
+function traceEvents(dir, trace) {
+	const file = path.join(dir, ".plans", "traces", `${trace}.jsonl`);
+	if (!fs.existsSync(file)) return [];
+	return read(file)
+		.split("\n")
+		.filter((line) => line !== "")
+		.map((line) => JSON.parse(line));
+}
+
+/** A finished trace stored in the vault, minus its vault lines, computed here again. */
+function expectedTraceCopy(project, trace) {
+	return traceEvents(project, trace)
+		.filter((event) => event.actor !== "vault")
+		.map((event) => `${JSON.stringify(event)}\n`)
+		.join("");
+}
+
+/** A secret built from parts, so no secret pattern sits in this file itself. */
+function testSecret() {
+	return `${["sk", "ant"].join("-")}-${"z".repeat(30)}`;
+}
+
+test(
+	"work add copies a finished request and work pending stops listing it",
+	withVault(async ({ root, vault }) => {
+		const project = makeProject(root, "project", FULL_REMOTE);
+		makeTrace(project, "t-one");
+		write(project, ".plans/tools/probe-check.mjs", "console.log(1);\n");
+		write(project, ".plans/tools/notes.txt", "not a probe\n");
+
+		const listed = run(root, ["work", "pending", "--root", project], { vault });
+		assert.equal(listed.code, 0, listed.err);
+		assert.equal(listed.out, "pending t-one\n");
+		assert.equal(fs.existsSync(path.join(vault, "work")), false, "work pending writes nothing");
+
+		const added = run(root, ["work", "add", "--trace", "t-one", "--root", project], { vault });
+		assert.equal(added.code, 0, added.err);
+		assert.equal(added.out, "work add: 5 copied, 0 unchanged, 0 unmirrored\n");
+		const work = path.join(vault, "work", "t-one");
+		for (const relative of ["trace.jsonl", "trace.md", "t-one-r1/_summary.md", "t-one-r1/evidence.json", "t-one-r1/task-a.md"]) {
+			assert.ok(fs.existsSync(path.join(work, ...relative.split("/"))), relative);
+		}
+		assert.equal(fs.existsSync(path.join(work, "t-one-r1", "task-a.prompt.md")), false, "a prompt is never copied");
+		assert.equal(fs.existsSync(path.join(work, "probes")), false, "probes need --probes");
+		assert.equal(read(path.join(work, "trace.jsonl")), expectedTraceCopy(project, "t-one"));
+		assert.equal(read(path.join(work, "trace.jsonl")).includes("vault.work"), false, "the copy never holds its own event");
+		assert.equal(read(path.join(work, "trace.md")), "# t-one\n");
+
+		const recorded = traceEvents(project, "t-one").filter((event) => event.kind === "vault.work");
+		assert.equal(recorded.length, 1, "the event landed in the local trace of --trace");
+		assert.equal(recorded[0].actor, "vault");
+		assert.deepEqual(recorded[0].data, { op: "add", trace: "t-one", files: 5, unmirrored: 0 });
+
+		const after = run(root, ["work", "pending", "--root", project], { vault });
+		assert.equal(after.code, 0);
+		assert.equal(after.out, "");
+
+		const again = run(root, ["work", "add", "--trace", "t-one", "--root", project], { vault });
+		assert.equal(again.code, 0, again.err);
+		assert.equal(again.out, "work add: 0 copied, 5 unchanged, 0 unmirrored\n", "a second run changes nothing");
+
+		const withProbes = run(root, ["work", "add", "--trace", "t-one", "--root", project, "--probes"], { vault });
+		assert.equal(withProbes.code, 0, withProbes.err);
+		assert.equal(withProbes.out, "work add: 1 copied, 5 unchanged, 0 unmirrored\n");
+		assert.equal(read(path.join(work, "probes", "probe-check.mjs")), "console.log(1);\n");
+		assert.equal(fs.existsSync(path.join(work, "probes", "notes.txt")), false);
+	}),
+);
+
+test(
+	"work add leaves a secret and a none-repo name unmirrored and exits 6",
+	withVault(async ({ root, vault }) => {
+		const project = makeProject(root, "project", FULL_REMOTE);
+		const plan = makeTrace(project, "t-two");
+		write(project, `.plans/done/${plan}/leaky.md`, `the key is ${testSecret()}\n`);
+		write(project, `.plans/done/${plan}/named.md`, "this mentions github.com/o/x in passing\n");
+		const result = run(root, ["work", "add", "--trace", "t-two", "--root", project], { vault });
+		assert.equal(result.code, 6, result.err);
+		assert.match(result.err, new RegExp(`^unmirrored \\.plans/done/${plan}/leaky\\.md: secret pattern: [a-z-]+$`, "m"));
+		assert.match(result.err, new RegExp(`^unmirrored \\.plans/done/${plan}/named\\.md: names a repo that is not allowed$`, "m"));
+		assert.equal(result.err.includes("github.com/o/x"), false, "the message never names the repo");
+		assert.equal(result.err.includes(root), false, "the message never carries the checkout path");
+		const work = path.join(vault, "work", "t-two");
+		assert.equal(fs.existsSync(path.join(work, plan, "leaky.md")), false);
+		assert.equal(fs.existsSync(path.join(work, plan, "named.md")), false);
+		assert.equal(fs.existsSync(path.join(work, plan, "_summary.md")), true, "the rest is copied");
+		const recorded = traceEvents(project, "t-two").filter((event) => event.kind === "vault.work");
+		assert.deepEqual(recorded[0].data, { op: "add", trace: "t-two", files: 5, unmirrored: 2 });
+	}),
+);
+
+test(
+	"work add copies nothing for a meta repo and exits 3 for a none repo",
+	withVault(async ({ root, vault }) => {
+		const meta = makeProject(root, "meta", "git@github.com:o/m.git");
+		makeTrace(meta, "t-meta");
+		const metaResult = run(root, ["work", "add", "--trace", "t-meta", "--root", meta], { vault });
+		assert.equal(metaResult.code, 0, metaResult.err);
+		assert.equal(metaResult.out, "work add: a meta repo copies no work files\n");
+		assert.equal(run(root, ["work", "pending", "--root", meta], { vault }).out, "");
+
+		const none = makeProject(root, "none", "git@github.com:o/x.git");
+		makeTrace(none, "t-none");
+		const noneResult = run(root, ["work", "add", "--trace", "t-none", "--root", none], { vault });
+		assert.equal(noneResult.code, 3, noneResult.err);
+		assert.equal(noneResult.err.includes("github.com/o/x"), false);
+		assert.equal(run(root, ["work", "pending", "--root", none], { vault }).out, "");
+		assert.equal(fs.existsSync(path.join(vault, "work")), false);
+	}),
+);
+
+test(
+	"the work, restore and config commands reject a missing required flag and a flag they do not take",
+	withVault(async ({ root, vault }) => {
+		const project = makeProject(root, "project", FULL_REMOTE);
+		const cases = [
+			["work", "add", "--root", project],
+			["work", "add", "--trace", "t-one"],
+			["work", "pending"],
+			["restore"],
+			["config", "push"],
+			["config", "pull"],
+			["work", "pending", "--root", project, "--probes"],
+			["restore", "--root", project, "--probes"],
+			["config", "push", "--root", project, "--force"],
+			["work", "add", "--trace", "t-one", "--root", project, "--force"],
+		];
+		for (const args of cases) {
+			const result = run(root, args, { vault });
+			assert.equal(result.code, 64, `${args.join(" ")}: ${result.err}`);
+			assert.match(result.err, /usage: node vault\.mjs/);
+			assert.equal(result.out, "");
+		}
+	}),
+);
+
+test(
+	"a Pi worker is refused the work, restore and config commands",
+	withVault(async ({ root, vault }) => {
+		const project = makeProject(root, "project", FULL_REMOTE);
+		for (const args of [
+			["work", "add", "--trace", "t-one", "--root", project],
+			["work", "pending", "--root", project],
+			["restore", "--root", project],
+			["config", "push", "--root", project],
+			["config", "pull", "--root", project],
+		]) {
+			const result = run(root, args, { vault, env: { PI_PLAN_DISPATCH_WORKER: "1" } });
+			assert.equal(result.code, 2, args.join(" "));
+			assert.match(result.err, /PI_PLAN_DISPATCH_WORKER/);
+		}
+		assert.equal(fs.existsSync(path.join(vault, "work")), false);
+	}),
+);
+
+test(
+	"work add and config push take the lock and refuse a rebase while restore and config pull carry on",
+	withVault(async ({ root, vault }) => {
+		const project = makeProject(root, "project", FULL_REMOTE);
+		makeTrace(project, "t-lock");
+		write(project, ".plans/config.json", `${JSON.stringify({ autoReady: false })}\n`);
+		assert.equal(run(root, ["config", "push", "--root", project], { vault }).code, 0);
+
+		write(vault, ".git/agent-vault.lock", `${JSON.stringify({ pid: process.pid, host: os.hostname(), started: Date.now() })}\n`);
+		const wait = { AGENT_VAULT_LOCK_WAIT_MS: "300" };
+		for (const args of [["work", "add", "--trace", "t-lock", "--root", project], ["config", "push", "--root", project]]) {
+			const result = run(root, args, { vault, env: wait });
+			assert.equal(result.code, 4, `${args.join(" ")}: ${result.err}`);
+		}
+		assert.equal(run(root, ["restore", "--root", project], { vault }).code, 0, "restore takes no lock");
+		assert.equal(run(root, ["config", "pull", "--root", project], { vault }).code, 0, "config pull takes no lock");
+		assert.equal(fs.existsSync(path.join(vault, "work", "t-lock")), false);
+		fs.rmSync(path.join(vault, ".git", "agent-vault.lock"));
+
+		fs.mkdirSync(path.join(vault, ".git", "rebase-merge"));
+		for (const args of [["work", "add", "--trace", "t-lock", "--root", project], ["config", "push", "--root", project]]) {
+			const result = run(root, args, { vault });
+			assert.equal(result.code, 2, `${args.join(" ")}: ${result.err}`);
+			assert.match(result.err, /rebase in progress/);
+		}
+		assert.equal(run(root, ["work", "pending", "--root", project], { vault }).code, 0);
+		assert.equal(run(root, ["restore", "--root", project], { vault }).code, 0);
+		assert.equal(run(root, ["config", "pull", "--root", project], { vault }).code, 0);
+		fs.rmdirSync(path.join(vault, ".git", "rebase-merge"));
+		assert.equal(run(root, ["work", "add", "--trace", "t-lock", "--root", project], { vault }).code, 0);
+	}),
+);
+
+test(
+	"restore rebuilds a spec and a draft plan from the vault",
+	withVault(async ({ root, vault }) => {
+		const project = makeProject(root, "project", FULL_REMOTE);
+		fs.mkdirSync(path.join(project, ".plans"));
+		const spec = run(
+			root,
+			["note", "new", "spec", "t-one-spec", "--set", "trace=t-one", "--set", "repo=github.com/o/n", "--set", "status=confirmed", "--set", "file=t-one.md", "--body-stdin"],
+			{ vault, input: "the spec text\n" },
+		);
+		assert.equal(spec.code, 0, spec.err);
+		const planBody = "---\nid: t-one-r1\nstatus: ready\nround: 1\n---\n\nthe plan body\n";
+		const plan = run(
+			root,
+			["note", "new", "plan", "t-one-r1", "--set", "trace=t-one", "--set", "round=1", "--set", "repo=github.com/o/n", "--set", "status=ready", "--set", "file=t-one-r1.md", "--body-stdin"],
+			{ vault, input: planBody },
+		);
+		assert.equal(plan.code, 0, plan.err);
+
+		const result = run(root, ["restore", "--root", project, "--trace", "rs1"], { vault });
+		assert.equal(result.code, 0, result.err);
+		assert.match(result.out, /^restored \.plans\/specs\/t-one\.md$/m);
+		assert.match(result.out, /^restored \.plans\/inbox\/t-one-r1\.md\.draft$/m);
+		assert.equal(read(path.join(project, ".plans", "specs", "t-one.md")), "the spec text\n");
+		const restored = read(path.join(project, ".plans", "inbox", "t-one-r1.md.draft"));
+		assert.match(restored, /^status: draft$/m);
+		assert.ok(restored.includes("the plan body"), restored);
+		assert.equal(fs.existsSync(path.join(project, ".plans", "inbox", "t-one-r1.md")), false, "never a ready plan");
+
+		const recorded = traceEvents(project, "rs1").filter((event) => event.kind === "vault.restore");
+		assert.equal(recorded.length, 1);
+		assert.deepEqual(recorded[0].data, { restored: 2, skipped: 0 });
+
+		const again = run(root, ["restore", "--root", project], { vault });
+		assert.equal(again.code, 0, again.err);
+		assert.match(again.out, /^skipped \.plans\/specs\/t-one\.md: exists$/m);
+		assert.equal(read(path.join(project, ".plans", "specs", "t-one.md")), "the spec text\n", "restore never overwrites");
+	}),
+);
+
+test(
+	"config push and config pull round trip the dispatcher config",
+	withVault(async ({ root, vault }) => {
+		const project = makeProject(root, "project", FULL_REMOTE);
+		write(project, ".plans/config.json", "{\n  \"autoReady\": false\n}\n");
+		const pushed = run(root, ["config", "push", "--root", project, "--trace", "c1"], { vault });
+		assert.equal(pushed.code, 0, pushed.err);
+		assert.equal(pushed.out, "config push: pushed\n");
+		const stored = path.join(vault, "config", "dispatch.json");
+		assert.equal(read(stored), "{\n  \"autoReady\": false\n}\n");
+		const pushedEvent = traceEvents(project, "c1").filter((event) => event.kind === "vault.config");
+		assert.deepEqual(pushedEvent[0].data, { op: "push", result: "pushed" });
+
+		const unchanged = run(root, ["config", "push", "--root", project], { vault });
+		assert.equal(unchanged.code, 0);
+		assert.equal(unchanged.out, "config push: unchanged\n");
+
+		fs.rmSync(path.join(project, ".plans", "config.json"));
+		const pulled = run(root, ["config", "pull", "--root", project, "--trace", "c2"], { vault });
+		assert.equal(pulled.code, 0, pulled.err);
+		assert.equal(pulled.out, "config pull: pulled\n");
+		assert.equal(read(path.join(project, ".plans", "config.json")), "{\n  \"autoReady\": false\n}\n");
+		const pulledEvent = traceEvents(project, "c2").filter((event) => event.kind === "vault.config");
+		assert.deepEqual(pulledEvent[0].data, { op: "pull", result: "pulled" });
+
+		write(project, ".plans/config.json", "{\n  \"autoReady\": true\n}\n");
+		const kept = run(root, ["config", "pull", "--root", project], { vault });
+		assert.equal(kept.code, 0);
+		assert.equal(kept.out, "config pull: kept the local file (use --force to replace it)\n");
+		assert.match(read(path.join(project, ".plans", "config.json")), /"autoReady": true/);
+		const forced = run(root, ["config", "pull", "--root", project, "--force"], { vault });
+		assert.equal(forced.code, 0);
+		assert.equal(forced.out, "config pull: pulled\n");
+		assert.match(read(path.join(project, ".plans", "config.json")), /"autoReady": false/);
+	}),
+);
+
+test(
+	"config push refuses a missing file, invalid JSON and a secret",
+	withVault(async ({ root, vault }) => {
+		const project = makeProject(root, "project", FULL_REMOTE);
+		const stored = path.join(vault, "config", "dispatch.json");
+		const missing = run(root, ["config", "push", "--root", project], { vault });
+		assert.equal(missing.code, 1);
+		assert.match(missing.err, /\.plans\/config\.json does not exist/);
+		write(project, ".plans/config.json", "{not json\n");
+		const invalid = run(root, ["config", "push", "--root", project], { vault });
+		assert.equal(invalid.code, 2);
+		assert.match(invalid.err, /not a JSON object/);
+		write(project, ".plans/config.json", `${JSON.stringify({ token: testSecret() })}\n`);
+		const secret = run(root, ["config", "push", "--root", project], { vault });
+		assert.equal(secret.code, 2);
+		assert.match(secret.err, /secret/);
+		assert.equal(fs.existsSync(stored), false);
+	}),
+);
+
+test(
+	"note status changes an idea and keeps its own type",
+	withVault(async ({ root, vault }) => {
+		const created = run(root, ["note", "new", "idea", "idea-pair-mode", "--set", "status=open", "--set", "repo=github.com/o/n", "--body-stdin"], {
+			vault,
+			input: "try pair review\n",
+		});
+		assert.equal(created.code, 0, created.err);
+		const file = path.join(vault, "ideas", "idea-pair-mode.md");
+		const taken = run(root, ["note", "status", "idea-pair-mode", "taken"], { vault });
+		assert.equal(taken.code, 0, taken.err);
+		assert.match(read(file), /^status: taken$/m);
+		assert.match(read(file), /^type: idea$/m);
+		assert.match(read(file), /^repo: github\.com\/o\/n$/m);
+		assert.ok(read(file).includes("try pair review"), "the body survives a status change");
+		assert.equal(run(root, ["note", "status", "idea-pair-mode", "dropped"], { vault }).code, 0);
+		assert.match(read(file), /^status: dropped$/m);
+
+		const badValue = run(root, ["note", "status", "idea-pair-mode", "closed"], { vault });
+		assert.equal(badValue.code, 2);
+		assert.match(badValue.err, /status works on finding notes \(open, closed\) and idea notes \(open, taken, dropped\)/);
+		assert.match(read(file), /^status: dropped$/m, "a refused value writes nothing");
+
+		const decision = run(root, ["note", "new", "decision", "decision-three", "--set", "project=project-one", "--set", "repo=github.com/o/n"], { vault });
+		assert.equal(decision.code, 0, decision.err);
+		assert.equal(run(root, ["note", "status", "decision-three", "taken"], { vault }).code, 2);
+	}),
+);
+
+test(
+	"stats prints the work folder size between the type counts and the repeats",
+	withVault(async ({ root, vault }) => {
+		const empty = run(root, ["stats", "--repo", "github.com/o/n"], { vault });
+		assert.equal(empty.code, 0, empty.err);
+		assert.match(empty.out, /^work: 0 files, 0 bytes$/m);
+		assert.ok(empty.out.indexOf("work: 0 files, 0 bytes") > empty.out.indexOf("idea: 0"), "after the type counts");
+		assert.ok(empty.out.indexOf("work: 0 files, 0 bytes") < empty.out.indexOf("repeats:"), "before the repeats");
+
+		write(vault, "work/t-one/trace.jsonl", "abcde");
+		const table = run(root, ["stats", "--repo", "github.com/o/n"], { vault });
+		assert.equal(table.code, 0, table.err);
+		assert.match(table.out, /^work: 1 files, 5 bytes$/m);
+		const json = run(root, ["stats", "--json", "--repo", "github.com/o/n"], { vault });
+		assert.equal(json.code, 0);
+		const body = JSON.parse(json.out);
+		assert.equal(body.workFiles, 1);
+		assert.equal(body.workBytes, 5);
+	}),
+);

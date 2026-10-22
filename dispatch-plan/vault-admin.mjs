@@ -19,6 +19,9 @@ const SSH_COMMAND = "ssh -o BatchMode=yes -o ConnectTimeout=5";
 const DEFAULT_VAULT_DIR = "agent-vault";
 const HARNESS_DIR = "pi-plan-dispatch-phase1";
 const INITIAL_COMMIT = "vault: init";
+const WORK_FOLDERS = ["specs", "ideas", "work", "config"];
+const GITATTRIBUTES_LINE = "work/**/*.jsonl merge=union";
+const NOT_NOTE_FOLDERS = new Set([".git", "templates", "work", "config", "node_modules"]);
 
 function readText(file) {
 	try {
@@ -73,6 +76,77 @@ function isDirectory(dir) {
 	}
 }
 
+/** The `type:` value of a note's front matter block, or undefined when it has none. */
+function frontMatterType(text) {
+	const lines = text.split("\n");
+	if (lines[0].trim() !== "---") return undefined;
+	for (let i = 1; i < lines.length; i++) {
+		const line = lines[i].trim();
+		if (line === "---") return undefined;
+		if (!line.startsWith("type:")) continue;
+		const value = line.slice("type:".length).trim().replace(/^["']|["']$/gu, "");
+		return value === "" ? undefined : value;
+	}
+	return undefined;
+}
+
+/** The vault folders of the work files, and the merge rule their files need. */
+function ensureWorkLayout(ctx, vault) {
+	for (const folder of WORK_FOLDERS) {
+		const dir = path.join(vault, folder);
+		if (isDirectory(dir)) continue;
+		fs.mkdirSync(dir, { recursive: true });
+		fs.writeFileSync(path.join(dir, ".gitkeep"), "");
+		ctx.out(`created: ${dir}`);
+	}
+	ensureGitattributes(ctx, vault);
+}
+
+function ensureGitattributes(ctx, vault) {
+	const file = path.join(vault, ".gitattributes");
+	const text = readText(file);
+	if (text === undefined) {
+		fs.writeFileSync(file, `log.md merge=union\n${GITATTRIBUTES_LINE}\n`);
+		ctx.out(`updated: ${file}`);
+		return;
+	}
+	if (text.split("\n").some((line) => line.trim() === GITATTRIBUTES_LINE)) return;
+	const separator = text === "" || text.endsWith("\n") ? "" : "\n";
+	fs.writeFileSync(file, `${text}${separator}${GITATTRIBUTES_LINE}\n`);
+	ctx.out(`updated: ${file}`);
+}
+
+/** A JSON value with the keys of every object sorted, so two files compare by content. */
+function sortedDeep(value) {
+	if (Array.isArray(value)) return value.map(sortedDeep);
+	if (!isObject(value)) return value;
+	const out = {};
+	for (const key of Object.keys(value).sort()) out[key] = sortedDeep(value[key]);
+	return out;
+}
+
+/**
+ * The notes of a type this CLI does not know: how many, and their types sorted
+ * and unique. A file with no front matter type is not a note and is skipped.
+ */
+function unknownNoteTypes(vault, known) {
+	const types = new Set();
+	let count = 0;
+	if (!isDirectory(vault)) return { count, types: [] };
+	for (const entry of fs.readdirSync(vault, { withFileTypes: true })) {
+		if (!entry.isDirectory()) continue;
+		if (entry.name.startsWith(".") || NOT_NOTE_FOLDERS.has(entry.name)) continue;
+		for (const name of filesIn(path.join(vault, entry.name))) {
+			if (!name.endsWith(".md")) continue;
+			const type = frontMatterType(readText(path.join(vault, entry.name, name)) ?? "");
+			if (type === undefined || known.includes(type)) continue;
+			count++;
+			types.add(type);
+		}
+	}
+	return { count, types: [...types].sort() };
+}
+
 function firstLine(text) {
 	return String(text ?? "")
 		.split("\n")
@@ -93,6 +167,7 @@ async function loadModules(ctx) {
 	return {
 		slug: schema.slug,
 		schemaVersion: schema.SCHEMA_VERSION,
+		noteTypes: schema.NOTE_TYPES,
 		writeIndex: notes.writeIndex,
 		readRepos: notes.readRepos,
 	};
@@ -321,6 +396,8 @@ export async function runSetup(args = {}, ctx) {
 	ctx.out(`vault: ${vault}`);
 	ctx.out(`config: ${configFile}`);
 
+	ensureWorkLayout(ctx, vault);
+
 	const recordFile = path.join(ctx.home, ".config", "agent-vault", "installed.json");
 	const stored = readJson(recordFile);
 	const record = isObject(stored) ? { ...stored } : {};
@@ -337,6 +414,12 @@ export async function runSetup(args = {}, ctx) {
 		return 1;
 	}
 	ctx.out(`index: ${path.join(vault, "index.md")}`);
+
+	// Loaded here so a copied vault-admin.mjs without the new modules still works until this step.
+	if (isDirectory(path.join(ctx.cwd, ".plans"))) {
+		const { configPull } = await import("./vault-config.mjs");
+		configPull({ vault, root: ctx.cwd, modules: {}, out: ctx.out, err: ctx.err, inside: () => true }, { force: false });
+	}
 
 	await runDoctor({}, { ...ctx, vaultPath: vault });
 	return 0;
@@ -460,6 +543,23 @@ export async function runDoctor(args = {}, ctx) {
 		"obsidian-skills",
 		"the obsidian-skills plugin is not installed. Fix: /plugin marketplace add kepano/obsidian-skills then /plugin install obsidian@obsidian-skills, run in Claude Code",
 	);
+
+	const unknown = unknownNoteTypes(vault, modules.noteTypes);
+	optional(
+		unknown.count === 0,
+		"note types",
+		`${unknown.count} note(s) of a type this CLI does not know (${unknown.types.join(", ")}). Fix: update the harness clone and rerun setup`,
+	);
+
+	const localConfig = typeof ctx.cwd === "string" ? path.join(ctx.cwd, ".plans", "config.json") : undefined;
+	const vaultConfig = path.join(vault, "config", "dispatch.json");
+	if (localConfig !== undefined && fs.existsSync(localConfig) && fs.existsSync(vaultConfig)) {
+		const local = readJson(localConfig);
+		const stored = readJson(vaultConfig);
+		const same =
+			local !== undefined && stored !== undefined && JSON.stringify(sortedDeep(local)) === JSON.stringify(sortedDeep(stored));
+		optional(same, "dispatch config", "differs from the vault. Fix: node ~/.claude/skills/dispatch-plan/vault.mjs config push --root .");
+	}
 
 	let failed = 0;
 	for (const check of checks) {

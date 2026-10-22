@@ -1,8 +1,9 @@
 # Agent vault
 
 Agent memory. One git repo that the agents read at the start of a session and
-write to after a run, so what they learned survives the next session and the
-next machine.
+write to as the work moves: specs, plans and ideas are mirrored at each
+milestone, and the record of a finished run is copied in. What they learned
+survives the next session and the next machine.
 
 Notes are written only through the `vault` CLI. No agent edits a note file by
 hand, so the schema, the allowlist and the privacy rules are always applied.
@@ -11,7 +12,9 @@ hand, so the schema, the allowlist and the privacy rules are always applied.
 
 | Path | What it is |
 |---|---|
-| `plans/` | one note per run's plan, with its final state |
+| `specs/` | one note per request, mirrored when the spec is confirmed |
+| `plans/` | one note per run's plan, updated at each milestone |
+| `ideas/` | ideas, each with a status |
 | `runs/` | one digest per run: trace, repo, status, gate |
 | `findings/` | reviewer, audit, pair, security and gate findings |
 | `decisions/` | durable decisions |
@@ -25,6 +28,8 @@ hand, so the schema, the allowlist and the privacy rules are always applied.
 | `harness.json` | schema version, harness repo, boot budget, minimum Node |
 | `CLAUDE.md` | the schema the agents follow |
 | `bootstrap.sh` | sets up a new machine |
+| `work/` | the run record of finished requests, written only by the CLI, not a note folder |
+| `config/` | `dispatch.json`, the dispatcher config |
 
 Each type folder is flat. The agent schema is in `CLAUDE.md`.
 
@@ -51,8 +56,8 @@ malformed `repos.json` are `none`: the CLI fails closed.
 | Mode | What the vault may hold |
 |---|---|
 | `full` | every note type, subject to `lint` |
-| `meta` | `run`, `decision` and `lesson` only, and no code or repo file paths |
+| `meta` | `run`, `decision`, `lesson` and `idea` only, and no code or repo file paths |
 | `none` | nothing that names the repo |
 
 The point of the modes is that a repo that must stay private still contributes
-its gate result and its lessons, and nothing more.
+its gate result, its lessons, its decisions and its ideas, and nothing more.

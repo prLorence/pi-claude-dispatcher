@@ -86,6 +86,52 @@ test("vault events render their detail in the timeline", () => {
 	}
 });
 
+test("vault.work, vault.restore and vault.config render one line each", () => {
+	const dir = tmp();
+	try {
+		const trace = "v-work";
+		writeTrace(dir, trace, [
+			ev(trace, "pi-dispatch", "plan.received", { data: { tasks: [{ id: "a" }] } }),
+			ev(trace, "vault", "vault.work", { data: { op: "add", trace: "t1", files: 3, unmirrored: 1 } }),
+			ev(trace, "vault", "vault.restore", { data: { restored: 2, skipped: 1 } }),
+			ev(trace, "vault", "vault.config", { data: { op: "push", result: "pushed" } }),
+			ev(trace, "vault", "vault.config", { data: { op: "pull", result: "kept" } }),
+		]);
+
+		const out = runReport(dir, trace);
+
+		assert.equal(detailCell(out, "vault.work", 0), "add t1: 3 files, 1 unmirrored");
+		assert.equal(detailCell(out, "vault.restore", 0), "restored 2, skipped 1");
+		assert.equal(detailCell(out, "vault.config", 0), "push: pushed");
+		assert.equal(detailCell(out, "vault.config", 1), "pull: kept");
+		assert.ok(!out.includes("undefined"), "no field renders as undefined");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("the new vault lines render a missing field as a dash", () => {
+	const dir = tmp();
+	try {
+		const trace = "v-work-gaps";
+		writeTrace(dir, trace, [
+			ev(trace, "pi-dispatch", "plan.received", { data: { tasks: [{ id: "a" }] } }),
+			ev(trace, "vault", "vault.work", { data: { op: "add" } }),
+			ev(trace, "vault", "vault.restore", { data: {} }),
+			ev(trace, "vault", "vault.config", { data: { op: "push" } }),
+		]);
+
+		const out = runReport(dir, trace);
+
+		assert.equal(detailCell(out, "vault.work", 0), "add -: - files, - unmirrored");
+		assert.equal(detailCell(out, "vault.restore", 0), "restored -, skipped -");
+		assert.equal(detailCell(out, "vault.config", 0), "push: -");
+		assert.ok(!out.includes("undefined"), "no field renders as undefined");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("review tokens are added as a number, never as an object", () => {
 	const dir = tmp();
 	try {

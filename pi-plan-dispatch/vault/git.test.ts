@@ -16,8 +16,20 @@ process.env.GIT_COMMITTER_NAME = "Vault Test";
 process.env.GIT_COMMITTER_EMAIL = "vault-test@example.com";
 
 const REPO = "github.com/owner/repo";
+const META_REPO = "github.com/owner/meta";
 const NONE_REPO = "github.com/secret/none";
-const TYPE_FOLDERS = ["plans", "runs", "findings", "decisions", "lessons", "projects", "codebases", "templates"];
+const TYPE_FOLDERS = [
+	"plans",
+	"runs",
+	"findings",
+	"decisions",
+	"lessons",
+	"projects",
+	"codebases",
+	"specs",
+	"ideas",
+	"templates",
+];
 
 function parts(...items: string[]): string {
 	return items.join("");
@@ -50,6 +62,10 @@ function writeVault(vault: string, modes: Record<string, string> = { [REPO]: "fu
 	for (const folder of TYPE_FOLDERS) {
 		fs.mkdirSync(path.join(vault, folder), { recursive: true });
 		if (folder !== "templates") fs.writeFileSync(path.join(vault, folder, ".gitkeep"), "");
+	}
+	for (const folder of ["work", "config"]) {
+		fs.mkdirSync(path.join(vault, folder), { recursive: true });
+		fs.writeFileSync(path.join(vault, folder, ".gitkeep"), "");
 	}
 	fs.writeFileSync(path.join(vault, "CLAUDE.md"), "# Vault schema\n");
 	fs.writeFileSync(path.join(vault, "README.md"), "# Vault\n");
@@ -108,6 +124,15 @@ function writeDecision(vault: string, basename: string, body = "A decision.\n", 
 
 function writePlan(vault: string, basename: string, body = "A plan.\n"): void {
 	fs.writeFileSync(path.join(vault, "plans", `${basename}.md`), noteText("plan", planProps(), body));
+}
+
+function writeSpec(vault: string, basename: string, body = "A spec.\n", repo = REPO): void {
+	const props = { trace: "trace-1", repo, status: "confirmed", file: "spec.md" };
+	fs.writeFileSync(path.join(vault, "specs", `${basename}.md`), noteText("spec", props, body));
+}
+
+function writeIdea(vault: string, basename: string, body = "An idea.\n", repo = REPO): void {
+	fs.writeFileSync(path.join(vault, "ideas", `${basename}.md`), noteText("idea", { status: "open", repo }, body));
 }
 
 function rebaseDirExists(vault: string): boolean {
@@ -282,6 +307,139 @@ test("lintVault reports a home path and a drive path, and nothing for a relative
 	});
 });
 
+test("a vault with a spec note, an idea note, work files and config/dispatch.json lints clean", async () => {
+	await withTemp((root) => {
+		const vault = path.join(root, "vault");
+		initVault(vault);
+		writeSpec(vault, "trace-1-spec");
+		writeIdea(vault, "idea-one");
+		fs.mkdirSync(path.join(vault, "work", "trace-1"), { recursive: true });
+		fs.writeFileSync(path.join(vault, "work", "trace-1", "task.jsonl"), "{}\n");
+		fs.writeFileSync(path.join(vault, "config", "dispatch.json"), "{}\n");
+		const errors = lintVault(vault).filter((finding) => finding.severity === "error");
+		assert.deepEqual(errors, []);
+	});
+});
+
+test("lintVault reports a secret in work/ and in config/", async () => {
+	await withTemp((root) => {
+		const vault = path.join(root, "vault");
+		initVault(vault);
+		fs.writeFileSync(path.join(vault, "work", "run.txt"), `Leaked ${secretText()}\n`);
+		fs.writeFileSync(path.join(vault, "config", "dispatch.json"), `${JSON.stringify({ key: secretText() })}\n`);
+		const secrets = lintVault(vault).filter((finding) => finding.code === "secret");
+		assert.deepEqual(
+			secrets.map((finding) => finding.file),
+			["config/dispatch.json", "work/run.txt"],
+		);
+		for (const finding of secrets) {
+			assert.equal(finding.severity, "error");
+			assert.match(finding.message, /github-token/);
+		}
+	});
+});
+
+test("lintVault reports a none repo name in work/ and in config/", async () => {
+	await withTemp((root) => {
+		const vault = path.join(root, "vault");
+		initVault(vault, { [REPO]: "full", [NONE_REPO]: "none" });
+		fs.writeFileSync(path.join(vault, "work", "note.md"), "Talked about secret/none today.\n");
+		fs.writeFileSync(path.join(vault, "config", "dispatch.json"), `${JSON.stringify({ note: "secret/none" })}\n`);
+		const leaks = lintVault(vault).filter((finding) => finding.code === "none-repo-leak");
+		assert.deepEqual(
+			leaks.map((finding) => finding.file),
+			["config/dispatch.json", "work/note.md"],
+		);
+		assert.equal(leaks[0].severity, "error");
+		assert.equal(leaks[0].message, "names a repo that is not allowed: secret/none");
+	});
+});
+
+test("lintVault allows names of full and meta repos in work/", async () => {
+	await withTemp((root) => {
+		const vault = path.join(root, "vault");
+		initVault(vault, { [REPO]: "full", [META_REPO]: "meta" });
+		fs.writeFileSync(path.join(vault, "work", "note.md"), `Uses ${REPO} and ${META_REPO}.\n`);
+		const findings = lintVault(vault);
+		assert.deepEqual(findings.filter((finding) => finding.code === "none-repo-leak"), []);
+		assert.deepEqual(findings.filter((finding) => finding.severity === "error"), []);
+	});
+});
+
+test("lintVault reports a NUL file and a non-UTF-8 file in work/ as work-binary", async () => {
+	await withTemp((root) => {
+		const vault = path.join(root, "vault");
+		initVault(vault);
+		fs.writeFileSync(path.join(vault, "work", "nul.txt"), Uint8Array.from([0x61, 0x00, 0x62]));
+		fs.writeFileSync(path.join(vault, "work", "latin1.txt"), Uint8Array.from([0x61, 0xff, 0x62]));
+		const binary = lintVault(vault).filter((finding) => finding.code === "work-binary");
+		assert.deepEqual(
+			binary.map((finding) => finding.file),
+			["work/latin1.txt", "work/nul.txt"],
+		);
+		for (const finding of binary) {
+			assert.equal(finding.severity, "error");
+			assert.equal(finding.message, "not a UTF-8 text file");
+		}
+	});
+});
+
+test("lintVault reports a spec note of a none repo as repo-not-allowed", async () => {
+	await withTemp((root) => {
+		const vault = path.join(root, "vault");
+		initVault(vault, { [REPO]: "full", [NONE_REPO]: "none" });
+		writeSpec(vault, "trace-1-spec", "A spec.\n", NONE_REPO);
+		const denied = lintVault(vault).filter((finding) => finding.code === "repo-not-allowed");
+		assert.equal(denied.length, 1);
+		assert.equal(denied[0].file, "specs/trace-1-spec.md");
+		assert.match(denied[0].message, /is not allowed/);
+	});
+});
+
+test("a work markdown file without front matter raises no schema or parse finding", async () => {
+	await withTemp((root) => {
+		const vault = path.join(root, "vault");
+		initVault(vault);
+		fs.writeFileSync(path.join(vault, "work", "notes.md"), "no frontmatter here\n");
+		const findings = lintVault(vault).filter((finding) => finding.code === "schema" || finding.code === "parse");
+		assert.deepEqual(findings, []);
+	});
+});
+
+test("a spec and a plan body may hold absolute paths, a decision body may not", async () => {
+	await withTemp((root) => {
+		const vault = path.join(root, "vault");
+		initVault(vault);
+		const body = "Reads ~/.claude/x and /tmp/a today.\n";
+		writeSpec(vault, "trace-1-spec", body);
+		writePlan(vault, "trace-1-r1", body);
+		writeDecision(vault, "decision-demo-one", body);
+		const findings = lintVault(vault);
+		const absolute = findings.filter((finding) => finding.code === "absolute-path");
+		assert.deepEqual(
+			absolute.map((finding) => finding.file),
+			["decisions/decision-demo-one.md"],
+		);
+		assert.match(absolute[0].message, /~\/\.claude\/x/);
+		const errors = findings.filter(
+			(finding) => finding.severity === "error" && finding.file !== "decisions/decision-demo-one.md",
+		);
+		assert.deepEqual(errors, []);
+	});
+});
+
+test("lintVault still reports a secret in a spec body", async () => {
+	await withTemp((root) => {
+		const vault = path.join(root, "vault");
+		initVault(vault);
+		writeSpec(vault, "trace-1-spec", `Leaked ${secretText()}\n`);
+		const secrets = lintVault(vault).filter((finding) => finding.code === "secret");
+		assert.equal(secrets.length, 1);
+		assert.equal(secrets[0].file, "specs/trace-1-spec.md");
+		assert.match(secrets[0].message, /github-token/);
+	});
+});
+
 test("lintVault reports a none-repo slug in log.md", async () => {
 	await withTemp((root) => {
 		const vault = path.join(root, "vault");
@@ -423,6 +581,34 @@ test("syncPush stages managed files and reports unmanaged ones", async () => {
 		const status = gitRun(vault, ["status", "--porcelain"]);
 		assert.match(status, /\?\? notes\.txt/);
 		assert.match(status, /\?\? plans\/stray\.txt/);
+	});
+});
+
+test("syncPush stages work files, config/dispatch.json and the new note types", async () => {
+	await withTemp((root) => {
+		const remote = makeRemote(root);
+		const vault = path.join(root, "vault");
+		initVault(vault);
+		publish(vault, remote);
+		fs.mkdirSync(path.join(vault, "work", "trace-1"), { recursive: true });
+		fs.writeFileSync(path.join(vault, "work", "trace-1", "task.jsonl"), "{}\n");
+		fs.writeFileSync(path.join(vault, "work", "notes.md"), "notes\n");
+		fs.writeFileSync(path.join(vault, "config", "dispatch.json"), "{}\n");
+		fs.writeFileSync(path.join(vault, "config", "other.txt"), "scratch\n");
+		fs.writeFileSync(path.join(vault, "scratch.txt"), "scratch\n");
+		writeSpec(vault, "trace-1-spec");
+		writeIdea(vault, "idea-one");
+		const result = syncPush(vault, { summary: "work storage" });
+		assert.equal(result.code, 0);
+		assert.deepEqual(result.unmanaged.sort(), ["config/other.txt", "scratch.txt"]);
+		const pushed = gitRun(remote, ["ls-tree", "--name-only", "-r", "refs/heads/main"]).split("\n");
+		assert.ok(pushed.includes("work/trace-1/task.jsonl"));
+		assert.ok(pushed.includes("work/notes.md"));
+		assert.ok(pushed.includes("config/dispatch.json"));
+		assert.ok(pushed.includes("specs/trace-1-spec.md"));
+		assert.ok(pushed.includes("ideas/idea-one.md"));
+		assert.ok(!pushed.includes("config/other.txt"));
+		assert.ok(!pushed.includes("scratch.txt"));
 	});
 });
 

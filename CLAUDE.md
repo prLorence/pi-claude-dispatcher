@@ -104,17 +104,43 @@ schema. You are the only role that writes it, and only through the CLI at
 
 1. **Session start.** Run `vault.mjs resolve`. If it succeeds, run `vault.mjs repo check`: exit
    `3` means this repo's mode is `none`. When both are fine, run `vault.mjs sync pull` then
-   `vault.mjs boot` and read the boot text before you plan. Otherwise skip every vault step for
-   the whole request and say so once.
+   `vault.mjs boot` and read the boot text before you plan, then the catch-up:
+   `work pending --root <repo root>`, `work add --trace <T> --root <repo root>` for each
+   `pending <T>` line it prints, then `restore --root <repo root>`. Otherwise skip every vault
+   step for the whole request and say so once.
 
-2. **Write after the run, never before.** A run includes a plan rejected before it ran. Write
-   only through `vault.mjs`, never with an editor, and only what the repo mode allows. `full`
-   allows everything. `meta` allows `run`, `decision` and `lesson` notes only, and the CLI builds
-   the `run` body from `--set` fields, so never pass `--body-stdin` for a `meta` run. `none`
-   allows nothing. The notes are: a `run` note for the plan; for a `full` repo a `plan` note
-   holding the plan text; one `finding` note per reviewer, pair, security, plan-audit or gate
-   finding, with `fingerprint` = `<repo slug>:<repo-relative file or ->:<slug(title)>`; and
-   `decision` or `lesson` notes only for a fact that outlives the trace. Then `log append`.
+2. **Mirror at the milestones, write the record after the run.** Write only through
+   `vault.mjs`, never with an editor, and only what the repo mode allows. `full` allows
+   everything. `meta` allows `run`, `decision`, `lesson` and `idea` notes only, and the CLI
+   builds the `run` body from `--set` fields, so never pass `--body-stdin` for a `meta` run; an
+   idea body follows the rules of a decision body. `none` allows nothing.
+   Milestones, a `full` repo only; for a `meta` or `none` repo the specs and the plans stay
+   local. The working copies of the spec and the plans live in `.plans/` and are what the tools
+   read; the notes are a mirror. `note new` is an upsert that rebuilds a note from its own
+   `--set` flags and body only and keeps `created`, so a revised draft is written with `note
+   new` again and every property to keep passed again.
+   - Spec confirmed:
+     `note new spec <slug(spec-id)>-spec --set trace=<T> --set repo=<slug> --set status=confirmed --set file=<spec file name> --set host=<host> --body-stdin < .plans/specs/<spec file name>`
+   - Plan drafted or revised:
+     `note new plan <slug(plan-id)> --set trace=<T> --set round=<n> --set repo=<slug> --set status=draft --set file=<plan file name without .draft> --set host=<host> --body-stdin < <plan draft path>`
+   - Audit verdict: `note set <plan basename> --set audit=<pass|fail> --set audit_round=<n>`
+   - Approved and flipped: `note set <plan basename> --set status=ready`
+   - Run finished: `work add --trace <T> --root <repo root>` (with `--probes` when this
+     request has probes), then `note set <plan basename> --set status=<done|failed>`, and
+     `note set <spec basename> --set status=done` when the request is finished.
+   An idea is written when the user states one: `note new idea idea-<slug(title)> --set
+   status=open --set repo=<slug or -> --body-stdin`, and changed later with `note set` or `note
+   status <basename> <open|taken|dropped>`. `.plans/ideas.md` is retired once its entries are
+   copied into `idea` notes; you do that once.
+   After the run, in this fixed order, because the wrong order loses data: (1) `trace.mjs
+   report --trace <T>`, so `trace.md` exists before the copy; (2) the `run` note and the
+   `finding` notes with `note new`, because a later `note new run` would drop the `unmirrored`
+   list that `work add` sets; (3) `work add`; (4) the `note set` of the plan status and, when
+   the request is finished, of the spec status; (5) `log append`; (6) `sync push` (item 3). A
+   run includes a plan rejected before it ran. The notes are: a `run` note for the plan; one
+   `finding` note per reviewer, pair, security, plan-audit or gate finding, with `fingerprint` =
+   `<repo slug>:<repo-relative file or ->:<slug(title)>`; and `decision` or `lesson` notes only
+   for a fact that outlives the trace.
 
 3. **Push.** After the `log append`, run `vault.mjs sync push` when `sync_push` in the vault's
    `harness.json` is `auto`. When it is `manual`, commit nothing and tell the user a push is due.
@@ -135,14 +161,25 @@ schema. You are the only role that writes it, and only through the CLI at
    as an unowned change. Never run `graphify install --project` or `graphify hook install` in a
    project repo. `graph.json`, `graph.html` and the rest of `graphify-out/` never enter the vault.
 
-8. **Plans stay in `.plans/`.** A plan is not stored in the vault before it runs; plans keep
-   using `.plans/inbox/`. The vault gets the `plan` note after the run, in a `full` repo only.
+8. **Working copies stay in `.plans/`.** A spec works from `.plans/specs/<file>` and a plan from
+   `.plans/inbox/`, which is what the dispatcher reads. The vault holds their mirror, written at
+   the milestones of item 2, plus the run record after the run.
 
 9. **Never write the user's personal vault**, `obsidian-v2`, and no other vault but the agent one.
 
 10. **Trace the vault calls.** Pass `--trace <T> --root <repo root>` to every vault command you
     run for a request, because the CLI writes its `vault.*` trace events only when it gets both
-    flags. The session-start `sync pull` and `boot` have no trace yet and may omit them.
+    flags. The session-start `sync pull`, `boot`, `work pending` and `restore` have no trace yet
+    and may omit them.
+
+11. **The run record and the config.** `work add --trace <T> --root <repo root>` is how the
+    record of a run gets into the vault; run it after every run, with `--probes` when this
+    request has probes. A `meta` repo gets only its generated `run` note. If `work add` exits
+    `6`, tell the user which files were unmirrored and do not retry blindly: they hold a secret,
+    a `none` repo name or non-text content. After the user changes `.plans/config.json`, run
+    `config push --root <repo root>`. The `host` for the milestone notes comes from `vault.mjs
+    resolve --json` (its `host` field). You never write under `work/` or `config/` by hand; only
+    `work add` and `config push` write them.
 
 A finding basename is `<trace>-f-<8 hex>`, where the 8 hex are the first 8 characters of the
 sha1 of the fingerprint. Compute it like this, with the fingerprint in single quotes:
@@ -150,7 +187,7 @@ sha1 of the fingerprint. Compute it like this, with the fingerprint in single qu
 
 ## Hard rule
 
-Claude models, Sonnet and Opus included, never write code, tests, scripts, config or docs in the repository. The orchestrator writes only artifacts under `.plans/` (spec, plans, traces) and never commits. The one exception is the agent vault: it writes that too, but only through `vault.mjs`. There is no break-glass switch yet; an enforcing hook is planned, so for now it is a rule.
+Claude models, Sonnet and Opus included, never write code, tests, scripts, config or docs in the repository. The orchestrator writes only artifacts under `.plans/` (spec, plans, traces) and never commits. The one exception is the agent vault: it writes that too, but only through `vault.mjs`, and there it never writes the `work/` or `config/` folders by hand: only `work add` and `config push` write them. There is no break-glass switch yet; an enforcing hook is planned, so for now it is a rule.
 
 ## Layout
 
@@ -163,21 +200,24 @@ Claude models, Sonnet and Opus included, never write code, tests, scripts, confi
 | `pi-plan-dispatch/verify.ts`           | Independent verification (G1): runs `verify:` commands with a timeout, serialises them through a lock, checks executables, builds retry feedback                                                               |
 | `pi-plan-dispatch/review.ts`           | The review contract, pure and with no local imports: `parseReviewReport`, `buildReviewPrompt`, `feedbackFromFindings`, and the finding types shared by pair mode and the security role                         |
 | `pi-plan-dispatch/vault/`              | The agent vault: `schema.ts` (note types, basenames, vocabularies), `privacy.ts` (repo modes, leak checks), `notes.ts` (read, write, boot, stats, index), `git.ts` (lint, staging, pull, push), `lock.ts`      |
-| `pi-plan-dispatch/*.test.ts`           | 382 tests: unit tests with a fake `pi`, plus extension integration tests with a mocked Pi API (`cd pi-plan-dispatch && npm test`, Node 24+)                                                                    |
+| `pi-plan-dispatch/*.test.ts`           | 476 tests: unit tests with a fake `pi`, plus extension integration tests with a mocked Pi API (`cd pi-plan-dispatch && npm test`, Node 24+)                                                                    |
 | `pi-plan-dispatch/README.md`           | User-facing install, usage, config, scheduling rules, limits                                                                                                                                                   |
 | `dispatch-plan/SKILL.md`               | Claude Code skill: spec and plan formats, atomic draft, flip, plan audit, wait, gate and evidence, trace events, fix-loop limits                                                                               |
 | `dispatch-plan/ORCHESTRATOR.md`        | The pasteable orchestrator rules block for `CLAUDE.md`, with the `## Delegation rules (dispatch-plan)` marker line                                                                                             |
 | `dispatch-plan/trace.mjs`              | Trace CLI, no dependencies: `event`, `wait`, `gate`, `report`, `new-id`. Installed at `~/.claude/skills/dispatch-plan/trace.mjs`                                                                               |
 | `dispatch-plan/preflight.mjs`          | Preflight CLI: runs the dispatcher's parsing and preflight on a plan file, prints every error, exits non-zero on any                                                                                           |
 | `dispatch-plan/config-init.mjs`        | Config CLI: creates `.plans/config.json` with the dispatcher defaults (`--minimal`, `--force`, `--print`)                                                                                                      |
-| `dispatch-plan/vault.mjs`              | Vault CLI, the only write path to the vault: `boot`, `note`, `log`, `index`, `repo`, `sync`, `lint`, `stats`, `resolve`, and `init`/`setup`/`doctor`                                                           |
+| `dispatch-plan/vault.mjs`              | Vault CLI, the only write path to the vault: `boot`, `note`, `log`, `index`, `repo`, `sync`, `lint`, `stats`, `resolve`, `work`, `restore`, `config`, and `init`/`setup`/`doctor`                              |
+| `dispatch-plan/vault-work.mjs`         | `work` commands: `work add` copies the record of a finished request into `work/<trace>/` (fail-closed, exit `6` partial) and `work pending` lists the finished traces the vault misses                         |
+| `dispatch-plan/vault-restore.mjs`      | `restore`: rebuilds the specs and the draft plans from the vault, never overwrites and never writes a ready plan, then lists the open ideas and the recent runs                                                |
+| `dispatch-plan/vault-config.mjs`       | `config push` and `config pull`: the canonical copy of `.plans/config.json` as `config/dispatch.json`                                                                                                          |
 | `dispatch-plan/vault-admin.mjs`        | Vault setup side without a vault: `init`, `setup` (config, skill and agent install, index), `doctor` (machine and vault checks)                                                                                |
 | `dispatch-plan/vault-events.mjs`       | The `vault.*` trace events the CLI appends to `.plans/traces/<trace>.jsonl`                                                                                                                                    |
-| `vault-template/`                      | Seed for the vault repo: note folders, `log.md`, `repos.json`, `harness.json`, `bootstrap.sh`, `templates/`, `.gitattributes`                                                                                  |
+| `vault-template/`                      | Seed for the vault repo: note folders (`specs/`, `ideas/` and the rest), the `work/` and `config/` folders, `log.md`, `repos.json`, `harness.json`, `bootstrap.sh`, `templates/`, `.gitattributes`             |
 | `dispatch-plan/agents/plan-auditor.md` | `plan-auditor` subagent: read-only plan review checklist, verdict format, `plan.audit` event                                                                                                                   |
 | `dispatch-plan/archive/`               | Superseded and archived artifacts, not installed: `INTERFACE-haiku.md`, `planner-subagent.md`, `result-auditor.md`                                                                                             |
 | `docs/roles.md`                        | The worker role model: default roles and models, config, pair mode, security and QA, report formats, the pilot protocol                                                                                        |
-| `docs/vault.md`                        | The agent vault: note types, repo modes, the CLI contract and exit codes, who may write, sync and conflicts, the new-machine steps, Graphify, non-goals                                                        |
+| `docs/vault.md`                        | The agent vault: note types (with `spec` and `idea`), the `work/` and `config/` folders, repo modes, the CLI contract and exit codes, who may write, sync and conflicts, Graphify, non-goals                   |
 | `docs/architecture.md`                 | Architecture diagrams: components and data flow, with built and planned parts, and one request in order                                                                                                        |
 
 Targets `@earendil-works/pi-coding-agent >=1.3.0`. Extensions load through jiti, so there's no build step.
@@ -192,7 +232,8 @@ Targets `@earendil-works/pi-coding-agent >=1.3.0`. Extensions load through jiti,
 - Plan audit replaces result audit. Opus 5.5 runs as the read-only `plan-auditor` subagent before a plan is flipped to ready: it reviews the plan against the spec and the repo, returns severity-tagged findings and logs `plan.audit` itself. Verdict `pass` means zero blockers and zero majors; minors are notes. At most 3 audit rounds, then the orchestrator stops and asks the user. Opus never audits worker results.
 - Fix rounds stop after 3 fix rounds, so the last plan id ends in `-r4`, or when the same finding repeats. The orchestrator logs `loop.stop` with the reason and reports the open findings. A failing gate goes back to planning with the evidence, never forward to a review.
 - The gate is necessary, not sufficient. It passes only when every task is done and there are zero error faults; a dry run never passes. The plan audit checks the plan before it runs; the gate, the `verify:` commands, the live guards and pair review check the result.
-- The orchestrator writes only under `.plans/` (specs, inbox, done, traces) and to the vault through `vault.mjs`. It never edits source and never commits to a project repo, and besides the plan audit it spawns no other agent. `vault.mjs sync push` commits to the vault repo only (A1).
+- The orchestrator writes only under `.plans/` (specs, inbox, done, traces) and to the vault through `vault.mjs`. It never edits source and never commits to a project repo, and besides the plan audit it spawns no other agent. In the vault it never writes `work/` or `config/` by hand; only `work add` and `config push` do. `vault.mjs sync push` commits to the vault repo only (A1).
+- Work in the vault. Specs, plans and ideas are mirrored into the vault at the milestones of the vault rules (`spec`, `plan` and `idea` notes), and the local files under `.plans/` stay the working copies. `work add` copies the record of a run, a `full` repo only, and never the prompts or the Pi sessions. `restore` rebuilds the drafts on a new machine and never writes a ready plan. The copy fails closed: a file holding a secret, a `none` repo name or non-text content is not copied, `work add` exits `6` and the run note records it. The canonical copy of the dispatcher config is `config/dispatch.json`. The plan queue and in-flight resume are still Phase 2.
 - The vault is a separate git repo, cloned next to the harness, and the only memory that crosses machines. Its `sync_push` key in `harness.json` is `auto` or `manual` (A2): `auto` pushes at the end of a request, `manual` leaves the push to the user. A new machine runs the vault's `bootstrap.sh`, which clones the harness and runs `vault setup`.
 - `graphify-out/` is appended to a project repo's `.git/info/exclude` before the first Graphify run (A3), so the dispatcher's snapshots do not see it. Graphify is used only in `full` repos, and its report becomes a `codebase` note through the CLI.
 - Workers have no vault access (A5). The dispatcher removes `AGENT_VAULT` and sets `PI_PLAN_DISPATCH_WORKER=1` for workers and `verify:` commands, passes the vault realpath to the guard in `PI_PLAN_DISPATCH_VAULT`, and preflight rejects a `files:` entry that leaves the repo through a symlink. A worker's shell can still reach any path the OS allows; the sync staging rule and the range lint are the backstop.
@@ -219,7 +260,8 @@ One trace is one user request across all rounds. Plans link through frontmatter:
 
 ## Status (Phase 1)
 
-- **The agent vault is built:** the CLI (`dispatch-plan/vault.mjs`), the note schema and repo modes (`pi-plan-dispatch/vault/`), the seed (`vault-template/`), the `vault.*` trace events and the worker isolation are in place and covered by tests. See [docs/vault.md](docs/vault.md).
+- **The agent vault is built:** the CLI (`dispatch-plan/vault.mjs` with the `work`, `restore` and `config` modules beside it), the note schema and repo modes (`pi-plan-dispatch/vault/`), the seed (`vault-template/`), the `vault.*` trace events and the worker isolation are in place and covered by tests. See [docs/vault.md](docs/vault.md).
+- **The vault work rules are built and tested:** the `spec` and `idea` note types, the `work/` and `config/` folders, `work add`, `work pending`, `restore`, `config push`, `config pull`, the boot sections `unfinished requests`, `open ideas` and `recent runs`, exit code `6` and the fail-closed copy, and the vault blocks of the orchestrator rules.
 - **Verified in a Linux sandbox:** strict `tsc`, the core unit tests with a fake `pi`, and live TUI tests in tmux.
 - **Tested against real Pi for the tool stream and the live guard:** a real worker run in the audit verified the `tool_execution_*` event names against Pi's actual JSON stream, and the live guard works end to end in a real worker. The tracing, fault detection and gate code is otherwise covered by unit and integration tests with a mocked Pi API and a fake worker.
 - **Written, not yet used end to end:** the `plan-auditor` agent, the orchestrator rules block and the updated skill.
@@ -229,7 +271,9 @@ One trace is one user request across all rounds. Plans link through frontmatter:
   - the agents and skill driven by real Claude Code
   - LSP extensions reaching workers
   - real cost reporting
-- **Suggested next step:** refresh the installed copies (`mkdir -p ~/.claude/skills/dispatch-plan && cp dispatch-plan/SKILL.md dispatch-plan/ORCHESTRATOR.md dispatch-plan/trace.mjs dispatch-plan/preflight.mjs dispatch-plan/config-init.mjs ~/.claude/skills/dispatch-plan/` and `mkdir -p ~/.claude/agents && cp dispatch-plan/agents/plan-auditor.md ~/.claude/agents/`; anyone who installed an earlier version also runs `rm -f ~/.claude/agents/planner.md ~/.claude/agents/auditor.md`), paste the block from `dispatch-plan/ORCHESTRATOR.md` into `CLAUDE.md`, install the extension, and log Pi into OpenCode Go. Run a tiny plan with `/plans dry on`, then one small real task with `/plans dry off`.
+  - a real worker run with the worker isolation
+  - the new vault commands (`work add`, `work pending`, `restore`, `config push`, `config pull`) against the real vault
+- **Suggested next step:** refresh the installed copies (`mkdir -p ~/.claude/skills/dispatch-plan && cp dispatch-plan/SKILL.md dispatch-plan/ORCHESTRATOR.md dispatch-plan/trace.mjs dispatch-plan/preflight.mjs dispatch-plan/config-init.mjs dispatch-plan/vault.mjs dispatch-plan/vault-work.mjs dispatch-plan/vault-restore.mjs dispatch-plan/vault-config.mjs ~/.claude/skills/dispatch-plan/` and `mkdir -p ~/.claude/agents && cp dispatch-plan/agents/plan-auditor.md ~/.claude/agents/`; anyone who installed an earlier version also runs `rm -f ~/.claude/agents/planner.md ~/.claude/agents/auditor.md`; `node dispatch-plan/vault.mjs setup --force` writes every file of `dispatch-plan/` and the agents for you), paste the block from `dispatch-plan/ORCHESTRATOR.md` into `CLAUDE.md`, install the extension, and log Pi into OpenCode Go. Run a tiny plan with `/plans dry on`, then one small real task with `/plans dry off`.
 
 ## Open questions
 

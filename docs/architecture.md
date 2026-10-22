@@ -49,14 +49,19 @@ flowchart TB
 
   subgraph vault["agent-vault (built): Obsidian vault in its own git repo"]
     cli["vault.mjs CLI<br/>schema, allowlist, lock, sync"]
-    notes["Notes: plan, run, finding,<br/>lesson, decision, codebase"]
+    notes["Notes: spec, plan, idea,<br/>run, finding, lesson, decision, codebase"]
+    rec["work/TRACE/<br/>run record: trace, evidence,<br/>task reports, probes"]
     remote["Private git remote"]
   end
   gfy["Graphify (planned)<br/>code graph, per machine"]
 
-  orch -->|"only write path"| cli
+  orch -->|"only write path: milestones, work add, config push"| cli
   cli --> notes
+  cli -->|"work add"| rec
+  rec -->|"restore on a new machine"| spec
+  rec -->|"restore on a new machine"| draft
   notes -->|"sync pull and push"| remote
+  rec -->|"sync pull and push"| remote
   aud -->|"boot, read only"| notes
   disp -.->|"Phase 2: plan queue"| notes
   gfy -.->|"distilled into codebase notes"| cli
@@ -101,7 +106,7 @@ sequenceDiagram
 
 - Three trust levels. The orchestrator plans and approves, the `plan-auditor` checks the plan, and the workers write the code, but the dispatcher does not trust their claims: it re-runs the `verify:` commands, takes git snapshots and the gate decides.
 - Files are the hand-off. Nothing talks to anything else directly, except the orchestrator spawning the `plan-auditor`.
-- The planned layers. The plan queue, Graphify and the permissions hook are what is left. The vault is built: it is the orchestrator's and the reviewer's memory across machines, and the plan queue on top of it is Phase 2. Graphify feeds code knowledge into it, and the permissions hook makes "the orchestrator may only write under `.plans/`, the vault through the CLI, and spawn the `plan-auditor`" a real capability.
+- The planned layers. The plan queue, Graphify and the permissions hook are what is left. The vault is built: it is the orchestrator's and the reviewer's memory across machines, and the plan queue on top of it is Phase 2. It mirrors specs, plans and ideas at each milestone, and when a request finishes `work add` copies its run record, the trace, the evidence and the task reports, into `work/<trace>/`; on a new machine `restore` writes the unfinished specs and draft plans back under `.plans/`, and `config push` and `config pull` keep `.plans/config.json` in step with `config/dispatch.json`. Graphify feeds code knowledge into it, and the permissions hook makes "the orchestrator may only write under `.plans/`, the vault through the CLI, and spawn the `plan-auditor`" a real capability.
 
 ## Built and planned
 
@@ -114,6 +119,9 @@ Built:
 - `verify:` commands, the gate, the guards and the traces.
 - The preflight CLI.
 - The agent-vault: CLI, notes and sync.
+- The vault's milestone mirror of specs, plans and ideas.
+- The run record copy (`work add`) and `restore` on a new machine.
+- The config sync (`config push` and `config pull`).
 
 Planned:
 

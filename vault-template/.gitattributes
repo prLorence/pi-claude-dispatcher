@@ -1,1 +1,2 @@
 log.md merge=union
+work/**/*.jsonl merge=union

@@ -433,3 +433,170 @@ test("doctor fails on a newer vault schema and a locally changed installed file"
 		assert.match(text(), /^fail installed: /m);
 		assert.ok(text().includes(`Fix: node dispatch-plan/vault.mjs setup --path ${machine.vault}`));
 	}));
+
+/** A vault from before the work files existed: none of the four folders, one merge rule only. */
+function makeOldStyleVault(parent, { env } = {}) {
+	const vault = makeVault(parent, { env });
+	for (const folder of ["specs", "ideas", "work", "config"]) fs.rmSync(path.join(vault, folder), { recursive: true, force: true });
+	fs.writeFileSync(path.join(vault, ".gitattributes"), "log.md merge=union\n*.base text\n");
+	return vault;
+}
+
+test("setup creates the work folders and the .gitattributes line in an old-style vault", () =>
+	inTemps(async (dir) => {
+		const home = dir();
+		const env = envFor(home);
+		const vault = makeOldStyleVault(dir(), { env });
+		const { ctx, text, errText } = makeCtx({ home, env, vaultPath: vault });
+
+		assert.equal(await runSetup({ path: vault }, ctx), 0, text() + errText());
+		for (const folder of ["specs", "ideas", "work", "config"]) {
+			assert.ok(fs.existsSync(path.join(vault, folder, ".gitkeep")), `${folder} holds a .gitkeep`);
+			assert.equal(fs.readFileSync(path.join(vault, folder, ".gitkeep"), "utf8"), "");
+			assert.ok(text().includes(`created: ${path.join(vault, folder)}`), text());
+		}
+		assert.equal(
+			fs.readFileSync(path.join(vault, ".gitattributes"), "utf8"),
+			"log.md merge=union\n*.base text\nwork/**/*.jsonl merge=union\n",
+		);
+		assert.ok(text().includes(`updated: ${path.join(vault, ".gitattributes")}`), text());
+	}));
+
+test("a second setup leaves the work folders and .gitattributes as they are", () =>
+	inTemps(async (dir) => {
+		const home = dir();
+		const env = envFor(home);
+		const vault = makeOldStyleVault(dir(), { env });
+		const first = makeCtx({ home, env, vaultPath: vault });
+		assert.equal(await runSetup({ path: vault }, first.ctx), 0, first.text() + first.errText());
+
+		const attributes = fs.readFileSync(path.join(vault, ".gitattributes"), "utf8");
+		const listing = fileList(vault);
+		const second = makeCtx({ home, env, vaultPath: vault });
+		assert.equal(await runSetup({ path: vault }, second.ctx), 0, second.text() + second.errText());
+		assert.equal(fs.readFileSync(path.join(vault, ".gitattributes"), "utf8"), attributes);
+		assert.deepEqual(fileList(vault), listing);
+		assert.doesNotMatch(second.text(), /^(created|updated): /m);
+	}));
+
+test("setup writes .gitattributes when the vault has none", () =>
+	inTemps(async (dir) => {
+		const home = dir();
+		const env = envFor(home);
+		const vault = makeVault(dir(), { env });
+		fs.rmSync(path.join(vault, ".gitattributes"));
+		const { ctx, text, errText } = makeCtx({ home, env, vaultPath: vault });
+
+		assert.equal(await runSetup({ path: vault }, ctx), 0, text() + errText());
+		assert.equal(fs.readFileSync(path.join(vault, ".gitattributes"), "utf8"), "log.md merge=union\nwork/**/*.jsonl merge=union\n");
+		assert.ok(text().includes(`updated: ${path.join(vault, ".gitattributes")}`), text());
+	}));
+
+test("setup pulls the dispatch config into a repo that has .plans", () =>
+	inTemps(async (dir) => {
+		const home = dir();
+		const env = envFor(home);
+		const vault = makeVault(dir(), { env });
+		fs.mkdirSync(path.join(vault, "config"), { recursive: true });
+		fs.writeFileSync(path.join(vault, "config", "dispatch.json"), `${JSON.stringify({ roles: { implement: "a-model" } })}\n`);
+		const repo = dir();
+		fs.mkdirSync(path.join(repo, ".plans"));
+		const { ctx, text, errText } = makeCtx({ home, env, vaultPath: vault });
+		ctx.cwd = repo;
+
+		assert.equal(await runSetup({ path: vault }, ctx), 0, text() + errText());
+		const local = JSON.parse(fs.readFileSync(path.join(repo, ".plans", "config.json"), "utf8"));
+		assert.deepEqual(local, { roles: { implement: "a-model" } });
+		assert.match(text(), /^config pull: pulled$/m);
+	}));
+
+test("setup keeps an existing local dispatch config", () =>
+	inTemps(async (dir) => {
+		const home = dir();
+		const env = envFor(home);
+		const vault = makeVault(dir(), { env });
+		fs.mkdirSync(path.join(vault, "config"), { recursive: true });
+		fs.writeFileSync(path.join(vault, "config", "dispatch.json"), `${JSON.stringify({ roles: { implement: "from-vault" } })}\n`);
+		const repo = dir();
+		fs.mkdirSync(path.join(repo, ".plans"));
+		const localFile = path.join(repo, ".plans", "config.json");
+		fs.writeFileSync(localFile, `${JSON.stringify({ roles: { implement: "mine" } })}\n`);
+		const { ctx, text, errText } = makeCtx({ home, env, vaultPath: vault });
+		ctx.cwd = repo;
+
+		assert.equal(await runSetup({ path: vault }, ctx), 0, text() + errText());
+		assert.equal(JSON.parse(fs.readFileSync(localFile, "utf8")).roles.implement, "mine");
+		assert.match(text(), /^config pull: kept the local file/m);
+	}));
+
+test("doctor reports an unknown note type and skips a file without one", () =>
+	inTemps(async (dir) => {
+		const machine = await prepareMachine(dir);
+		fs.writeFileSync(path.join(machine.vault, "specs", "README.md"), "# specs\n");
+		fs.writeFileSync(path.join(machine.vault, "findings", "known.md"), "---\ntype: finding\ntrace: t\n---\nbody\n");
+
+		const ok = makeCtx({ home: machine.home, env: machine.env, vaultPath: machine.vault });
+		assert.equal(await runDoctor({}, ok.ctx), 0, ok.text());
+		assert.match(ok.text(), /^optional ok note types$/m);
+
+		fs.writeFileSync(path.join(machine.vault, "findings", "future.md"), "---\ntype: future-note\ntrace: t\n---\nbody\n");
+		const bad = makeCtx({ home: machine.home, env: machine.env, vaultPath: machine.vault });
+		assert.equal(await runDoctor({}, bad.ctx), 0, bad.text());
+		assert.ok(
+			bad
+				.text()
+				.includes(
+					"optional fail note types: 1 note(s) of a type this CLI does not know (future-note). Fix: update the harness clone and rerun setup",
+				),
+			bad.text(),
+		);
+	}));
+
+test("doctor counts the notes of an unknown type, not the types", () =>
+	inTemps(async (dir) => {
+		const machine = await prepareMachine(dir);
+		fs.writeFileSync(path.join(machine.vault, "findings", "one.md"), "---\ntype: widget\ntrace: t\n---\nbody\n");
+		fs.writeFileSync(path.join(machine.vault, "decisions", "two.md"), "---\ntype: widget\n---\nbody\n");
+		fs.writeFileSync(path.join(machine.vault, "findings", "three.md"), "---\ntype: gadget\n---\nbody\n");
+
+		const { ctx, text } = makeCtx({ home: machine.home, env: machine.env, vaultPath: machine.vault });
+		assert.equal(await runDoctor({}, ctx), 0, text());
+		assert.ok(
+			text().includes(
+				"optional fail note types: 3 note(s) of a type this CLI does not know (gadget, widget). Fix: update the harness clone and rerun setup",
+			),
+			text(),
+		);
+	}));
+
+test("doctor compares the local dispatch config with the vault copy", () =>
+	inTemps(async (dir) => {
+		const machine = await prepareMachine(dir);
+		const local = path.join(machine.home, ".plans", "config.json");
+		const stored = path.join(machine.vault, "config", "dispatch.json");
+		const check = async () => {
+			const run = makeCtx({ home: machine.home, env: machine.env, vaultPath: machine.vault });
+			assert.equal(await runDoctor({}, run.ctx), 0, run.text());
+			return run.text();
+		};
+
+		assert.doesNotMatch(await check(), /dispatch config/);
+
+		fs.mkdirSync(path.dirname(local), { recursive: true });
+		fs.writeFileSync(local, `${JSON.stringify({ roles: { implement: "a-model" }, budget: 2 })}\n`);
+		assert.doesNotMatch(await check(), /dispatch config/);
+
+		fs.mkdirSync(path.dirname(stored), { recursive: true });
+		fs.writeFileSync(stored, `${JSON.stringify({ budget: 2, roles: { implement: "a-model" } })}\n`);
+		assert.match(await check(), /^optional ok dispatch config$/m);
+
+		fs.writeFileSync(stored, `${JSON.stringify({ budget: 3, roles: { implement: "a-model" } })}\n`);
+		assert.ok(
+			(await check()).includes(
+				"optional fail dispatch config: differs from the vault. Fix: node ~/.claude/skills/dispatch-plan/vault.mjs config push --root .",
+			),
+		);
+
+		fs.writeFileSync(stored, "{ not json\n");
+		assert.match(await check(), /^optional fail dispatch config: differs from the vault\./m);
+	}));

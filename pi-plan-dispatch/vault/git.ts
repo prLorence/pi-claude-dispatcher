@@ -57,6 +57,14 @@ const SECRET_PATTERNS: readonly { name: string; re: RegExp }[] = [
 
 const ABSOLUTE_PATH_RE = /(^|[\s("'`])((?:\/(?:Users|home|var|tmp|private|etc)\/|[A-Za-z]:\\|~\/)[^\s)"'`]*)/;
 const LINK_RE = /\[\[([^\]\n]+)\]\]/g;
+/**
+ * The note types whose body may hold an absolute path. A `spec` and a `plan`
+ * body is a verbatim copy of a working file that names paths such as
+ * `~/.claude/skills/...` or `/tmp/...`, so the absolute-path check does not
+ * apply to them. The secret scan, the none-repo leak check and `checkNote`
+ * still do.
+ */
+const VERBATIM_BODY_TYPES: readonly NoteType[] = ["plan", "spec"];
 const UNMERGED_CODES = new Set(["UU", "AA", "DU", "UD", "AU", "UA"]);
 const TYPE_FOLDERS: readonly string[] = NOTE_TYPES.map((type) => TYPE_FOLDER[type]);
 const FOLDER_TYPES: Record<string, NoteType> = Object.fromEntries(
@@ -121,6 +129,56 @@ function vaultFiles(vault: string): string[] {
 	return files.sort();
 }
 
+const TEXT_DECODER = new TextDecoder("utf-8", { fatal: true });
+
+/** The text of a UTF-8 file, or undefined when the bytes are not valid UTF-8. */
+function decodeText(bytes: Uint8Array): string | undefined {
+	try {
+		return TEXT_DECODER.decode(bytes);
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * The work and config folders are not note folders, so no note schema or link
+ * check runs on them. A file below `work/` that is not UTF-8 text is an error;
+ * below `config/` it is skipped and left to the secret scan. Every readable file
+ * is checked for a `none` repo name.
+ */
+function workFindings(vault: string): LintFinding[] {
+	const findings: LintFinding[] = [];
+	const repos = readRepos(vault);
+	for (const file of vaultFiles(vault)) {
+		const isWork = file.startsWith("work/");
+		const isConfig = file.startsWith("config/");
+		if (!isWork && !isConfig) continue;
+		if (path.posix.basename(file) === ".gitkeep") continue;
+		let bytes: Uint8Array;
+		try {
+			bytes = fs.readFileSync(path.join(vault, file));
+		} catch {
+			continue;
+		}
+		const text = decodeText(bytes);
+		if (text === undefined || text.includes("\0")) {
+			if (isWork) {
+				findings.push({ severity: "error", code: "work-binary", message: "not a UTF-8 text file", file });
+			}
+			continue;
+		}
+		for (const needle of leaksNoneRepo(repos, text)) {
+			findings.push({
+				severity: "error",
+				code: "none-repo-leak",
+				message: `names a repo that is not allowed: ${needle}`,
+				file,
+			});
+		}
+	}
+	return findings;
+}
+
 function secretFindings(vault: string): LintFinding[] {
 	const findings: LintFinding[] = [];
 	for (const file of vaultFiles(vault)) {
@@ -176,14 +234,16 @@ function noteFindings(vault: string, loaded: LoadedNote[], opts: LintOptions): L
 		for (const message of checkNote(repos, note, tracked)) {
 			findings.push({ severity: "error", code: "repo-not-allowed", message, file });
 		}
-		const absolute = ABSOLUTE_PATH_RE.exec(note.body);
-		if (absolute !== null) {
-			findings.push({
-				severity: "error",
-				code: "absolute-path",
-				message: `absolute path in the note body: ${absolute[2]}`,
-				file,
-			});
+		if (!VERBATIM_BODY_TYPES.includes(note.type)) {
+			const absolute = ABSOLUTE_PATH_RE.exec(note.body);
+			if (absolute !== null) {
+				findings.push({
+					severity: "error",
+					code: "absolute-path",
+					message: `absolute path in the note body: ${absolute[2]}`,
+					file,
+				});
+			}
 		}
 	}
 	return findings;
@@ -258,6 +318,7 @@ function linkFindings(loaded: LoadedNote[], findings: LintFinding[]): LintFindin
 
 export function lintVault(vault: string, opts: LintOptions = {}): LintFinding[] {
 	const findings: LintFinding[] = secretFindings(vault);
+	findings.push(...workFindings(vault));
 	const loaded = loadNotes(vault, findings);
 	findings.push(...noteFindings(vault, loaded, opts));
 	findings.push(...logFindings(vault, readRepos(vault)));
@@ -266,10 +327,16 @@ export function lintVault(vault: string, opts: LintOptions = {}): LintFinding[] 
 	return findings;
 }
 
-/** Every `.md` note and `.gitkeep` in a type folder, the root files, and `templates/`. */
+/**
+ * Every `.md` note and `.gitkeep` in a type folder, the root files, `templates/`,
+ * every file below `work/` at any depth, and the two managed files below
+ * `config/` (`dispatch.json` and `.gitkeep`).
+ */
 function isManaged(relative: string): boolean {
 	const file = relative.replace(/\\/g, "/");
 	if (file.startsWith("templates/")) return true;
+	if (file.startsWith("work/")) return true;
+	if (file === "config/dispatch.json" || file === "config/.gitkeep") return true;
 	const parts = file.split("/");
 	const top = parts[0];
 	const rest = parts.slice(1);

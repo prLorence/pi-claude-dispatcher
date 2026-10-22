@@ -265,6 +265,73 @@ function projectFor(notes: Note[], repo: string | undefined): Note | undefined {
 	return notes.find((note) => note.type === "project" && reposOf(note).includes(repo));
 }
 
+function propOf(note: Note, key: string): string | undefined {
+	const value = note.props[key];
+	return typeof value === "string" ? value : undefined;
+}
+
+function latestPlan(notes: Note[], trace: string | undefined): Note | undefined {
+	if (trace === undefined) return undefined;
+	let best: Note | undefined;
+	for (const note of notes) {
+		if (note.type !== "plan" || propOf(note, "trace") !== trace) continue;
+		if (best === undefined) {
+			best = note;
+			continue;
+		}
+		const byRound = Number(propOf(note, "round") ?? 0) - Number(propOf(best, "round") ?? 0);
+		if (byRound > 0 || (byRound === 0 && compareBasename(note, best) < 0)) best = note;
+	}
+	return best;
+}
+
+function planPart(notes: Note[], spec: Note): string {
+	const plan = latestPlan(notes, propOf(spec, "trace"));
+	if (plan === undefined) return "no plan yet";
+	const audit = propOf(plan, "audit");
+	const round = propOf(plan, "audit_round");
+	const auditPart = audit === undefined ? "" : ` audit ${audit}${round === undefined ? "" : ` round ${round}`}`;
+	return `plan ${plan.basename} ${propOf(plan, "status") ?? "-"}${auditPart}`;
+}
+
+function unfinishedLines(notes: Note[], repo: string | undefined): string[] {
+	if (repo === undefined) return [];
+	return notes
+		.filter(
+			(note) =>
+				note.type === "spec" &&
+				note.props.repo === repo &&
+				(note.props.status === "draft" || note.props.status === "confirmed"),
+		)
+		.sort(compareBasename)
+		.map((spec) => `${spec.basename} | ${planPart(notes, spec)} | host ${propOf(spec, "host") ?? "-"}`);
+}
+
+function ideaLines(notes: Note[], repo: string | undefined): string[] {
+	return notes
+		.filter(
+			(note) =>
+				note.type === "idea" &&
+				note.props.status === "open" &&
+				(note.props.repo === "-" || (repo !== undefined && note.props.repo === repo)),
+		)
+		.sort(compareBasename)
+		.map((note) => note.basename);
+}
+
+function runLines(notes: Note[], repo: string | undefined): string[] {
+	if (repo === undefined) return [];
+	return notes
+		.filter((note) => note.type === "run" && note.props.repo === repo)
+		.sort((a, b) => compareStrings(propOf(b, "updated") ?? "", propOf(a, "updated") ?? "") || compareBasename(a, b))
+		.slice(0, 3)
+		.map((note) => `${note.basename} | ${propOf(note, "gate") ?? "-"} | ${propOf(note, "updated") ?? "-"}`);
+}
+
+function sectionItem(header: string, lines: string[]): BootItem[] {
+	return lines.length === 0 ? [] : [{ header, content: `${lines.join("\n")}\n` }];
+}
+
 function bootItems(notes: Note[], repo: string | undefined, logLines: string[]): BootItem[] {
 	const items: BootItem[] = [];
 	const project = projectFor(notes, repo);
@@ -279,6 +346,9 @@ function bootItems(notes: Note[], repo: string | undefined, logLines: string[]):
 			items.push({ header: `=== finding ${finding.basename} ===`, content: serializeNote(finding) });
 		}
 	}
+	items.push(...sectionItem("=== unfinished requests ===", unfinishedLines(notes, repo)));
+	items.push(...sectionItem("=== open ideas ===", ideaLines(notes, repo)));
+	items.push(...sectionItem("=== recent runs ===", runLines(notes, repo)));
 	if (logLines.length > 0) {
 		items.push({ header: "=== log tail ===", content: `${logLines.join("\n")}\n` });
 	}
@@ -355,10 +425,48 @@ function fingerprintOf(note: Note): string {
 	return typeof value === "string" ? value : "";
 }
 
+/** The regular files below work/ at any depth, without the .gitkeep placeholders. */
+function workSize(dir: string): { workFiles: number; workBytes: number } {
+	let workFiles = 0;
+	let workBytes = 0;
+	const walk = (folder: string): void => {
+		let entries: fs.Dirent[];
+		try {
+			entries = fs.readdirSync(folder, { withFileTypes: true });
+		} catch {
+			return;
+		}
+		for (const entry of entries) {
+			const full = path.join(folder, entry.name);
+			if (entry.isDirectory()) {
+				walk(full);
+				continue;
+			}
+			if (!entry.isFile() || entry.name === ".gitkeep") continue;
+			try {
+				workFiles += 1;
+				workBytes += fs.statSync(full).size;
+			} catch {
+				// A file removed between the listing and the stat is not counted.
+			}
+		}
+	};
+	walk(path.join(dir, "work"));
+	return { workFiles, workBytes };
+}
+
 export function statsFor(
 	vault: string,
 	opts: { repo?: string; all?: boolean; lastTraces?: number } = {},
-): { bootTokens: number; counts: Record<string, number>; repeats: number; total: number; repeatRate: number | null } {
+): {
+	bootTokens: number;
+	counts: Record<string, number>;
+	repeats: number;
+	total: number;
+	repeatRate: number | null;
+	workFiles: number;
+	workBytes: number;
+} {
 	const notes = listNotes(vault);
 	const counts: Record<string, number> = {};
 	for (const type of NOTE_TYPES) counts[type] = 0;
@@ -404,5 +512,5 @@ export function statsFor(
 		const seen = firstSeen.get(fingerprintOf(finding));
 		if (seen !== undefined && seen < index) repeats += 1;
 	}
-	return { bootTokens, counts, repeats, total, repeatRate: total === 0 ? null : repeats / total };
+	return { bootTokens, counts, repeats, total, repeatRate: total === 0 ? null : repeats / total, ...workSize(vault) };
 }

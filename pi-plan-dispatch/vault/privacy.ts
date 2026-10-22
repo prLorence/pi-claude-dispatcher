@@ -18,7 +18,7 @@ export interface Repos {
 }
 
 const MODES: readonly Mode[] = ["full", "meta", "none"];
-const META_TYPES: readonly string[] = ["run", "decision", "lesson"];
+const META_TYPES: readonly string[] = ["run", "decision", "lesson", "idea"];
 const META_RUN_KEYS: readonly string[] = [
 	"gate",
 	"tasks_done",

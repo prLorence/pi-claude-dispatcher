@@ -15,6 +15,6 @@
     "@earendil-works/pi-coding-agent": ">=1.3.0"
   },
   "scripts": {
-    "test": "node --test --test-force-exit index.test.ts review.test.ts trace.test.ts guard.test.ts verify.test.ts core.test.ts vault/url.test.ts vault/schema.test.ts vault/lock.test.ts vault/privacy.test.ts vault/notes.test.ts vault/git.test.ts ../dispatch-plan/vault.test.mjs ../dispatch-plan/vault-admin.test.mjs ../dispatch-plan/vault-cli-admin.test.mjs ../dispatch-plan/vault-events.test.mjs ../dispatch-plan/vault-bootstrap.test.mjs ../dispatch-plan/trace-vault.test.mjs"
+    "test": "node --test --test-force-exit index.test.ts review.test.ts trace.test.ts guard.test.ts verify.test.ts core.test.ts vault/url.test.ts vault/schema.test.ts vault/lock.test.ts vault/privacy.test.ts vault/notes.test.ts vault/git.test.ts ../dispatch-plan/vault.test.mjs ../dispatch-plan/vault-admin.test.mjs ../dispatch-plan/vault-cli-admin.test.mjs ../dispatch-plan/vault-events.test.mjs ../dispatch-plan/vault-bootstrap.test.mjs ../dispatch-plan/trace-vault.test.mjs ../dispatch-plan/vault-work.test.mjs ../dispatch-plan/vault-restore.test.mjs ../dispatch-plan/vault-config.test.mjs"
   }
 }

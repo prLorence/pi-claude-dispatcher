@@ -501,3 +501,202 @@ test("statsFor counts notes, measures boot text and computes the repeat rate per
 		assert.equal(none.repeatRate, null);
 	});
 });
+
+// 8. The work sections of bootText and the work size of statsFor.
+
+const putSpec = (dir: string, basename: string, props: Record<string, string | string[]> = {}): void => {
+	const note = noteOf(
+		"spec",
+		basename,
+		{ trace: basename, repo: REPO, status: "confirmed", file: `${basename}.md`, ...props },
+		"Spec body.\n",
+	);
+	put(dir, note);
+};
+
+const putPlan = (dir: string, basename: string, props: Record<string, string | string[]>): void => {
+	put(dir, noteOf("plan", basename, { repo: REPO, status: "draft", round: "1", ...props }, "Plan body.\n"));
+};
+
+const putIdea = (dir: string, basename: string, props: Record<string, string | string[]> = {}): void => {
+	put(dir, noteOf("idea", basename, { status: "open", repo: REPO, ...props }, "Idea body.\n"));
+};
+
+const putRun = (
+	dir: string,
+	basename: string,
+	updated: string,
+	props: Record<string, string | string[]> = {},
+): void => {
+	put(
+		dir,
+		noteOf(
+			"run",
+			basename,
+			{ trace: basename, repo: REPO, status: "done", gate: "pass", created: "2026-01-01", updated, ...props },
+			"Run body.\n",
+		),
+	);
+};
+
+/** The content of one boot item, without its header line and the blank line after it. */
+const sectionOf = (text: string, title: string): string | undefined => {
+	const start = text.indexOf(`=== ${title} ===\n`);
+	if (start < 0) return undefined;
+	const rest = text.slice(start + title.length + 9);
+	const next = rest.search(/\n=== /);
+	return next < 0 ? rest : rest.slice(0, next);
+};
+
+/** A vault with specs, plans of two rounds, ideas and runs in two repos. */
+const withWorkVault = (fn: (dir: string) => void): void => {
+	withVault((dir) => {
+		putSpec(dir, "a-spec", { trace: "t-1", host: "mac-mini" });
+		putSpec(dir, "b-spec", { trace: "t-2", status: "draft" });
+		putSpec(dir, "c-spec", { trace: "t-3", status: "done" });
+		putSpec(dir, "d-spec", { trace: "t-4", repo: OTHER_REPO });
+		putSpec(dir, "e-spec", { trace: "t-9", status: "draft" });
+		putSpec(dir, "f-spec", { trace: "t-5" });
+		putPlan(dir, "p-1-r1", { trace: "t-1", round: "1", status: "done" });
+		putPlan(dir, "p-1-r2", { trace: "t-1", round: "2", status: "ready", audit: "pass", audit_round: "2" });
+		putPlan(dir, "p-2-r1", { trace: "t-2", round: "1", status: "draft" });
+		putPlan(dir, "p-2-r2", { trace: "t-2", round: "2", status: "draft", host: "laptop" });
+		putPlan(dir, "q-2-r2", { trace: "t-2", round: "2", status: "done" });
+		putPlan(dir, "p-3-r1", { trace: "t-3", round: "1", status: "done" });
+		putPlan(dir, "p-5-r1", { trace: "t-5", round: "1", status: "failed", audit: "fail" });
+		putIdea(dir, "idea-a-open");
+		putIdea(dir, "idea-b-general", { repo: "-" });
+		putIdea(dir, "idea-c-taken", { status: "taken" });
+		putIdea(dir, "idea-d-other", { repo: OTHER_REPO });
+		putRun(dir, "a-run", "2026-01-01");
+		putRun(dir, "b-run", "2026-05-01", { gate: "fail" });
+		putRun(dir, "c-run", "2026-03-01");
+		putRun(dir, "d-run", "2026-04-01");
+		putRun(dir, "e-run", "2026-03-01");
+		putRun(dir, "z-run", "2026-09-01", { repo: OTHER_REPO });
+		fn(dir);
+	});
+};
+
+test("bootText: unfinished requests name the latest plan, its audit and the spec's host", () => {
+	withWorkVault((dir) => {
+		const out = bootText(dir, { repo: REPO, budgetTokens: 1e9 });
+		assert.equal(
+			sectionOf(out, "unfinished requests"),
+			[
+				"a-spec | plan p-1-r2 ready audit pass round 2 | host mac-mini",
+				"b-spec | plan p-2-r2 draft | host -",
+				"e-spec | no plan yet | host -",
+				"f-spec | plan p-5-r1 failed audit fail | host -",
+				"",
+			].join("\n"),
+		);
+	});
+});
+
+test("bootText: open ideas are the basenames of the general and this repo's open ideas", () => {
+	withWorkVault((dir) => {
+		const out = bootText(dir, { repo: REPO, budgetTokens: 1e9 });
+		assert.equal(sectionOf(out, "open ideas"), "idea-a-open\nidea-b-general\n");
+	});
+});
+
+test("bootText: recent runs are the last 3 of this repo, newest first, with the gate and the date", () => {
+	withWorkVault((dir) => {
+		const out = bootText(dir, { repo: REPO, budgetTokens: 1e9 });
+		assert.equal(sectionOf(out, "recent runs"), "b-run | fail | 2026-05-01\nd-run | pass | 2026-04-01\nc-run | pass | 2026-03-01\n");
+	});
+});
+
+test("bootText leaves a done spec and another repo's spec out of the unfinished requests", () => {
+	withWorkVault((dir) => {
+		const out = bootText(dir, { repo: REPO, budgetTokens: 1e9 });
+		const section = sectionOf(out, "unfinished requests") ?? "";
+		assert.equal(section.includes("c-spec"), false);
+		assert.equal(section.includes("d-spec"), false);
+	});
+});
+
+test("bootText puts the work sections between the findings and the log tail", () => {
+	withWorkVault((dir) => {
+		putFinding(dir, "f-order", REPO, "t-1", "2026-01-01", "fp-order");
+		fs.writeFileSync(path.join(dir, "log.md"), "entry-1\n", "utf8");
+		const out = bootText(dir, { repo: REPO });
+		const headers = [
+			"=== finding f-order ===",
+			"=== unfinished requests ===",
+			"=== open ideas ===",
+			"=== recent runs ===",
+			"=== log tail ===",
+			"=== index ===",
+		];
+		const positions = headers.map((header) => out.indexOf(header));
+		assert.ok(positions.every((position) => position >= 0), JSON.stringify(positions));
+		for (let i = 1; i < positions.length; i++) assert.ok((positions[i] ?? -1) > (positions[i - 1] ?? -1), JSON.stringify(positions));
+	});
+});
+
+test("bootText omits a work section that has no entries", () => {
+	withVault((dir) => {
+		const out = bootText(dir, { repo: REPO });
+		assert.equal(out.includes("=== unfinished requests ==="), false);
+		assert.equal(out.includes("=== open ideas ==="), false);
+		assert.equal(out.includes("=== recent runs ==="), false);
+	});
+});
+
+test("bootText without a repo shows only the general open ideas", () => {
+	withWorkVault((dir) => {
+		const out = bootText(dir, { budgetTokens: 1e9 });
+		assert.equal(out.includes("=== unfinished requests ==="), false);
+		assert.equal(out.includes("=== recent runs ==="), false);
+		assert.equal(sectionOf(out, "open ideas"), "idea-b-general\n");
+	});
+});
+
+test("a small budget drops the work sections from the end, before the log tail and the index", () => {
+	withWorkVault((dir) => {
+		fs.writeFileSync(path.join(dir, "log.md"), "entry-1\n", "utf8");
+		const full = bootText(dir, { repo: REPO, budgetTokens: 1e9 });
+		const specBlock = full.slice(full.indexOf("\n=== unfinished requests ==="), full.indexOf("\n=== open ideas ==="));
+		assert.ok(specBlock.length > 0, "the unfinished requests item is in the full text");
+		const budgetChars = specBlock.length + "\n[truncated: 4 items]".length;
+		const out = bootText(dir, { repo: REPO, budgetTokens: Math.ceil(budgetChars / 4) });
+		assert.ok(out.includes("=== unfinished requests ==="), out);
+		assert.equal(out.includes("=== open ideas ==="), false);
+		assert.equal(out.includes("=== recent runs ==="), false);
+		assert.equal(out.includes("=== log tail ==="), false);
+		assert.match(out, /\n\[truncated: 4 items\]$/);
+	});
+});
+
+test("buildIndex lists the spec and idea notes under Specs and Ideas", () => {
+	withWorkVault((dir) => {
+		const index = buildIndex(dir);
+		assert.match(index, /## Specs\n(- \[\[[a-z0-9-]+\]\]\n)*?- \[\[a-spec\]\]/);
+		assert.match(index, /## Ideas\n- \[\[idea-a-open\]\]\n- \[\[idea-b-general\]\]\n- \[\[idea-c-taken\]\]\n- \[\[idea-d-other\]\]\n/);
+	});
+});
+
+test("statsFor counts the new note types and measures work/ without the .gitkeep files", () => {
+	withWorkVault((dir) => {
+		fs.mkdirSync(path.join(dir, "work", "t-1", "probes"), { recursive: true });
+		fs.writeFileSync(path.join(dir, "work", ".gitkeep"), "", "utf8");
+		fs.writeFileSync(path.join(dir, "work", "t-1", ".gitkeep"), "", "utf8");
+		fs.writeFileSync(path.join(dir, "work", "t-1", "a.txt"), "12345", "utf8");
+		fs.writeFileSync(path.join(dir, "work", "t-1", "probes", "b.txt"), "1234567890", "utf8");
+		const stats = statsFor(dir, { repo: REPO });
+		assert.equal(stats.counts.spec, 6);
+		assert.equal(stats.counts.idea, 4);
+		assert.equal(stats.workFiles, 2);
+		assert.equal(stats.workBytes, 15);
+	});
+});
+
+test("statsFor reports 0 work files and 0 bytes when work/ is missing", () => {
+	withVault((dir) => {
+		const stats = statsFor(dir, { repo: REPO });
+		assert.equal(stats.workFiles, 0);
+		assert.equal(stats.workBytes, 0);
+	});
+});

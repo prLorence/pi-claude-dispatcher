@@ -191,6 +191,12 @@ function detail(e) {
 			return `unavailable: ${dash(d.reason)}`;
 		case "vault.denied":
 			return `denied ${dash(d.type)} note for ${dash(d.repo)}`;
+		case "vault.work":
+			return `${dash(d.op)} ${dash(d.trace)}: ${dash(d.files)} files, ${dash(d.unmirrored)} unmirrored`;
+		case "vault.restore":
+			return `restored ${dash(d.restored)}, skipped ${dash(d.skipped)}`;
+		case "vault.config":
+			return `${dash(d.op)}: ${dash(d.result)}`;
 		default:
 			return d && Object.keys(d).length ? JSON.stringify(d).slice(0, 140) : "";
 	}

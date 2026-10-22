@@ -93,17 +93,43 @@ schema. You are the only role that writes it, and only through the CLI at
 
 1. **Session start.** Run `vault.mjs resolve`. If it succeeds, run `vault.mjs repo check`: exit
    `3` means this repo's mode is `none`. When both are fine, run `vault.mjs sync pull` then
-   `vault.mjs boot` and read the boot text before you plan. Otherwise skip every vault step for
-   the whole request and say so once.
+   `vault.mjs boot` and read the boot text before you plan, then the catch-up:
+   `work pending --root <repo root>`, `work add --trace <T> --root <repo root>` for each
+   `pending <T>` line it prints, then `restore --root <repo root>`. Otherwise skip every vault
+   step for the whole request and say so once.
 
-2. **Write after the run, never before.** A run includes a plan rejected before it ran. Write
-   only through `vault.mjs`, never with an editor, and only what the repo mode allows. `full`
-   allows everything. `meta` allows `run`, `decision` and `lesson` notes only, and the CLI builds
-   the `run` body from `--set` fields, so never pass `--body-stdin` for a `meta` run. `none`
-   allows nothing. The notes are: a `run` note for the plan; for a `full` repo a `plan` note
-   holding the plan text; one `finding` note per reviewer, pair, security, plan-audit or gate
-   finding, with `fingerprint` = `<repo slug>:<repo-relative file or ->:<slug(title)>`; and
-   `decision` or `lesson` notes only for a fact that outlives the trace. Then `log append`.
+2. **Mirror at the milestones, write the record after the run.** Write only through
+   `vault.mjs`, never with an editor, and only what the repo mode allows. `full` allows
+   everything. `meta` allows `run`, `decision`, `lesson` and `idea` notes only, and the CLI
+   builds the `run` body from `--set` fields, so never pass `--body-stdin` for a `meta` run; an
+   idea body follows the rules of a decision body. `none` allows nothing.
+   Milestones, a `full` repo only; for a `meta` or `none` repo the specs and the plans stay
+   local. The working copies of the spec and the plans live in `.plans/` and are what the tools
+   read; the notes are a mirror. `note new` is an upsert that rebuilds a note from its own
+   `--set` flags and body only and keeps `created`, so a revised draft is written with `note
+   new` again and every property to keep passed again.
+   - Spec confirmed:
+     `note new spec <slug(spec-id)>-spec --set trace=<T> --set repo=<slug> --set status=confirmed --set file=<spec file name> --set host=<host> --body-stdin < .plans/specs/<spec file name>`
+   - Plan drafted or revised:
+     `note new plan <slug(plan-id)> --set trace=<T> --set round=<n> --set repo=<slug> --set status=draft --set file=<plan file name without .draft> --set host=<host> --body-stdin < <plan draft path>`
+   - Audit verdict: `note set <plan basename> --set audit=<pass|fail> --set audit_round=<n>`
+   - Approved and flipped: `note set <plan basename> --set status=ready`
+   - Run finished: `work add --trace <T> --root <repo root>` (with `--probes` when this
+     request has probes), then `note set <plan basename> --set status=<done|failed>`, and
+     `note set <spec basename> --set status=done` when the request is finished.
+   An idea is written when the user states one: `note new idea idea-<slug(title)> --set
+   status=open --set repo=<slug or -> --body-stdin`, and changed later with `note set` or `note
+   status <basename> <open|taken|dropped>`. `.plans/ideas.md` is retired once its entries are
+   copied into `idea` notes; you do that once.
+   After the run, in this fixed order, because the wrong order loses data: (1) `trace.mjs
+   report --trace <T>`, so `trace.md` exists before the copy; (2) the `run` note and the
+   `finding` notes with `note new`, because a later `note new run` would drop the `unmirrored`
+   list that `work add` sets; (3) `work add`; (4) the `note set` of the plan status and, when
+   the request is finished, of the spec status; (5) `log append`; (6) `sync push` (item 3). A
+   run includes a plan rejected before it ran. The notes are: a `run` note for the plan; one
+   `finding` note per reviewer, pair, security, plan-audit or gate finding, with `fingerprint` =
+   `<repo slug>:<repo-relative file or ->:<slug(title)>`; and `decision` or `lesson` notes only
+   for a fact that outlives the trace.
 
 3. **Push.** After the `log append`, run `vault.mjs sync push` when `sync_push` in the vault's
    `harness.json` is `auto`. When it is `manual`, commit nothing and tell the user a push is due.
@@ -124,14 +150,25 @@ schema. You are the only role that writes it, and only through the CLI at
    as an unowned change. Never run `graphify install --project` or `graphify hook install` in a
    project repo. `graph.json`, `graph.html` and the rest of `graphify-out/` never enter the vault.
 
-8. **Plans stay in `.plans/`.** A plan is not stored in the vault before it runs; plans keep
-   using `.plans/inbox/`. The vault gets the `plan` note after the run, in a `full` repo only.
+8. **Working copies stay in `.plans/`.** A spec works from `.plans/specs/<file>` and a plan from
+   `.plans/inbox/`, which is what the dispatcher reads. The vault holds their mirror, written at
+   the milestones of item 2, plus the run record after the run.
 
 9. **Never write the user's personal vault**, `obsidian-v2`, and no other vault but the agent one.
 
 10. **Trace the vault calls.** Pass `--trace <T> --root <repo root>` to every vault command you
     run for a request, because the CLI writes its `vault.*` trace events only when it gets both
-    flags. The session-start `sync pull` and `boot` have no trace yet and may omit them.
+    flags. The session-start `sync pull`, `boot`, `work pending` and `restore` have no trace yet
+    and may omit them.
+
+11. **The run record and the config.** `work add --trace <T> --root <repo root>` is how the
+    record of a run gets into the vault; run it after every run, with `--probes` when this
+    request has probes. A `meta` repo gets only its generated `run` note. If `work add` exits
+    `6`, tell the user which files were unmirrored and do not retry blindly: they hold a secret,
+    a `none` repo name or non-text content. After the user changes `.plans/config.json`, run
+    `config push --root <repo root>`. The `host` for the milestone notes comes from `vault.mjs
+    resolve --json` (its `host` field). You never write under `work/` or `config/` by hand; only
+    `work add` and `config push` write them.
 
 A finding basename is `<trace>-f-<8 hex>`, where the 8 hex are the first 8 characters of the
 sha1 of the fingerprint. Compute it like this, with the fingerprint in single quotes:

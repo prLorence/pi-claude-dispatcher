@@ -78,7 +78,7 @@ worker role model.
 
 ## The vault
 
-The agents also keep memory outside any one repo. The agent vault is an Obsidian vault in its own git repo, cloned next to this repo, with notes for plans, runs, findings, decisions, lessons, projects and codebases. The orchestrator is the only role that writes it, and only through `dispatch-plan/vault.mjs`. The `plan-auditor` reads it with `vault.mjs boot`. Pi workers have no vault access: the dispatcher strips `AGENT_VAULT` from a worker's environment and sets `PI_PLAN_DISPATCH_WORKER=1`, which makes the CLI refuse every command, and the guard blocks any tool path inside the vault. The plain-English guide, including the CLI contract, the repo modes, sync and the new-machine steps, is [docs/vault.md](docs/vault.md).
+The agents also keep memory outside any one repo. The agent vault is an Obsidian vault in its own git repo, cloned next to this repo, with notes for specs, plans, ideas, runs, findings, decisions, lessons, projects and codebases. Specs, plans and ideas are mirrored into it at each milestone: a confirmed spec, a plan drafted or revised, its audit verdict, its approval and its final status, so the note is a mirror and the files under `.plans/` stay the working copies the tools read. When a request finishes, `work add` copies its run record into `work/<trace>/`: the trace and its report, the summary, the evidence and the task reports of each plan, and the probes when they were written. On a new machine, `restore` writes the unfinished specs and draft plans of this repo back under `.plans/`, then lists the open ideas and the last three runs. The orchestrator is the only role that writes the vault, and only through `dispatch-plan/vault.mjs`. The `plan-auditor` reads it with `vault.mjs boot`. Pi workers have no vault access: the dispatcher strips `AGENT_VAULT` from a worker's environment and sets `PI_PLAN_DISPATCH_WORKER=1`, which makes the CLI refuse every command, and the guard blocks any tool path inside the vault. The plain-English guide, including the CLI contract, the repo modes, the run record, sync and the new-machine steps, is [docs/vault.md](docs/vault.md).
 
 ## How a request flows
 
@@ -128,7 +128,7 @@ pi install ./pi-plan-dispatch                        # as a package
 cp -r pi-plan-dispatch ~/.pi/agent/extensions/       # or as a global extension
 
 # 2. The Claude Code skill runtime files (also the trace, preflight, config and vault CLIs)
-mkdir -p ~/.claude/skills/dispatch-plan && cp dispatch-plan/SKILL.md dispatch-plan/ORCHESTRATOR.md dispatch-plan/trace.mjs dispatch-plan/preflight.mjs dispatch-plan/config-init.mjs dispatch-plan/vault.mjs dispatch-plan/vault-admin.mjs dispatch-plan/vault-events.mjs ~/.claude/skills/dispatch-plan/
+mkdir -p ~/.claude/skills/dispatch-plan && cp dispatch-plan/SKILL.md dispatch-plan/ORCHESTRATOR.md dispatch-plan/trace.mjs dispatch-plan/preflight.mjs dispatch-plan/config-init.mjs dispatch-plan/vault.mjs dispatch-plan/vault-work.mjs dispatch-plan/vault-restore.mjs dispatch-plan/vault-config.mjs dispatch-plan/vault-admin.mjs dispatch-plan/vault-events.mjs ~/.claude/skills/dispatch-plan/
 
 # 3. The plan-auditor agent
 mkdir -p ~/.claude/agents && cp dispatch-plan/agents/plan-auditor.md ~/.claude/agents/

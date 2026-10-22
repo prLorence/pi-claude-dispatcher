@@ -19,7 +19,12 @@
  * target is inside the vault, and runs under the vault lock.
  *
  * Exit codes: 0 done / 1 failure / 2 rejected / 3 repo not allowed / 4 vault
- * locked / 5 sync conflict / 64 usage.
+ * locked / 5 sync conflict / 6 partial (work add: some files unmirrored) /
+ * 64 usage.
+ *
+ * The work, restore and config commands delegate to vault-work.mjs,
+ * vault-restore.mjs and vault-config.mjs, which are loaded inside their
+ * handlers so a partial copy of these scripts still runs the older commands.
  */
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -39,7 +44,7 @@ const USAGE = [
 	"  stats [--repo <slug> | --all]               count notes, boot tokens and repeats",
 	"  note new <type> <basename> [--set key=value]... [--body-stdin]",
 	"  note set <basename> [--set key=value]... [--body-stdin]",
-	"  note status <basename> <open|closed>",
+	"  note status <basename> <open|closed|taken|dropped>",
 	"  note rm <basename>",
 	"  log append --repo <slug|-> [--trace <id>] <text...>",
 	"  index rebuild",
@@ -48,6 +53,11 @@ const USAGE = [
 	"  repo check",
 	"  sync pull",
 	"  sync push [--summary <text>]",
+	"  work add --trace <id> --root <repo> [--probes]  copy a finished request into work/",
+	"  work pending --root <repo>                  list the finished requests the vault misses",
+	"  restore --root <repo>                       rebuild specs and draft plans from the vault",
+	"  config push --root <repo>                   copy .plans/config.json into the vault",
+	"  config pull --root <repo> [--force]         write .plans/config.json from the vault",
 	"  init [--path <dir>] [--remote <url>]         create a vault from the template",
 	"  setup [--path <dir>] [--force]               write the config and install the skill",
 	"  doctor                                      check the machine and the vault",
@@ -57,6 +67,9 @@ const USAGE = [
 
 const DEFAULT_BOOT_BUDGET = 4000;
 const MODES = ["full", "meta", "none"];
+/** The status values `note status` accepts, by note type. */
+const STATUS_VALUES = { finding: ["open", "closed"], idea: ["open", "taken", "dropped"] };
+const STATUS_HELP = "status works on finding notes (open, closed) and idea notes (open, taken, dropped)";
 const REPO_KEY_RE = /^[a-z0-9.-]+(?:\/[a-z0-9._-]+){2,}$/;
 const SET_KEY_RE = /^[A-Za-z0-9_-]+$/;
 const REPOS_FILE = "repos.json";
@@ -81,6 +94,7 @@ const FLAGS = {
 	"--body-stdin": { name: "bodyStdin" },
 	"--range": { name: "range" },
 	"--all": { name: "all" },
+	"--probes": { name: "probes" },
 };
 
 /** The flag spelling for a parsed flag name, so an error can name it back. */
@@ -217,6 +231,33 @@ const COMMANDS = {
 		subcommands: {
 			pull: { write: true, target: (call) => call.ctx.vaultPath, args: [0, 0], run: cmdSyncPull },
 			push: { write: true, target: (call) => call.ctx.vaultPath, args: [0, 0], prelock: prelockSummary, run: cmdSyncPush },
+		},
+	},
+	work: {
+		subcommands: {
+			add: {
+				write: true,
+				target: (call) => rootFile(call.ctx.vaultPath, "work"),
+				args: [0, 0],
+				flags: ["probes"],
+				requiredFlags: ["trace", "root"],
+				run: cmdWorkAdd,
+			},
+			pending: { args: [0, 0], flags: [], requiredFlags: ["root"], run: cmdWorkPending },
+		},
+	},
+	restore: { args: [0, 0], flags: [], requiredFlags: ["root"], run: cmdRestore },
+	config: {
+		subcommands: {
+			push: {
+				write: true,
+				target: (call) => rootFile(call.ctx.vaultPath, "config"),
+				args: [0, 0],
+				flags: [],
+				requiredFlags: ["root"],
+				run: cmdConfigPush,
+			},
+			pull: { args: [0, 0], flags: ["force"], requiredFlags: ["root"], run: cmdConfigPull },
 		},
 	},
 	init: { needsVault: false, args: [0, 0], flags: ["path", "remote"], run: cmdInit },
@@ -591,6 +632,7 @@ function cmdStats(call) {
 	}
 	ctx.out(`boot tokens: ${stats.bootTokens}`);
 	for (const type of modules.schema.NOTE_TYPES) ctx.out(`${type}: ${stats.counts[type] ?? 0}`);
+	ctx.out(`work: ${stats.workFiles} files, ${stats.workBytes} bytes`);
 	ctx.out(`repeats: ${stats.repeats}`);
 	ctx.out(`total: ${stats.total}`);
 	ctx.out(`repeat rate: ${stats.repeatRate === null ? "-" : stats.repeatRate}`);
@@ -660,16 +702,13 @@ function cmdNoteStatus(call) {
 		ctx.err(`no note named ${basename}`);
 		return 2;
 	}
-	if (existing.type !== "finding") {
-		ctx.err(`note ${basename} is a ${existing.type} note, not a finding`);
-		return 2;
-	}
-	if (value !== "open" && value !== "closed") {
-		ctx.err(`a finding status is open or closed: ${value}`);
+	const allowed = STATUS_VALUES[existing.type];
+	if (allowed === undefined || !allowed.includes(value)) {
+		ctx.err(STATUS_HELP);
 		return 2;
 	}
 	const props = { ...existing.props, status: value };
-	return saveNote(call, { type: "finding", basename, props, body: existing.body }, "status");
+	return saveNote(call, { type: existing.type, basename, props, body: existing.body }, "status");
 }
 
 function cmdNoteRm(call) {
@@ -800,6 +839,55 @@ function cmdSyncPush(call) {
 	if (!writeTargetAllowed(ctx, call.ctx.vaultPath)) return 2;
 	const result = modules.git.syncPush(ctx.vaultPath, { summary: flags.summary, trace: flags.trace });
 	return reportSync(call, "push", result);
+}
+
+/** The event a module returned, when it returned one, then its exit code. */
+function finishModule(call, result) {
+	if (result.event !== undefined) call.emit(result.event.kind, result.event.data);
+	return result.code;
+}
+
+/**
+ * The context vault-work.mjs, vault-restore.mjs and vault-config.mjs take.
+ * `inside` is the same realpath check every vault write passes, so a module
+ * refuses a target that leaves the vault.
+ */
+function moduleContext(call) {
+	const { ctx } = call;
+	return {
+		vault: ctx.vaultPath,
+		root: call.flags.root,
+		modules: call.modules,
+		out: ctx.out,
+		err: ctx.err,
+		inside: (target) => insideVault(ctx.vaultPath, target),
+	};
+}
+
+async function cmdWorkAdd(call) {
+	const { workAdd } = await import("./vault-work.mjs");
+	const { trace, probes } = call.flags;
+	return finishModule(call, workAdd(moduleContext(call), { trace, probes: probes === true }));
+}
+
+async function cmdWorkPending(call) {
+	const { workPending } = await import("./vault-work.mjs");
+	return finishModule(call, workPending(moduleContext(call)));
+}
+
+async function cmdRestore(call) {
+	const { restore } = await import("./vault-restore.mjs");
+	return finishModule(call, restore(moduleContext(call)));
+}
+
+async function cmdConfigPush(call) {
+	const { configPush } = await import("./vault-config.mjs");
+	return finishModule(call, configPush(moduleContext(call)));
+}
+
+async function cmdConfigPull(call) {
+	const { configPull } = await import("./vault-config.mjs");
+	return finishModule(call, configPull(moduleContext(call), { force: call.flags.force === true }));
 }
 
 /** The same candidates findHarnessRoot tries, so a miss can name each one. */

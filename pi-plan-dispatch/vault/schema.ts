@@ -10,7 +10,16 @@ import { createHash } from "node:crypto";
 
 export const SCHEMA_VERSION = 1;
 
-export type NoteType = "plan" | "run" | "finding" | "decision" | "lesson" | "project" | "codebase";
+export type NoteType =
+	| "plan"
+	| "run"
+	| "finding"
+	| "decision"
+	| "lesson"
+	| "project"
+	| "codebase"
+	| "spec"
+	| "idea";
 
 export const NOTE_TYPES: readonly NoteType[] = [
 	"plan",
@@ -20,6 +29,8 @@ export const NOTE_TYPES: readonly NoteType[] = [
 	"lesson",
 	"project",
 	"codebase",
+	"spec",
+	"idea",
 ];
 
 export const TYPE_FOLDER: Record<NoteType, string> = {
@@ -30,6 +41,8 @@ export const TYPE_FOLDER: Record<NoteType, string> = {
 	lesson: "lessons",
 	project: "projects",
 	codebase: "codebases",
+	spec: "specs",
+	idea: "ideas",
 };
 
 export const REQUIRED_PROPS: Record<NoteType, readonly string[]> = {
@@ -40,16 +53,26 @@ export const REQUIRED_PROPS: Record<NoteType, readonly string[]> = {
 	lesson: ["project", "repo"],
 	project: ["repos"],
 	codebase: ["repo", "commit", "graphify_version"],
+	spec: ["trace", "repo", "status", "file"],
+	idea: ["status", "repo"],
 };
 
 export const VOCAB: {
 	planRunStatus: string[];
+	planStatus: string[];
+	specStatus: string[];
+	ideaStatus: string[];
+	audit: string[];
 	gate: string[];
 	findingStatus: string[];
 	source: string[];
 	severity: string[];
 } = {
 	planRunStatus: ["done", "failed"],
+	planStatus: ["draft", "ready", "done", "failed"],
+	specStatus: ["draft", "confirmed", "done"],
+	ideaStatus: ["open", "taken", "dropped"],
+	audit: ["pass", "fail"],
 	gate: ["pass", "fail"],
 	findingStatus: ["open", "closed"],
 	source: ["plan-audit", "auditor", "pair", "security", "gate"],
@@ -67,6 +90,8 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const BASENAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const REPO_RE = /^[a-z0-9.-]+(\/[a-z0-9._-]+)+$/;
 const FINDING_SUFFIX_RE = /-f-([0-9a-f]{8})$/;
+const FILE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/;
+const AUDIT_ROUND_RE = /^[1-9][0-9]*$/;
 const ABSOLUTE_RE = /^(\/|~\/|[A-Za-z]:[\\/])/;
 const LINE_BREAK_RE = /[\r\n]/;
 const QUOTE_START_RE = /^["'[\]{}>|*&!%@`,#?:-]/;
@@ -135,6 +160,7 @@ function basenameErrors(type: NoteType, basename: string, props: Record<string, 
 		return errors;
 	}
 	if (type === "run" && !basename.endsWith("-run")) errors.push("a run basename must end with -run");
+	if (type === "spec" && !basename.endsWith("-spec")) errors.push("a spec basename must end with -spec");
 	if (type === "finding") {
 		const m = FINDING_SUFFIX_RE.exec(basename);
 		if (!m) {
@@ -151,6 +177,7 @@ function basenameErrors(type: NoteType, basename: string, props: Record<string, 
 		lesson: "lesson-",
 		project: "project-",
 		codebase: "codebase-",
+		idea: "idea-",
 	};
 	const prefix = prefixes[type];
 	if (prefix && !basename.startsWith(prefix)) errors.push(`a ${type} basename must start with ${prefix}`);
@@ -166,12 +193,30 @@ function vocabErrors(type: NoteType, props: Record<string, string | string[]>): 
 			errors.push(`${key} must be one of: ${list.join(", ")}`);
 		}
 	};
-	if (type === "plan" || type === "run") check("status", VOCAB.planRunStatus);
+	if (type === "plan") {
+		check("status", VOCAB.planStatus);
+		check("audit", VOCAB.audit);
+	}
+	if (type === "run") check("status", VOCAB.planRunStatus);
+	if (type === "spec") check("status", VOCAB.specStatus);
+	if (type === "idea") check("status", VOCAB.ideaStatus);
 	if (type === "run") check("gate", VOCAB.gate);
 	if (type === "finding") {
 		check("status", VOCAB.findingStatus);
 		check("source", VOCAB.source);
 		check("severity", VOCAB.severity);
+	}
+	const file = props.file;
+	if ((type === "plan" || type === "spec") && file !== undefined) {
+		if (typeof file !== "string" || !FILE_NAME_RE.test(file) || file.includes("..")) {
+			errors.push("file must be a plain file name ending in .md");
+		}
+	}
+	if (type === "plan") {
+		const round = props.audit_round;
+		if (round !== undefined && (typeof round !== "string" || !AUDIT_ROUND_RE.test(round))) {
+			errors.push("audit_round must be a positive whole number");
+		}
 	}
 	return errors;
 }
@@ -183,8 +228,8 @@ function repoErrors(type: NoteType, props: Record<string, string | string[]>): s
 		errors.push("repo must be a single slug");
 	} else if (typeof repo === "string" && repo !== "") {
 		if (repo === "-") {
-			if (type !== "decision" && type !== "lesson") {
-				errors.push("repo - is allowed on decision and lesson notes only");
+			if (type !== "decision" && type !== "lesson" && type !== "idea") {
+				errors.push("repo - is allowed on decision, lesson and idea notes only");
 			}
 		} else if (!REPO_RE.test(repo)) {
 			errors.push(`repo must be a slug host/owner/name: ${repo}`);
