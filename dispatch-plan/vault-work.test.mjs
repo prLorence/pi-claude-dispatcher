@@ -369,6 +369,12 @@ test(
 		assert.deepEqual(out, []);
 		assert.deepEqual(err, ["work add: request not finished"]);
 		assert.ok(!fs.existsSync(path.join(vault, "work", TRACE)));
+
+		const absent = makeContext({ vault, root: repo });
+		assert.equal(workAdd(absent.c, { trace: "20261023-1050-absent" }).code, 1);
+		assert.deepEqual(absent.out, []);
+		assert.deepEqual(absent.err, ["work add: request not finished"]);
+		assert.ok(!fs.existsSync(path.join(vault, "work", "20261023-1050-absent")));
 	}),
 );
 
@@ -425,6 +431,8 @@ test(
 			path.join(repo, ".plans", "traces", `${TRACE}.jsonl`),
 			traceLine({ kind: "plan.end", plan: "bad plan" }),
 		);
+		writeText(repo, ".plans/done/bad plan/leaked.md", "never copied\n");
+		writeText(vault, "runs/run-a.md", runNote(TRACE));
 		const { c, out, err } = makeContext({ vault, root: repo });
 
 		const result = workAdd(c, { trace: TRACE });
@@ -432,6 +440,9 @@ test(
 		assert.equal(result.code, 6);
 		assert.deepEqual(out, ["work add: 8 copied, 0 unchanged, 1 unmirrored"]);
 		assert.deepEqual(err, ["unmirrored bad plan: bad plan id"]);
+		assert.deepEqual(listFiles(path.join(vault, "work", TRACE)), expectedDestinations(TRACE));
+		assert.ok(!fs.existsSync(path.join(vault, "work", TRACE, "bad plan")));
+		assert.equal(runNotes(vault)[0]?.props.unmirrored, "bad plan");
 	}),
 );
 

@@ -51,9 +51,10 @@ function writeAtomic(target, text) {
 	fs.renameSync(tmp, target);
 }
 
+/** Compared as bytes, not as decoded text, because the decoder drops a leading BOM. */
 function sameBytes(target, text) {
 	try {
-		return fs.readFileSync(target, "utf8") === text;
+		return fs.readFileSync(target).equals(Buffer.from(text, "utf8"));
 	} catch {
 		return false;
 	}

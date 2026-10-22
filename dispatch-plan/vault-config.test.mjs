@@ -172,6 +172,24 @@ test("push refuses an array, null and invalid JSON with exit 2", () => {
 	}
 });
 
+test("push refuses a source that is not UTF-8 text", () => {
+	const t = setup();
+	try {
+		fs.mkdirSync(t.plans, { recursive: true });
+		fs.writeFileSync(localConfig(t), Buffer.from([0x7b, 0x22, 0xff, 0x22, 0x7d]));
+		const { ctx, out, err } = makeCall(t);
+
+		const result = configPush(ctx);
+
+		assert.equal(result.code, 2);
+		assert.deepEqual(out, []);
+		assert.deepEqual(err, ["config push: not a JSON object"]);
+		assert.equal(fs.existsSync(vaultConfig(t)), false);
+	} finally {
+		t.cleanup();
+	}
+});
+
 test("push refuses a secret and names the pattern", () => {
 	const t = setup();
 	try {
@@ -253,6 +271,23 @@ test("pull writes the vault config into an empty .plans", () => {
 	}
 });
 
+test("pull gives a source with extra trailing newlines just one", () => {
+	const t = setup();
+	try {
+		writeFile(vaultConfig(t), '{"autoReady": false}\n\n\n');
+		fs.mkdirSync(t.plans, { recursive: true });
+		const { ctx, out } = makeCall(t);
+
+		const result = configPull(ctx, { force: false });
+
+		assert.equal(result.code, 0);
+		assert.deepEqual(out, ["config pull: pulled"]);
+		assert.equal(fs.readFileSync(localConfig(t), "utf8"), '{"autoReady": false}\n');
+	} finally {
+		t.cleanup();
+	}
+});
+
 test("pull keeps an existing local file without force and replaces it with force", () => {
 	const t = setup();
 	try {
@@ -295,6 +330,24 @@ test("pull without a vault config exits 1", () => {
 		assert.deepEqual(err, ["config pull: no dispatch config in the vault"]);
 		assert.equal(result.event, undefined);
 		assert.equal(fs.existsSync(localConfig(t)), false);
+	} finally {
+		t.cleanup();
+	}
+});
+
+test("pull refuses a .plans path that is not a folder", () => {
+	const t = setup();
+	try {
+		writeFile(vaultConfig(t), CONFIG);
+		writeFile(t.plans, "not a folder\n");
+		const { ctx, out, err } = makeCall(t);
+
+		const result = configPull(ctx, { force: false });
+
+		assert.equal(result.code, 1);
+		assert.deepEqual(out, []);
+		assert.deepEqual(err, ["config pull: .plans does not exist"]);
+		assert.equal(fs.readFileSync(t.plans, "utf8"), "not a folder\n");
 	} finally {
 		t.cleanup();
 	}

@@ -283,6 +283,7 @@ test(
 		assert.deepEqual(result.event, { kind: "vault.restore", data: { restored: 0, skipped: 2 } });
 		assert.ok(!fs.existsSync(path.join(root, "evil.md")), "nothing above .plans");
 		assert.ok(!fs.existsSync(path.join(root, ".plans", "evil.md")), "nothing outside the plan folders");
+		assert.ok(!fs.existsSync(path.join(root, ".plans", "evil.md.draft")), "the resolved .draft target is not written");
 		assert.ok(!fs.existsSync(path.join(root, ".plans", "inbox", "evil.md.draft")));
 		assert.ok(!fs.existsSync(path.join(root, ".plans", "specs", "a")), "no folder from a path-like name");
 	}),
@@ -427,5 +428,44 @@ test(
 			"skipped .plans/inbox/bad/../name.md.draft: bad file name",
 		]);
 		assert.deepEqual(result.event, { kind: "vault.restore", data: { restored: 2, skipped: 2 } });
+	}),
+);
+
+test(
+	"leaves a plan note without a file property alone and does not count it",
+	withRoot(async ({ root }) => {
+		makeRepo(root);
+		const vault = path.join(root, "vault");
+		makeVault(vault);
+		writeNote(vault, "plan", "fileless-plan", { trace: "t", round: "1", repo: SLUG, status: "draft" }, planBody("draft"));
+
+		const { c, outs, errs } = makeContext(vault, root);
+		const result = restore(c);
+
+		assert.equal(result.code, 0);
+		assert.deepEqual(errs, []);
+		assert.deepEqual(outs, []);
+		assert.deepEqual(result.event, { kind: "vault.restore", data: { restored: 0, skipped: 0 } });
+		assert.ok(!fs.existsSync(path.join(root, ".plans", "inbox")), "no folder and no plan written");
+	}),
+);
+
+test(
+	"reports a failed write on err and returns 1",
+	withRoot(async ({ root }) => {
+		makeRepo(root);
+		const vault = path.join(root, "vault");
+		makeVault(vault);
+		writeNote(vault, "spec", "unwritable-spec", { trace: "t", repo: SLUG, status: "draft", file: "x.md" }, "text\n");
+		// A regular file where the folder has to go makes the write fail.
+		fs.writeFileSync(path.join(root, ".plans", "specs"), "not a folder\n", "utf8");
+
+		const { c, outs, errs } = makeContext(vault, root);
+		const result = restore(c);
+
+		assert.equal(result.code, 1);
+		assert.equal(result.event, undefined);
+		assert.deepEqual(outs, []);
+		assert.deepEqual(errs, ["restore: cannot write .plans/specs/x.md"]);
 	}),
 );
