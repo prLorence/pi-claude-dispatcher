@@ -122,10 +122,10 @@ Built:
 - The vault's milestone mirror of specs, plans and ideas.
 - The run record copy (`work add`) and `restore` on a new machine.
 - The config sync (`config push` and `config pull`).
+- The monitor: a read-only local web app on Bun, in `monitor/`, showing task rows with implementer and reviewer lanes and a live transcript.
 
 Planned:
 
 - Graphify.
 - The permissions hook.
 - The agent-vault plan queue (Phase 2).
-- A web monitor for worker sessions.

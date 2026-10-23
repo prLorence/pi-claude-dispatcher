@@ -39,6 +39,8 @@ Facts about this repository, true today unless marked planned:
   touching the same files.
 - **The contract is plain files** under `.plans/`, so it does not depend on one
   model, one provider or one harness.
+- **A read-only monitor web app** for one plan: task rows with the implementer
+  and reviewer lanes side by side and a live transcript of the selected lane.
 
 Planned (in progress or drafted):
 
@@ -46,7 +48,6 @@ Planned (in progress or drafted):
 - Live tool-call blocking inside workers.
 - Plan preflight checks before any worker starts.
 - A workflow-wide hook that stops Claude from editing code at all.
-- A read-only monitor web app.
 
 ## Landscape, from our own research
 
@@ -93,7 +94,8 @@ integration with existing review tooling.
   are needed before parallel work is safe on a stranger's repository.
 - **Durable queue and crash resume.** A plan left in `running/` after a crash is
   not resumed.
-- **Auth and a safe monitor.** The monitor is loopback-only and read-only.
+- **Auth.** The monitor is built, loopback-only and read-only; user
+  authentication for anything beyond loopback is still missing.
 - **Multi-repo support.**
 - **Secrets handling and cost caps.**
 - **Coupling to Pi.** CLI flags, event names and the session format need an

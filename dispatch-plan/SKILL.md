@@ -54,6 +54,10 @@ Covers: R2.
 - `pair: review` on a risky implementation task runs a read-only reviewer before the task counts as done. It roughly doubles worker spend on that task, which is small next to an audit round; `pair_rounds:` (1-3) bounds it.
 - Never write model names in plans unless you are overriding on purpose. `.plans/config.json` maps roles to models; the per-task overrides `model:` and `thinking:` (for example `thinking: high`) exist for that deliberate exception.
 - Preflight rejects the plan before any worker starts when a `files:` entry is absolute, contains a `..` segment, or points inside `.git/` or `.plans/`; a task lists more than `maxFilesPerTask` files (10); a task body is longer than `maxTaskChars` chars (8000); or a `verify:` executable cannot be found. Keep tasks small: split rather than widen.
+- Two tasks that edit the same file need a `depends_on` edge between them. Overlapping `files:` already stop them running at the same time; the edge also fixes the order, so one task's result is on disk before the other starts.
+- A task whose `verify:` imports or runs another task's files must list that task in `depends_on`. Otherwise a half-finished edit by one worker breaks this task's verify.
+- A plan that creates or audits untracked files needs a paragraph in its shared context: tell the read-only reviewer to read those files in full, because `git diff` shows nothing for a new file, and to answer only in the `VERDICT` / `FINDINGS` format.
+- Every `verify:` command, plan-level ones included, must finish inside the dispatcher's `verifyTimeoutMinutes` (default 10). Any inner `timeout` values together must stay below that, or the dispatcher kills the command and the attempt fails.
 - Put shared interfaces in the plan context, or in an early task others depend on, so parallel workers agree. Workers don't commit; the user commits, and only when they asked.
 
 ## 2. Spec
@@ -63,7 +67,10 @@ The orchestrator clarifies the request with the `grilling` skill until the requi
 ```markdown
 # Spec: <title>
 
-Trace: <trace>. Date: <date>.
+Trace: <trace>. Date: <date>. Status: draft, then confirmed by the user on <date>.
+
+## Why
+<the problem and what prompted it>
 
 ## Goal
 <one paragraph: what changes and why>
@@ -81,14 +88,16 @@ Trace: <trace>. Date: <date>.
 ## Acceptance criteria
 - <how a reader can tell the result is right>
 
-## Decisions (user, <date>)
-1. <decision and its reason>
+## Decisions log
+- <date>: <decision and its reason> (<who decided>)
 
 ## Open items (not blocking this spec)
 - <question still open, or none>
 ```
 
 Number the requirements R1 to Rn and keep the numbers stable: plans, audit findings and the trace table refer to them by number. When the user confirms the spec, the orchestrator logs `spec.confirmed` (data `{"spec": "<path>", "requirements": <count>}`).
+
+**Amending a confirmed spec.** Edit the spec, add a decisions-log line that says what changed and why, and tell the user in the next message. In a `full` repo, rewrite the vault `spec` note with `note new spec`, passing every property again, because it is an upsert that drops the properties you do not pass. A refinement that only makes a requirement more precise or stricter may be applied by the orchestrator and reported; one that adds scope or relaxes a rule needs the user's yes first.
 
 ## 3. Draft it atomically
 
@@ -146,7 +155,7 @@ On exit `0` it prints the summary and a `GATE PASS|FAIL` line. Read the exit cod
 - `2`: the plan was rejected, which is a format error. Read `.plans/failed/<id>.error.md`, rewrite `.plans/inbox/<id>.md.draft` from `.plans/failed/<id>.md` with the fix and `status: draft`, rerun preflight, get the user's approval again, log `plan.approved` again, re-audit if more than the rejected line changed (that re-audit counts toward the `audit_round` cap of 3), then flip it under the same id. The extension deletes the stale rejection files when it accepts the plan, so nothing has to be removed by hand; `wait` also ignores a rejection older than the wait while the plan is queued or running.
 - `3`: still running. Call `wait` again, at most 6 calls in total for one plan. If the 6th call still exits `3`, stop and tell the user.
 - `4`: never picked up, so the Pi session with `pi-plan-dispatch` is probably not running. Stop and tell the user.
-- Any other exit code: call `wait` again, at most 6 calls in total for one plan. If the error says a module or file was not found, stop at once and tell the user: the installed skill folder is stale (section 9).
+- Any other exit code: call `wait` again, at most 6 calls in total for one plan. If the error says a module or file was not found, stop at once and tell the user: the installed skill folder is stale (section 10).
 
 ## 7. Gate and evidence
 
@@ -161,6 +170,8 @@ Every finished plan leaves `.plans/done/<id>/` with `plan.md`, `_summary.md` (ga
 | info | `retried`, `security_finding` at low severity |
 
 The gate passes only when every task is done and there are zero error faults. A dry run never passes. The gate is necessary, not sufficient: read the changed files, the `verify:` output and the task reports before reporting to the user, and report the faults in plain words.
+
+**Review coverage.** The gate does not prove that the pair reviews happened: `review_unparsed` is only a warning, so a plan whose reviews all failed can still pass. After every run, read the `task.review` events of the trace with `grep '"kind":"task.review"' .plans/traces/<trace>.jsonl`; an event with `ok: false` or verdict `unknown` is a review that did not happen. Report that to the user and do not call the task reviewed. When the review endpoint failed or a free review model's period ended, as with the `402 Endpoint is unavailable` failures of `20261022-1444-vault-cli-r1` whose gate still passed, move `roles.review.model` in `.plans/config.json`: the dispatcher cannot re-run one review on its own, so the new model takes effect in the next plan or fix round.
 
 ## 8. Trace
 
@@ -198,6 +209,27 @@ The record of a finished request goes to `work/<trace>/` (the trace without its 
 
 The copy fails closed: a file that is not UTF-8 text, that matches a secret pattern or that names a `none` repo is not copied, is printed as `unmirrored <path>: <reason>`, and leaves the exit code `6` (partial) while the rest is copied. `work add` in a `meta` repo copies nothing and exits `0`; in a `none` repo it exits `3`.
 
+### Session start
+
+1. Run `vault.mjs resolve`.
+2. Run `vault.mjs repo check`: exit `3` means the repo's mode is `none`, so skip every vault step for the request and say so once.
+3. Run `vault.mjs sync pull`.
+4. Run `vault.mjs boot` and read its text before you plan.
+5. Run `work pending --root <repo root>`.
+6. Run `work add --trace <T> --root <repo root>` for each `pending <T>` line it prints.
+7. Run `restore --root <repo root>`.
+
+### After a run
+
+1. Run `trace.mjs report --trace <T>`, so `trace.md` exists before the copy.
+2. Write the `run` note and the `finding` notes with `note new`.
+3. Run `work add --trace <T> --root <repo root>`, with `--probes` when the request has probes.
+4. `note set` the plan status `done` or `failed`, and the spec status `done` when the request is finished.
+5. Run `log append`.
+6. Run `sync push` when `sync_push` in the vault's `harness.json` is `auto`; when it is `manual`, commit nothing and tell the user a push is due.
+
+The wrong order loses data: `work add` sets the `unmirrored` list that a later `note new run` would drop, and the copy needs `trace.md`. `dispatch-plan/ORCHESTRATOR.md` is the source of truth for both lists.
+
 ### Install
 
 ```bash
@@ -206,4 +238,4 @@ mkdir -p ~/.claude/agents && cp dispatch-plan/agents/plan-auditor.md ~/.claude/a
 rm -f ~/.claude/agents/planner.md ~/.claude/agents/auditor.md
 ```
 
-Copy the runtime files by name; the `dispatch-plan/` folder also holds `archive/` and the tests, which must not be installed. The `rm -f` line removes the two superseded agent files from an earlier install. The installed copies are what `~/.claude/skills/dispatch-plan/trace.mjs` and `preflight.mjs` resolve to, so refresh them after pulling changes; a missing module means a stale install.
+Copy the runtime files by name; the `dispatch-plan/` folder also holds `archive/` and the tests, which must not be installed. The `rm -f` line removes the two superseded agent files from an earlier install. The installed copies are what `~/.claude/skills/dispatch-plan/trace.mjs` and `preflight.mjs` resolve to, so refresh them after pulling changes; a missing module means a stale install. `node dispatch-plan/vault.mjs setup --force` writes every runtime file and the agents in one step; without `--force`, setup keeps an installed file that differs from what it last wrote and prints `kept (modified): <path>`, which is how a stale or hand-edited install shows up.
