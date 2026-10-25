@@ -8,8 +8,13 @@ export async function fetchState(): Promise<MonitorState> {
   return (await res.json()) as MonitorState;
 }
 
-export async function fetchSession(plan: string, id: string, after: number): Promise<SessionPage> {
-  const url = `/api/session/${encodeURIComponent(plan)}/${encodeURIComponent(id)}?after=${after}`;
+export async function fetchSession(
+  repo: string,
+  plan: string,
+  id: string,
+  after: number,
+): Promise<SessionPage> {
+  const url = `/api/session/${encodeURIComponent(repo)}/${encodeURIComponent(plan)}/${encodeURIComponent(id)}?after=${after}`;
   const res = await fetch(url);
   if (!res.ok) {
     throw new Error(`GET ${url} failed with ${res.status}`);

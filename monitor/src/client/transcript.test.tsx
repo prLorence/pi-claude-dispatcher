@@ -1,7 +1,8 @@
 import { test, expect } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Entry, EntryKind } from "../shared/types";
-import { TranscriptView } from "./Transcript";
+import { Transcript, TranscriptView } from "./Transcript";
+import { fetchSession } from "./api";
 
 function makeEntry(kind: EntryKind, over: Partial<Entry> = {}): Entry {
   return {
@@ -20,6 +21,36 @@ function makeEntry(kind: EntryKind, over: Partial<Entry> = {}): Entry {
 function render(entries: Entry[]): string {
   return renderToStaticMarkup(<TranscriptView entries={entries} title="plan.t1.a1" />);
 }
+
+test("fetchSession asks the repo's route and encodes every segment", async () => {
+  const original = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+    calls.push(String(input));
+    const body = { id: "s1", live: false, ended: true, entries: [], next: 4 };
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  try {
+    const page = await fetchSession("dfph-app", "plan/1", "a 1", 4);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toBe("/api/session/dfph-app/plan%2F1/a%201?after=4");
+    expect(page.id).toBe("s1");
+    expect(page.next).toBe(4);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("shows the placeholder when no attempt is selected for a repo", () => {
+  const html = renderToStaticMarkup(
+    <Transcript repo="dfph-app" planId="plan.t1" attemptId={null} />,
+  );
+  expect(html).toContain("Select a lane to read its transcript");
+});
 
 test("renders the title", () => {
   const html = render([]);

@@ -122,7 +122,7 @@ Built:
 - The vault's milestone mirror of specs, plans and ideas.
 - The run record copy (`work add`) and `restore` on a new machine.
 - The config sync (`config push` and `config pull`).
-- The monitor: a read-only local web app on Bun, in `monitor/`, showing task rows with implementer and reviewer lanes and a live transcript.
+- The monitor: a read-only local web app on Bun, in `monitor/`, showing task rows with implementer and reviewer lanes and a live transcript. It shows several repos on one screen from a configured list, stacked boards for the repos with a running plan and one-line strips for the idle ones, and it shows the decider's suggested level next to the level that ran.
 
 Planned:
 

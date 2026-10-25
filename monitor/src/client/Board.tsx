@@ -1,4 +1,4 @@
-import type { PlanView } from "../shared/types";
+import type { DeciderAuditView, PlanView } from "../shared/types";
 import { LaneCell } from "./LaneCell";
 
 interface BoardProps {
@@ -9,6 +9,22 @@ interface BoardProps {
 
 function gateText(plan: PlanView): string {
   return plan.gate === null ? "gate -" : `gate ${plan.gate}`;
+}
+
+function Audit({ audit }: { audit: DeciderAuditView }) {
+  return (
+    <span className="plan-audit">
+      {`decider audit: ${audit.proposal} (${audit.aggregate.toFixed(2)})`}
+      <details>
+        <summary>findings</summary>
+        <ul>
+          {audit.findings.map((finding) => (
+            <li key={finding.id}>{`${finding.id} ${finding.severity} ${finding.p.toFixed(2)}`}</li>
+          ))}
+        </ul>
+      </details>
+    </span>
+  );
 }
 
 export function Board(props: BoardProps) {
@@ -23,6 +39,7 @@ export function Board(props: BoardProps) {
           {plan.done}/{plan.total} tasks
         </span>
         <span className="plan-gate">{gateText(plan)}</span>
+        {plan.audit === null ? null : <Audit audit={plan.audit} />}
       </header>
       {plan.tasks.map((task) => (
         <div className="task-row" key={task.id}>
@@ -38,6 +55,7 @@ export function Board(props: BoardProps) {
             lane={task.implementer}
             kind="implementer"
             selectedId={selectedId}
+            decider={task.decider}
             onSelect={(attemptId) => onSelect(plan.id, attemptId)}
           />
           <LaneCell

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Attempt, Lane, ReviewResult } from "../shared/types";
+import type { Attempt, DeciderTaskView, Lane, ReviewResult } from "../shared/types";
 import { formatCost, formatElapsed, formatTokens, stateLabel } from "./format";
 
 interface LaneCellProps {
@@ -7,6 +7,20 @@ interface LaneCellProps {
   kind: "implementer" | "reviewer";
   selectedId: string | null;
   onSelect: (attemptId: string) => void;
+  decider?: DeciderTaskView | null;
+}
+
+function twoDecimals(value: number): string {
+  return value.toFixed(2);
+}
+
+function deciderTitle(decider: DeciderTaskView): string {
+  const probabilities = Object.entries(decider.probabilities)
+    .map(([level, value]) => `${level} ${twoDecimals(value)}`)
+    .join(", ");
+  const confidence = decider.confidence === null ? "-" : twoDecimals(decider.confidence);
+  const complexity = decider.complexity === null ? "-" : twoDecimals(decider.complexity);
+  return `probabilities: ${probabilities === "" ? "-" : probabilities}, confidence: ${confidence}, complexity: ${complexity}`;
 }
 
 function pickAttempt(lane: Lane, label: string | null): Attempt | null {
@@ -34,8 +48,16 @@ function verdictText(review: ReviewResult): string {
 }
 
 export function LaneCell(props: LaneCellProps) {
-  const { lane, kind, selectedId, onSelect } = props;
+  const { lane, kind, selectedId, onSelect, decider } = props;
   const [chosen, setChosen] = useState<string | null>(null);
+
+  const diff = decider !== null && decider !== undefined && decider.ran !== null && decider.ran !== decider.suggested;
+  const badge =
+    kind === "implementer" && decider !== null && decider !== undefined ? (
+      <span className={diff ? "decider-badge decider-diff" : "decider-badge"} title={deciderTitle(decider)}>
+        {`decider: ${decider.suggested} - ran: ${decider.ran === null ? "-" : decider.ran}`}
+      </span>
+    ) : null;
 
   if (lane === null) {
     return (
@@ -51,6 +73,7 @@ export function LaneCell(props: LaneCellProps) {
     return (
       <div className={`lane lane-${kind} lane-empty`}>
         <span className="badge badge-waiting">{stateLabel("waiting")}</span>
+        {badge}
       </div>
     );
   }
@@ -98,6 +121,7 @@ export function LaneCell(props: LaneCellProps) {
             ))}
           </span>
         ) : null}
+        {badge}
       </div>
       <div className="lane-meta">
         <span className="lane-model">{attempt.model === null ? "-" : attempt.model}</span>

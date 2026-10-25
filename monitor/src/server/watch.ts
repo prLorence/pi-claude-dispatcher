@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { resolveInside } from "./http.ts";
+import { selectPlan } from "./plans.ts";
+import type { RepoConfig } from "./repos.ts";
 
 function names(dir: string): string[] {
   try {
@@ -30,7 +32,7 @@ function entries(dir: string, filter?: (name: string) => boolean): string[] {
   return parts;
 }
 
-export function signature(plansDir: string, planId: string | null): string {
+export function repoSignature(plansDir: string, planId: string | null): string {
   let isDirectory = false;
   try {
     isDirectory = fs.statSync(plansDir).isDirectory();
@@ -65,4 +67,14 @@ export function signature(plansDir: string, planId: string | null): string {
   }
 
   return parts.join("|");
+}
+
+/** One line per repo: `<name>=<repoSignature of that repo's shown plan>`. */
+export function signature(repos: RepoConfig[]): string {
+  return repos
+    .map((repo) => {
+      const planId = selectPlan(repo.dir).plan?.id ?? null;
+      return `${repo.name}=${repoSignature(repo.dir, planId)}`;
+    })
+    .join("\n");
 }

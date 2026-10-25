@@ -25,6 +25,20 @@ export interface Lane {
   state: LaneState; // state of the newest attempt, "waiting" when there is none
   attempts: Attempt[];
 }
+export interface DeciderTaskView {
+  suggested: string; // "low" | "high" | "max"
+  probabilities: Record<string, number>;
+  confidence: number | null;
+  complexity: number | null;
+  ran: string | null; // thinking of the task's first task.start, null before it starts
+}
+export interface DeciderAuditView {
+  proposal: string; // "approve" | "hold" | "dismiss" | "fix"
+  aggregate: number;
+  verdict: string; // "pass" | "fail"
+  auditRound: number;
+  findings: { id: string; severity: string; p: number }[];
+}
 export interface TaskRow {
   id: string;
   role: string;
@@ -34,6 +48,7 @@ export interface TaskRow {
   skipped: boolean; // the plan is not running and the task has no events at all
   implementer: Lane;
   reviewer: Lane | null; // null when pair is null
+  decider: DeciderTaskView | null; // null when the trace has no decision.effort event
 }
 export interface PlanView {
   id: string;
@@ -44,10 +59,19 @@ export interface PlanView {
   done: number; // tasks whose latest task.end state is "done"
   total: number;
   tasks: TaskRow[];
+  audit: DeciderAuditView | null; // null when the trace has no decision.audit event
+}
+export interface RepoView {
+  name: string;
+  active: boolean; // the repo has a plan in running/
+  plan: PlanView | null; // the running plan, else the latest finished one
+  message: string | null; // why there is no plan, or why the folder cannot be read
+  startedAt: string | null; // ISO ts of the shown plan's first event (orders active repos)
+  lastActivity: string | null; // ISO ts of the shown plan's last event
 }
 export interface MonitorState {
-  plan: PlanView | null;
-  message: string | null;
+  repos: RepoView[]; // active first (newest startedAt first), then idle by lastActivity, newest first
+  message: string | null; // a note about the configuration, for example repos ignored over the cap
   now: string;
 }
 export type EntryKind = "user" | "assistant" | "thinking" | "tool_call" | "tool_result" | "note";

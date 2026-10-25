@@ -458,6 +458,7 @@ export function buildPlanView(
       skipped,
       implementer: skipped ? emptyLane() : laneOf(implementers),
       reviewer: task.pair === null ? null : skipped ? emptyLane() : laneOf(reviewers),
+      decider: null,
     };
   });
 
@@ -480,5 +481,6 @@ export function buildPlanView(
     done: plan.tasks.filter((task) => isDoneTask(task.id)).length,
     total: plan.tasks.length,
     tasks,
+    audit: null,
   };
 }

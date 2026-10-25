@@ -3,13 +3,14 @@ import { extname } from "node:path";
 import type { SessionPage } from "../shared/types.ts";
 import { ID_RE, checkRequest, json, resolveInside, withHeaders } from "./http.ts";
 import { STALL_MS } from "./lanes.ts";
-import { selectPlan } from "./plans.ts";
+import type { RepoConfig } from "./repos.ts";
 import { findSessionFile, parseSessionLines, summarizeSession } from "./sessions.ts";
 import { readState } from "./state.ts";
 import { signature } from "./watch.ts";
 
 export interface ServerOptions {
-  plansDir: string;
+  repos: RepoConfig[];
+  message?: string | null;
   staticDir: string;
   port: number;
   host: string;
@@ -106,9 +107,11 @@ function staticFile(staticDir: string, pathname: string): Response {
 }
 
 export function startServer(opts: ServerOptions): ServerHandle {
-  const { plansDir, staticDir, host } = opts;
+  const { repos, staticDir, host } = opts;
+  const message = opts.message ?? null;
   const pollMs = opts.pollMs ?? 500;
   const clients = new Set<Client>();
+  const byName = new Map<string, RepoConfig>(repos.map((repo) => [repo.name, repo]));
 
   const write = (client: Client, text: string): void => {
     try {
@@ -151,7 +154,7 @@ export function startServer(opts: ServerOptions): ServerHandle {
     const pathname = url.pathname;
 
     if (pathname === "/api/state") {
-      return json(readState(plansDir));
+      return json(readState(repos, Date.now(), message));
     }
 
     if (pathname === "/api/events") {
@@ -160,13 +163,18 @@ export function startServer(opts: ServerOptions): ServerHandle {
 
     if (pathname.startsWith("/api/session/")) {
       const parts = pathname.split("/");
-      if (parts.length !== 5) {
+      if (parts.length !== 6) {
         return json({ error: "not found" }, 404);
       }
-      const planId = decodeSegment(parts[3]);
-      const sessionId = decodeSegment(parts[4]);
-      if (planId === null || sessionId === null) {
+      const repoName = decodeSegment(parts[3]);
+      const planId = decodeSegment(parts[4]);
+      const sessionId = decodeSegment(parts[5]);
+      if (repoName === null || planId === null || sessionId === null) {
         return json({ error: "bad id" }, 400);
+      }
+      const repo = byName.get(repoName);
+      if (repo === undefined) {
+        return json({ error: "not found" }, 404);
       }
       if (!ID_RE.test(planId) || !ID_RE.test(sessionId)) {
         return json({ error: "bad id" }, 400);
@@ -181,7 +189,7 @@ export function startServer(opts: ServerOptions): ServerHandle {
         after = Number.parseInt(rawAfter, 10);
       }
 
-      return sessionPage(plansDir, planId, sessionId, after);
+      return sessionPage(repo.dir, planId, sessionId, after);
     }
 
     if (pathname.startsWith("/api/")) {
@@ -206,7 +214,7 @@ export function startServer(opts: ServerOptions): ServerHandle {
     },
   });
 
-  let last = signature(plansDir, selectPlan(plansDir).plan?.id ?? null);
+  let last = signature(repos);
   let lastPing = Date.now();
 
   const poll = setInterval(() => {
@@ -216,7 +224,7 @@ export function startServer(opts: ServerOptions): ServerHandle {
         lastPing = now;
         broadcast(": ping\n\n");
       }
-      const current = signature(plansDir, selectPlan(plansDir).plan?.id ?? null);
+      const current = signature(repos);
       if (current !== last) {
         last = current;
         broadcast("event: change\ndata: {}\n\n");

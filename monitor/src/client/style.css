@@ -85,6 +85,162 @@ body {
   color: var(--muted);
 }
 
+/* Repo sections */
+
+.state-message {
+  margin: 0 0 12px;
+  font-size: 12px;
+}
+
+.repo-section {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.repo-active {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.repo-idle {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.repo-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.repo-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+
+.repo-live {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--live);
+}
+
+.repo-message {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.repo-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 12px;
+  width: 100%;
+  margin: 0;
+  padding: 6px 10px 6px 26px;
+  position: relative;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  color: var(--fg);
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.repo-strip:hover {
+  background: var(--bg);
+}
+
+.repo-strip::before {
+  content: "\25B8";
+  position: absolute;
+  left: 10px;
+  color: var(--muted);
+}
+
+.repo-strip[aria-expanded="true"]::before {
+  content: "\25BE";
+}
+
+.repo-strip-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 600;
+}
+
+.repo-strip-plan,
+.repo-strip-state,
+.repo-strip-gate {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.repo-idle > .board {
+  margin: 0 8px 8px;
+}
+
+/* Decider overlay */
+
+.decider-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--bg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: nowrap;
+}
+
+.decider-diff {
+  border-color: var(--stalled);
+  color: var(--stalled);
+}
+
+.plan-audit {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.plan-audit details {
+  padding: 0;
+}
+
+.plan-audit summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.plan-audit ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 /* Board */
 
 .board {

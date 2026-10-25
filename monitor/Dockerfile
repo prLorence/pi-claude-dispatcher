@@ -13,7 +13,7 @@ RUN bun install --frozen-lockfile --production
 COPY --from=build /app/src/server ./src/server
 COPY --from=build /app/src/shared ./src/shared
 COPY --from=build /app/dist ./dist
-ENV PLANS_DIR=/plans
+ENV PLANS_ROOT=/plans
 ENV STATIC_DIR=/app/dist
 ENV HOST=0.0.0.0
 ENV PORT=4317

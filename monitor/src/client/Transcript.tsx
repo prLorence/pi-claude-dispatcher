@@ -74,7 +74,8 @@ export function TranscriptView(props: { entries: Entry[]; title: string }) {
 
 type Status = "idle" | "loading" | "ready" | "error";
 
-export function Transcript(props: { planId: string; attemptId: string | null }) {
+export function Transcript(props: { repo: string; planId: string; attemptId: string | null }) {
+  const repo = props.repo;
   const planId = props.planId;
   const attemptId = props.attemptId;
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -103,7 +104,7 @@ export function Transcript(props: { planId: string; attemptId: string | null }) 
       const after = next;
       let page;
       try {
-        page = await fetchSession(planId, attemptId, after);
+        page = await fetchSession(repo, planId, attemptId, after);
       } catch {
         if (!cancelled) setStatus("error");
         return;
@@ -146,7 +147,7 @@ export function Transcript(props: { planId: string; attemptId: string | null }) 
       cancelled = true;
       unsubscribe();
     };
-  }, [planId, attemptId]);
+  }, [repo, planId, attemptId]);
 
   useEffect(() => {
     const el = scrollRef.current;

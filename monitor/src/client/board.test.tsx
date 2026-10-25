@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { Attempt, Lane, LaneState, PlanView, ReviewResult, TaskRow } from "../shared/types";
+import type { Attempt, DeciderTaskView, Lane, LaneState, PlanView, ReviewResult, TaskRow } from "../shared/types";
 import { Board } from "./Board";
 import { LaneCell } from "./LaneCell";
 
@@ -37,6 +37,7 @@ function task(over: Partial<TaskRow> = {}): TaskRow {
     skipped: false,
     implementer: lane([attempt()]),
     reviewer: null,
+    decider: null,
     ...over,
   };
 }
@@ -51,6 +52,7 @@ function plan(over: Partial<PlanView> = {}): PlanView {
     done: 0,
     total: 1,
     tasks: [task()],
+    audit: null,
     ...over,
   };
 }
@@ -173,4 +175,154 @@ test("a task id is escaped", () => {
   const html = renderPlan(plan({ tasks: [task({ id: "<img onerror=x>" })] }));
   expect(html).toContain("&lt;img");
   expect(html).not.toContain("<img");
+});
+
+const deciderView = (over: Partial<DeciderTaskView> = {}): DeciderTaskView => ({
+  suggested: "high",
+  probabilities: { low: 0.1, high: 0.8, max: 0.1 },
+  confidence: 0.845,
+  complexity: 0.5,
+  ran: "high",
+  ...over,
+});
+
+test("the decider badge is plain when the level matches", () => {
+  const html = renderToStaticMarkup(
+    <LaneCell
+      lane={lane([attempt()])}
+      kind="implementer"
+      selectedId={null}
+      onSelect={noop}
+      decider={deciderView()}
+    />,
+  );
+  expect(html).toContain("decider-badge");
+  expect(html).toContain("decider: high - ran: high");
+  expect(html).not.toContain("decider-diff");
+});
+
+test("the decider badge is highlighted when the level differs", () => {
+  const html = renderToStaticMarkup(
+    <LaneCell
+      lane={lane([attempt()])}
+      kind="implementer"
+      selectedId={null}
+      onSelect={noop}
+      decider={deciderView({ ran: "low" })}
+    />,
+  );
+  expect(html).toContain("decider-badge decider-diff");
+  expect(html).toContain("decider: high - ran: low");
+});
+
+test("the decider badge shows a dash before the task starts, from an empty lane", () => {
+  const html = renderToStaticMarkup(
+    <LaneCell
+      lane={{ state: "waiting", attempts: [] }}
+      kind="implementer"
+      selectedId={null}
+      onSelect={noop}
+      decider={deciderView({ ran: null })}
+    />,
+  );
+  expect(html).toContain("badge badge-waiting");
+  expect(html).toContain("decider: high - ran: -");
+  expect(html).not.toContain("decider-diff");
+});
+
+test("the decider badge shows a dash before the task starts, from a lane with an attempt", () => {
+  const html = renderToStaticMarkup(
+    <LaneCell
+      lane={lane([attempt({ state: "waiting" })])}
+      kind="implementer"
+      selectedId={null}
+      onSelect={noop}
+      decider={deciderView({ ran: null })}
+    />,
+  );
+  expect(html).toContain("decider: high - ran: -");
+  expect(html).not.toContain("decider-diff");
+});
+
+test("no decider renders no badge", () => {
+  const html = renderToStaticMarkup(
+    <LaneCell lane={lane([attempt()])} kind="implementer" selectedId={null} onSelect={noop} decider={null} />,
+  );
+  expect(html).not.toContain("decider-badge");
+});
+
+test("a reviewer cell never renders the decider badge", () => {
+  const html = renderToStaticMarkup(
+    <LaneCell
+      lane={lane([attempt({ label: "r1", id: "p1.t1.review1.a1" })])}
+      kind="reviewer"
+      selectedId={null}
+      onSelect={noop}
+      decider={deciderView()}
+    />,
+  );
+  expect(html).not.toContain("decider-badge");
+});
+
+test("the decider title lists probabilities, confidence and complexity", () => {
+  const html = renderToStaticMarkup(
+    <LaneCell
+      lane={lane([attempt()])}
+      kind="implementer"
+      selectedId={null}
+      onSelect={noop}
+      decider={deciderView()}
+    />,
+  );
+  expect(html).toContain("low 0.10, high 0.80, max 0.10");
+  expect(html).toContain("confidence: 0.84");
+  expect(html).toContain("complexity: 0.50");
+});
+
+test("the board passes the task decider to the implementer lane", () => {
+  const html = renderPlan(plan({ tasks: [task({ decider: deciderView({ ran: "low" }) })] }));
+  expect(html).toContain("decider: high - ran: low");
+  expect(html).toContain("decider-diff");
+});
+
+test("the plan header shows the audit line with its findings", () => {
+  const html = renderPlan(
+    plan({
+      audit: {
+        proposal: "fix",
+        aggregate: 0.627,
+        verdict: "fail",
+        auditRound: 1,
+        findings: [
+          { id: "f1", severity: "major", p: 0.5 },
+          { id: "f2", severity: "minor", p: 0.125 },
+        ],
+      },
+    }),
+  );
+  expect(html).toContain("plan-audit");
+  expect(html).toContain("decider audit: fix (0.63)");
+  expect(html).toContain("f1 major 0.50");
+  expect(html).toContain("f2 minor 0.13");
+});
+
+test("no audit line when the plan has no audit", () => {
+  const html = renderPlan(plan({ audit: null }));
+  expect(html).not.toContain("plan-audit");
+});
+
+test("a hostile finding id is escaped", () => {
+  const html = renderPlan(
+    plan({
+      audit: {
+        proposal: "hold",
+        aggregate: 0.1,
+        verdict: "fail",
+        auditRound: 2,
+        findings: [{ id: "<b>x</b>", severity: "blocker", p: 1 }],
+      },
+    }),
+  );
+  expect(html).toContain("&lt;b&gt;x&lt;/b&gt;");
+  expect(html).not.toContain("<b>x</b>");
 });
