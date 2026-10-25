@@ -5,6 +5,8 @@
  *   trace.mjs event  --trace T --actor A --kind K [--plan P] [--round N] [--task X]
  *                    [--span S] [--parent S] [--data '{"k":"v"}']
  *   trace.mjs wait   --plan P [--timeout 540] [--pickup 90]
+ *   trace.mjs watch  --plan P [--timeout 3300] [--pickup 90]
+ *                    (prints one line per notable event of the plan, then exits)
  *   trace.mjs gate   --plan P
  *   trace.mjs report --trace T            (prints Markdown, writes .plans/traces/T.md)
  *   trace.mjs new-id [slug]               (prints a trace id: yyyymmdd-hhmm-slug)
@@ -13,6 +15,8 @@
  * .plans/traces/<trace>.jsonl, the same file the pi-plan-dispatch extension writes.
  *
  * Exit codes: wait 0 done / 2 rejected / 3 still running / 4 never picked up;
+ *             watch 0 plan ended / 2 rejected / 3 timeout / 4 not picked up
+ *               (64 on a usage error);
  *             gate 0 pass / 1 fail / 2 no evidence.
  */
 import * as fs from "node:fs";
@@ -121,6 +125,212 @@ async function cmdWait() {
 			process.exit(3);
 		}
 		await sleep(5000);
+	}
+}
+
+// Local wall clock of an event timestamp, so a line reads like a log.
+const hhmmss = (ts) => {
+	const d = new Date(ts ?? Date.now());
+	if (Number.isNaN(d.getTime())) return "--:--:--";
+	const p = (n) => String(n).padStart(2, "0");
+	return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+};
+
+// One line per event, so a message or an error newline may not break it.
+const cut = (v, n = 90) =>
+	String(v ?? "")
+		.replace(/\s+/g, " ")
+		.trim()
+		.slice(0, n);
+
+const costText = (v) => (Number.isFinite(v) ? `$${v.toFixed(4)}` : "$-");
+
+const planEndLine = (d, ts) =>
+	`${hhmmss(ts)} PLAN END done=${dash(d.done)} failed=${dash(d.failed)} skipped=${dash(d.skipped)} gate_pass=${dash(d.gate_pass)} cost=${costText(d.cost)}`;
+
+// The trace id of a plan lives in its frontmatter; a plan still in the inbox has one too.
+function resolveTrace(plan) {
+	for (const file of [path.join(root, "running", `${plan}.md`), path.join(root, "inbox", `${plan}.md`), path.join(root, "done", plan, "plan.md")]) {
+		try {
+			const m = fs.readFileSync(file, "utf8").match(/^trace:[ \t]*(\S+)[ \t]*$/m);
+			if (m) return safe(m[1].replace(/^["']|["']$/g, ""));
+		} catch {
+			// not there: try the next place
+		}
+	}
+	return plan;
+}
+
+// The PLAN END line of a finished plan: counts and gate from the evidence, cost from the plan.end event.
+function planEndFromEvidence(plan) {
+	const ev = readEvidence(plan);
+	if (!ev) return undefined;
+	const end = readEvents(ev.trace).filter((e) => e.plan === plan && e.kind === "plan.end").at(-1);
+	return {
+		ts: end?.ts,
+		done: ev.gate?.tasks?.done ?? 0,
+		failed: ev.gate?.tasks?.failed ?? 0,
+		skipped: ev.gate?.tasks?.skipped ?? 0,
+		gate_pass: ev.gate?.pass,
+		cost: end?.data?.cost,
+	};
+}
+
+// The reason line of a rejection file: the body is a heading, a blank line, then the reason.
+function rejectReason(file) {
+	try {
+		return fs.readFileSync(file, "utf8").split("\n").map((l) => l.trim()).find((l) => l && !l.startsWith("#")) || "";
+	} catch {
+		return "";
+	}
+}
+
+// The watch line of a notable event, or undefined when the kind is not notable.
+function watchLine(e) {
+	const d = e.data || {};
+	const t = hhmmss(e.ts);
+	switch (e.kind) {
+		case "task.end": {
+			const line = `${t} END ${dash(e.task)} a${e.attempt ?? 1} ${dash(d.state)} ok=${dash(d.ok)} ${dash(d.duration_s)}s`;
+			return d.error ? `${line} ERR ${cut(d.error)}` : line;
+		}
+		case "fault":
+			return `${t} FAULT ${dash(d.severity)} ${dash(d.code)} ${dash(e.task)} ${cut(d.message)}`;
+		case "task.review":
+			// An approved review is the normal case and stays quiet.
+			if (d.verdict === "approve" && d.ok !== false) return undefined;
+			return `${t} REVIEW ${dash(e.task)} ${dash(d.verdict)} ok=${dash(d.ok)}`;
+		case "gate":
+			return `${t} GATE pass=${dash(d.pass)} ${JSON.stringify(d.reasons ?? [])}`;
+		case "plan.rejected":
+			return `${t} REJECTED ${cut(d.reason)}`;
+		case "plan.end":
+			return planEndLine(d, e.ts);
+		default:
+			return undefined;
+	}
+}
+
+async function cmdWatch() {
+	if (!flags.plan) die("watch needs --plan", 64);
+	const plan = safe(flags.plan);
+	for (const k of ["timeout", "pickup"]) {
+		if (flags[k] === undefined) continue;
+		const n = Number(flags[k]);
+		// A NaN range would mean "never" and poll forever.
+		if (!Number.isFinite(n) || n <= 0) die(`--${k} must be a positive number of seconds`, 64);
+	}
+	const timeoutMs = Number(flags.timeout ?? 3300) * 1000;
+	const pickupMs = Number(flags.pickup ?? 90) * 1000;
+	const doneFile = path.join(root, "done", plan, "_summary.md");
+	const failedFile = path.join(root, "failed", `${plan}.error.md`);
+	const runningFile = path.join(root, "running", `${plan}.md`);
+	const inboxFile = path.join(root, "inbox", `${plan}.md`);
+	const t0 = Date.now();
+
+	if (fs.existsSync(doneFile)) {
+		const end = planEndFromEvidence(plan);
+		if (end) console.log(planEndLine(end, end.ts));
+		process.exitCode = 0;
+		return;
+	}
+
+	let trace = resolveTrace(plan);
+	let offset = 0;
+	try {
+		offset = fs.statSync(tracePath(trace)).size;
+	} catch {
+		// no trace file yet: nothing to skip
+	}
+	// Unfinished tail of a half-written line, kept as bytes so a split character survives.
+	let pending = Buffer.alloc(0);
+	let ended = false;
+	let rejected = false;
+
+	const onLine = (line) => {
+		let e;
+		try {
+			e = JSON.parse(line);
+		} catch {
+			return;
+		}
+		if (!e || e.plan !== plan) return;
+		const at = Date.parse(e.ts);
+		// Nothing from before the start, even from a trace file that only appears later.
+		if (!Number.isFinite(at) || at < t0) return;
+		const text = watchLine(e);
+		if (text) console.log(text);
+		if (e.kind === "plan.end") ended = true;
+		if (e.kind === "plan.rejected") rejected = true;
+	};
+
+	const readNew = () => {
+		// A queued plan has no trace file yet, so its id may still change.
+		if (!fs.existsSync(tracePath(trace))) trace = resolveTrace(plan);
+		let fd;
+		try {
+			fd = fs.openSync(tracePath(trace), "r");
+		} catch {
+			return;
+		}
+		try {
+			const size = fs.fstatSync(fd).size;
+			if (size < offset) {
+				offset = 0;
+				pending = Buffer.alloc(0);
+			}
+			if (size > offset) {
+				const buf = Buffer.alloc(size - offset);
+				fs.readSync(fd, buf, 0, buf.length, offset);
+				offset = size;
+				pending = Buffer.concat([pending, buf]);
+			}
+		} finally {
+			fs.closeSync(fd);
+		}
+		let start = 0;
+		for (;;) {
+			const nl = pending.indexOf(10, start);
+			if (nl === -1) break;
+			onLine(pending.subarray(start, nl).toString("utf8"));
+			start = nl + 1;
+		}
+		pending = pending.subarray(start);
+	};
+
+	for (;;) {
+		readNew();
+		if (ended || fs.existsSync(doneFile)) {
+			if (!ended) {
+				const end = planEndFromEvidence(plan);
+				if (end) console.log(planEndLine(end, end.ts));
+			}
+			process.exitCode = 0;
+			return;
+		}
+		if (fs.existsSync(failedFile)) {
+			// Same staleness rule as wait: an older drop of this id, still queued, is not this run.
+			const stale = fs.statSync(failedFile).mtimeMs < t0 && (fs.existsSync(runningFile) || fs.existsSync(inboxFile));
+			if (rejected || !stale) {
+				if (!rejected) console.log(`${hhmmss()} REJECTED ${cut(rejectReason(failedFile))}`);
+				process.exitCode = 2;
+				return;
+			}
+		} else if (rejected) {
+			process.exitCode = 2;
+			return;
+		}
+		if (!fs.existsSync(runningFile) && fs.existsSync(inboxFile) && Date.now() - t0 > pickupMs) {
+			console.log(`${hhmmss()} WATCH NOT PICKED UP (the Pi session is probably not running)`);
+			process.exitCode = 4;
+			return;
+		}
+		if (Date.now() - t0 > timeoutMs) {
+			console.log(`${hhmmss()} WATCH TIMEOUT after ${Math.round((Date.now() - t0) / 1000)}s`);
+			process.exitCode = 3;
+			return;
+		}
+		await sleep(1000);
 	}
 }
 
@@ -275,6 +485,33 @@ function renderModels(events) {
 	return out;
 }
 
+// Six decimals: one decider call costs about $0.000004, so fewer would print zero.
+const cost6 = (v) => (Number.isFinite(v) ? `$${v.toFixed(6)}` : "-");
+const esc = (v) => String(dash(v)).replace(/\|/g, "\\|");
+
+// One row per decision.* event, in time order. Effort is one event per task.
+function renderDecider(events) {
+	const rows = [];
+	for (const e of events) {
+		const d = e.data || {};
+		if (e.kind === "decision.effort")
+			rows.push([e.round, "effort", `${dash(d.task)}=${dash(d.suggested)}`, "-", cost6(d.cost)]);
+		else if (e.kind === "decision.audit")
+			rows.push([
+				e.round,
+				"audit",
+				`${dash(d.proposal)} (${dash(d.verdict)} audit round ${dash(d.audit_round)})`,
+				Number.isFinite(d.aggregate) ? d.aggregate.toFixed(2) : "-",
+				cost6(d.cost),
+			]);
+		else if (e.kind === "decision.error") rows.push([e.round, dash(d.command), `error ${dash(d.kind)} ${dash(d.status)}`, "-", cost6(d.cost)]);
+	}
+	if (!rows.length) return [];
+	const out = ["| round | command | result | aggregate | cost |", "|---|---|---|---|---|"];
+	for (const r of rows) out.push(`| ${r.map(esc).join(" | ")} |`);
+	return out;
+}
+
 function render(trace, events) {
 	const t0 = Date.parse(events[0].ts);
 	const plans = new Map();
@@ -332,6 +569,9 @@ function render(trace, events) {
 
 	out.push("", "## Models", "", ...renderModels(events));
 
+	const decider = renderDecider(events);
+	if (decider.length) out.push("", "## Decider", "", ...decider);
+
 	out.push("", "## Timeline", "", "| t | actor | event | span | detail |", "|---|---|---|---|---|");
 	for (const e of events) out.push(`| +${clock(Date.parse(e.ts) - t0)} | ${e.actor} | ${e.kind}${e.attempt > 1 ? ` #${e.attempt}` : ""} | \`${e.span}\` | ${detail(e).replace(/\|/g, "\\|")} |`);
 	out.push("", "Spans link by `parent`: task -> plan -> the plan it follows (fix rounds); audit -> plan. Per-task prompts and worker reports are in `.plans/done/<plan>/`.", "");
@@ -347,6 +587,9 @@ switch (cmd) {
 	case "wait":
 		await cmdWait();
 		break;
+	case "watch":
+		await cmdWatch();
+		break;
 	case "gate":
 		cmdGate();
 		break;
@@ -357,5 +600,5 @@ switch (cmd) {
 		cmdNewId();
 		break;
 	default:
-		die("usage: trace.mjs event|wait|gate|report|new-id (see the header of this file)", 64);
+		die("usage: trace.mjs event|wait|watch|gate|report|new-id (see the header of this file)", 64);
 }

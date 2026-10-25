@@ -127,6 +127,15 @@ Then spawn the read-only `plan-auditor` subagent (Opus 5.5) with the Agent tool,
 
 Verdict `pass` means zero blockers and zero majors. Revise the plan for every blocker and major and send it back for another audit round, at most 3 audit rounds. If audit round 3 still has blockers or majors, stop, log `loop.stop` with data `{"reason": "<text>"}` and ask the user how to proceed. Only the `plan-auditor` logs `plan.audit`, once per round, as actor `opus-plan-auditor`; the orchestrator must not log it again, or the Plan audit table in the trace report gets duplicate rows.
 
+### Decider (optional)
+
+The decider adds advice and the flow never depends on it; the orchestrator never edits the `decider` config.
+
+- With `decider.effort` set to `apply`, after a draft is written run `node ~/.claude/skills/dispatch-plan/decide.mjs effort --plan <draft> --trace <T> --root <repo root>` and write each task's `thinking:` line from its `suggested` value; a level pinned instead carries `# pinned: <reason>` after the value.
+- With `decider.audit` set to `shadow`, after each audit round write the auditor's findings to `.plans/decisions/<trace>-audit<n>.json` as an array of `{id, severity, text, tasks, reqs}` and run `decide.mjs audit --plan <draft> --spec <spec> --findings <file> --audit-round <n> --verdict <pass|fail> --trace <T> --root <repo root>`.
+- At the approval step show the proposal (`approve`, `hold`, `dismiss` or `fix`, the aggregate and the per-finding values) as advice only: it never replaces the user's yes and never flips a plan.
+- Exit codes `3` no key, `4` disabled, `5` not allowed, `6` backend error: a non-zero exit never blocks anything, carry on as before and say so once.
+
 ## 5. Approval
 
 Pilot mode is the default: the `.plans/config.json` key `autoReady` is false, and the orchestrator never turns it on. Show the user the plan summary, the requirement-to-task trace the audit returned and any minor notes, then ask for approval.
@@ -143,19 +152,32 @@ The `sed` edits only the frontmatter, from line 2 to the closing `---`, so a `st
 
 ## 6. Wait
 
-Run this from the repo root, in the foreground. It blocks up to 9 minutes, so run it with the Bash tool's `timeout` set to `600000` ms. The Bash tool default is `120000` ms and would kill the call at 2 minutes, losing the exit code; `600000` is only the maximum. If the caller cannot set a timeout, pass `--timeout 100` instead:
+Start the wait in the background, from the repo root, with the Bash tool's `run_in_background` set. Then do not poll and do not sleep: the session is re-invoked when the command exits, so the user can keep talking meanwhile. The `--timeout` is 3300 seconds here because the 600000 ms Bash cap applies only to a foreground command:
 
 ```bash
-node ~/.claude/skills/dispatch-plan/trace.mjs wait --plan <id> --timeout 540
+# Bash tool: run_in_background: true
+node ~/.claude/skills/dispatch-plan/trace.mjs wait --plan <id> --timeout 3300
 ```
+
+Optionally also start a Monitor (timeout_ms 1800000, re-armed by the orchestrator on expiry) on `watch`, which prints one line per notable event of the plan and then exits, so task results arrive as they happen:
+
+```bash
+node ~/.claude/skills/dispatch-plan/trace.mjs watch --plan <id> --timeout 1740
+```
+
+The lower `--timeout` of `watch` makes its expiry visible as a `WATCH TIMEOUT` line. It prints `task.end` lines (task, attempt, state, ok, duration, the error cut to 90 characters), `fault` lines, a `REVIEW` line only when a review is not approved or not ok, a `GATE` line, a `REJECTED` line and a final `PLAN END` line with the gate result, each prefixed by the local time. Its exit codes match `wait`: `0` the plan ended, `2` rejected, `3` timeout, `4` not picked up after `--pickup` seconds, `64` a usage error.
+
+When a run ends (done, a failed gate, rejected, or a decision is needed), send one `PushNotification` with the plan id and the gate result; the tool skips it when the user is at the terminal.
 
 On exit `0` it prints the summary and a `GATE PASS|FAIL` line. Read the exit code:
 
 - `0`: done. Read the gate (section 7) and report the result to the user.
 - `2`: the plan was rejected, which is a format error. Read `.plans/failed/<id>.error.md`, rewrite `.plans/inbox/<id>.md.draft` from `.plans/failed/<id>.md` with the fix and `status: draft`, rerun preflight, get the user's approval again, log `plan.approved` again, re-audit if more than the rejected line changed (that re-audit counts toward the `audit_round` cap of 3), then flip it under the same id. The extension deletes the stale rejection files when it accepts the plan, so nothing has to be removed by hand; `wait` also ignores a rejection older than the wait while the plan is queued or running.
-- `3`: still running. Call `wait` again, at most 6 calls in total for one plan. If the 6th call still exits `3`, stop and tell the user.
+- `3`: still running. Start the background `wait` again, at most 3 launches in total for one plan, then stop and tell the user.
 - `4`: never picked up, so the Pi session with `pi-plan-dispatch` is probably not running. Stop and tell the user.
-- Any other exit code: call `wait` again, at most 6 calls in total for one plan. If the error says a module or file was not found, stop at once and tell the user: the installed skill folder is stale (section 10).
+- Any other exit code: start the background `wait` again, within the same limit of 3 launches. If the error says a module or file was not found, stop at once and tell the user: the installed skill folder is stale (section 10).
+
+The foreground form, `wait --plan <id> --timeout 540` with the Bash tool's `timeout` set to `600000` ms (the default `120000` ms would kill it early and lose the exit code), is only a fallback for a caller that cannot run a command in the background. Pass `--timeout 100` there if the caller cannot set a timeout either.
 
 ## 7. Gate and evidence
 
@@ -175,11 +197,12 @@ The gate passes only when every task is done and there are zero error faults. A 
 
 ## 8. Trace
 
-One trace is one user request across all rounds; every event appends to `.plans/traces/<trace>.jsonl`. Actors: `sonnet-orchestrator`, `opus-plan-auditor`, `pi-dispatch`, `worker`, `user`.
+One trace is one user request across all rounds; every event appends to `.plans/traces/<trace>.jsonl`. Actors: `sonnet-orchestrator`, `opus-plan-auditor`, `pi-dispatch`, `worker`, `user`, `decider`.
 
 ```bash
 node ~/.claude/skills/dispatch-plan/trace.mjs event --trace <T> --actor <A> \
   --kind <K> --plan <P> --round <N> --data '{"k":"v"}'
+node ~/.claude/skills/dispatch-plan/trace.mjs watch --plan P [--timeout 3300] [--pickup 90]
 ```
 
 The event-level `--round` is always the plan round, the number in the plan id. The audit round counter lives in `plan.audit` data as `audit_round`, never in `--round`.
@@ -187,6 +210,7 @@ The event-level `--round` is always the plan round, the number in the plan id. T
 - The extension writes `plan.received`, `plan.rejected` (its trace is the plan's `trace:` value when readable, else the file name), `task.start` (data gains the task's `role`), `task.end`, `task.verify` (data with the command, exit code, timeout flag, duration and output tail; the plan-level check has `scope: "plan"`), `task.review` (a pair or security review: `round`, `reviewer_role`, `model`, `verdict`, `findings`, `session_id`; a pair reviewer adds `cost` and `tokens`, a security task has them on its `task.end` instead), `fault`, `gate` and `plan.end`. Do not duplicate them.
 - The orchestrator writes, as actor `sonnet-orchestrator`: `spec.confirmed` (data `{"spec": "<path>", "requirements": <count>}`), `plan.drafted` (data `{"tasks": <count>, "spec": "<path>"}`), `plan.approved` (data `{"approved_by": "user"|"autoReady"}`) and `loop.stop` (data `{"reason": "<text>"}`).
 - The `plan-auditor` writes, as actor `opus-plan-auditor`: `plan.audit` (data `{"verdict": "pass"|"fail", "audit_round": <1..3>, "blockers": <n>, "majors": <n>, "minors": <n>, "summary": "<one line>"}`). Nobody else writes it.
+- `decide.mjs` writes, as actor `decider`: `decision.effort` (one per task, with `suggested`, `probabilities`, `confidence`, `complexity`, `model`, `cost`, `mode`), `decision.audit` (one per `audit` run, with `model`, `cost`, `audit_round`, `verdict`, `proposal`, `aggregate`, `findings`) and `decision.error` (with `command`, `status`, `kind`, `message`). The trace report's Decider table renders them.
 - `audit.verdict` is legacy: the result audit it recorded no longer exists. Nothing writes it; the report still renders old traces that contain it.
 
 Run `node ~/.claude/skills/dispatch-plan/trace.mjs report --trace <T>` to render a Markdown timeline to stdout and write `.plans/traces/<T>.md`. Its Plan audit table lists the audit rounds, and its Models table breaks down tokens, cost and faults per model and role. Quote its headline in the final report.
@@ -233,7 +257,7 @@ The wrong order loses data: `work add` sets the `unmirrored` list that a later `
 ### Install
 
 ```bash
-mkdir -p ~/.claude/skills/dispatch-plan && cp dispatch-plan/SKILL.md dispatch-plan/ORCHESTRATOR.md dispatch-plan/trace.mjs dispatch-plan/preflight.mjs dispatch-plan/config-init.mjs dispatch-plan/vault.mjs dispatch-plan/vault-admin.mjs dispatch-plan/vault-events.mjs dispatch-plan/vault-work.mjs dispatch-plan/vault-restore.mjs dispatch-plan/vault-config.mjs ~/.claude/skills/dispatch-plan/
+mkdir -p ~/.claude/skills/dispatch-plan && cp dispatch-plan/SKILL.md dispatch-plan/ORCHESTRATOR.md dispatch-plan/trace.mjs dispatch-plan/preflight.mjs dispatch-plan/config-init.mjs dispatch-plan/decide.mjs dispatch-plan/decide-core.mjs dispatch-plan/decide-backend.mjs dispatch-plan/decide-stats.mjs dispatch-plan/vault.mjs dispatch-plan/vault-admin.mjs dispatch-plan/vault-events.mjs dispatch-plan/vault-work.mjs dispatch-plan/vault-restore.mjs dispatch-plan/vault-config.mjs ~/.claude/skills/dispatch-plan/
 mkdir -p ~/.claude/agents && cp dispatch-plan/agents/plan-auditor.md ~/.claude/agents/
 rm -f ~/.claude/agents/planner.md ~/.claude/agents/auditor.md
 ```

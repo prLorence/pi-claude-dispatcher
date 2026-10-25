@@ -30,6 +30,11 @@ and Pi workers write all the code. Steps 1 to 8 are the whole flow for one reque
    its body with `Covers: R1, R2`. Fix rounds are drafts too, written the same way, with
    `parent:` set and `round:` one higher. Log `plan.drafted` with data
    `{"tasks": <count>, "spec": "<path>"}`, `--round` set to the plan round.
+   When `decider.effort` is `apply` in `.plans/config.json`, run
+   `node ~/.claude/skills/dispatch-plan/decide.mjs effort --plan <draft> --trace <T> --root <repo root>`
+   and write each task's `thinking:` line from its `suggested` value; a level you pin instead
+   carries `# pinned: <reason>` after the value. A non-zero exit never blocks the plan: carry
+   on as before and say so once.
 
 4. **Plan audit.** Run `node ~/.claude/skills/dispatch-plan/preflight.mjs <plan file>` and fix
    every `ERROR:` before spending an audit round. Then spawn the read-only `plan-auditor`
@@ -41,24 +46,37 @@ and Pi workers write all the code. Steps 1 to 8 are the whole flow for one reque
    fail a round. The verdict is `pass` only with zero blockers and zero majors. Allow at most 3
    audit rounds. If audit round 3 still has blockers or majors, log `loop.stop` with data
    `{"reason": "<text>"}` and ask the user how to proceed.
+   After each audit round, when `decider.audit` is `shadow`, write the auditor's findings to
+   `.plans/decisions/<trace>-audit<n>.json` as an array of `{id, severity, text, tasks, reqs}`
+   and run `decide.mjs audit --plan <draft> --spec <spec> --findings <file> --audit-round <n>
+   --verdict <pass|fail> --trace <T> --root <repo root>`; carry on as before on a non-zero exit.
 
 5. **Approval.** Pilot mode is the default: `.plans/config.json` key `autoReady` is false, and
    you never turn it on. Show the user the plan summary, the requirement-to-task trace from the
-   audit, any minor notes, and ask for approval. Only after the user says yes, log
+   audit, any minor notes, and ask for approval. When the decider ran, show its proposal
+   (`approve`, `hold`, `dismiss` or `fix`, the aggregate and the per-finding values) as advice
+   only: it never replaces the user's yes, never flips a plan, and you never edit the `decider`
+   config. Only after the user says yes, log
    `plan.approved` with data `{"approved_by": "user"}` and flip the draft to ready with this
    command, filling in the plan id:
    `sed -E '2,/^---$/ s/^status:[[:space:]]*draft([[:space:]]+#.*)?[[:space:]]*$/status: ready/' .plans/inbox/<id>.md.draft > .plans/inbox/.<id>.md.tmp && grep -q '^status: ready$' .plans/inbox/.<id>.md.tmp && mv .plans/inbox/.<id>.md.tmp .plans/inbox/<id>.md && rm .plans/inbox/<id>.md.draft`.
    If the user has set `autoReady` to true, a clean audit may flip the plan without asking,
    still logging `plan.approved` with `approved_by: "autoReady"`.
 
-6. **Run.** Wait with `node ~/.claude/skills/dispatch-plan/trace.mjs wait --plan <id> --timeout 540`,
-   run with the Bash tool timeout set to 600000 ms (the default 120000 ms would kill it early).
-   Exit `0` means done. Exit `2` means the plan was rejected. Exit `3` means still running: call
-   `wait` again. Exit `4` means it was never picked up, so Pi is probably not running: stop and
-   tell the user to start Pi in the repo. Any other exit code means call `wait` again, at most 6
-   calls in total for one plan; if the 6th call still exits `3`, stop and tell the user. If the
-   error says a module or file was not found, stop at once and tell the user: the installed skill
-   folder is stale. On exit `2`, read `.plans/failed/<id>.error.md`, rewrite
+6. **Run.** Start `node ~/.claude/skills/dispatch-plan/trace.mjs wait --plan <id> --timeout 3300`
+   with the Bash tool's `run_in_background` set, then do not poll or sleep: the session is
+   re-invoked when the command exits. You may also start a Monitor (timeout_ms 1800000, re-armed
+   by you on expiry) on `node ~/.claude/skills/dispatch-plan/trace.mjs watch --plan <id> --timeout 1740`
+   to see task results as they happen; the lower `--timeout` makes the expiry visible as a
+   `WATCH TIMEOUT` line. Exit `0` means done. Exit `2` means the plan was rejected. Exit `3` means
+   still running: start the background `wait` again, at most 3 launches in total for one plan,
+   then stop and tell the user. Exit `4` means it was never picked up, so Pi is probably not
+   running: stop and tell the user to start Pi in the repo. Any other exit code means start the
+   background `wait` again, within the same limit of 3 launches. If the error says a module or
+   file was not found, stop at once and tell the user: the installed skill folder is stale. When
+   a run ends (done, a failed gate, rejected, or a decision is needed), send one
+   `PushNotification` with the plan id and the gate result; the tool skips it when the user is at
+   the terminal. On exit `2`, read `.plans/failed/<id>.error.md`, rewrite
    `.plans/inbox/<id>.md.draft` from `.plans/failed/<id>.md` with the fix and `status: draft`,
    rerun preflight, show the user what changed and get their approval again (re-audit first if
    anything beyond the rejected line changed; that re-audit continues the plan's `audit_round`

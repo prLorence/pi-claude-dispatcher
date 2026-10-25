@@ -117,3 +117,16 @@ level is found before a plan runs.
 
 The pair benefit is a hypothesis. Run the same tasks solo and with `pair: review`, then
 compare worker cost, gate pass rate, rounds and faults per model in the Models table.
+
+## Decider (optional)
+
+With `decider.effort` set to `apply` in `.plans/config.json`, the orchestrator runs
+`decide.mjs effort` on a draft plan and writes each task's `thinking:` line from the
+suggestion. A task it pins to another level carries `# pinned: <reason>` after the value;
+the plan parser strips the comment.
+
+With `decider.audit` set to `shadow`, it runs `decide.mjs audit` after every plan audit and
+shows the proposal to the user at the approval step, as advice only.
+
+The decider never blocks anything and never replaces the user's yes. The dispatcher itself is
+unchanged by it. See [decider.md](decider.md) for the contract, config and exit codes.

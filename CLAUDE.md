@@ -45,6 +45,11 @@ and Pi workers write all the code. Steps 1 to 8 are the whole flow for one reque
    its body with `Covers: R1, R2`. Fix rounds are drafts too, written the same way, with
    `parent:` set and `round:` one higher. Log `plan.drafted` with data
    `{"tasks": <count>, "spec": "<path>"}`, `--round` set to the plan round.
+   When `decider.effort` is `apply` in `.plans/config.json`, run
+   `node ~/.claude/skills/dispatch-plan/decide.mjs effort --plan <draft> --trace <T> --root <repo root>`
+   and write each task's `thinking:` line from its `suggested` value; a level you pin instead
+   carries `# pinned: <reason>` after the value. A non-zero exit never blocks the plan: carry
+   on as before and say so once.
 
 4. **Plan audit.** Run `node ~/.claude/skills/dispatch-plan/preflight.mjs <plan file>` and fix
    every `ERROR:` before spending an audit round. Then spawn the read-only `plan-auditor`
@@ -56,24 +61,37 @@ and Pi workers write all the code. Steps 1 to 8 are the whole flow for one reque
    fail a round. The verdict is `pass` only with zero blockers and zero majors. Allow at most 3
    audit rounds. If audit round 3 still has blockers or majors, log `loop.stop` with data
    `{"reason": "<text>"}` and ask the user how to proceed.
+   After each audit round, when `decider.audit` is `shadow`, write the auditor's findings to
+   `.plans/decisions/<trace>-audit<n>.json` as an array of `{id, severity, text, tasks, reqs}`
+   and run `decide.mjs audit --plan <draft> --spec <spec> --findings <file> --audit-round <n>
+   --verdict <pass|fail> --trace <T> --root <repo root>`; carry on as before on a non-zero exit.
 
 5. **Approval.** Pilot mode is the default: `.plans/config.json` key `autoReady` is false, and
    you never turn it on. Show the user the plan summary, the requirement-to-task trace from the
-   audit, any minor notes, and ask for approval. Only after the user says yes, log
+   audit, any minor notes, and ask for approval. When the decider ran, show its proposal
+   (`approve`, `hold`, `dismiss` or `fix`, the aggregate and the per-finding values) as advice
+   only: it never replaces the user's yes, never flips a plan, and you never edit the `decider`
+   config. Only after the user says yes, log
    `plan.approved` with data `{"approved_by": "user"}` and flip the draft to ready with this
    command, filling in the plan id:
    `sed -E '2,/^---$/ s/^status:[[:space:]]*draft([[:space:]]+#.*)?[[:space:]]*$/status: ready/' .plans/inbox/<id>.md.draft > .plans/inbox/.<id>.md.tmp && grep -q '^status: ready$' .plans/inbox/.<id>.md.tmp && mv .plans/inbox/.<id>.md.tmp .plans/inbox/<id>.md && rm .plans/inbox/<id>.md.draft`.
    If the user has set `autoReady` to true, a clean audit may flip the plan without asking,
    still logging `plan.approved` with `approved_by: "autoReady"`.
 
-6. **Run.** Wait with `node ~/.claude/skills/dispatch-plan/trace.mjs wait --plan <id> --timeout 540`,
-   run with the Bash tool timeout set to 600000 ms (the default 120000 ms would kill it early).
-   Exit `0` means done. Exit `2` means the plan was rejected. Exit `3` means still running: call
-   `wait` again. Exit `4` means it was never picked up, so Pi is probably not running: stop and
-   tell the user to start Pi in the repo. Any other exit code means call `wait` again, at most 6
-   calls in total for one plan; if the 6th call still exits `3`, stop and tell the user. If the
-   error says a module or file was not found, stop at once and tell the user: the installed skill
-   folder is stale. On exit `2`, read `.plans/failed/<id>.error.md`, rewrite
+6. **Run.** Start `node ~/.claude/skills/dispatch-plan/trace.mjs wait --plan <id> --timeout 3300`
+   with the Bash tool's `run_in_background` set, then do not poll or sleep: the session is
+   re-invoked when the command exits. You may also start a Monitor (timeout_ms 1800000, re-armed
+   by you on expiry) on `node ~/.claude/skills/dispatch-plan/trace.mjs watch --plan <id> --timeout 1740`
+   to see task results as they happen; the lower `--timeout` makes the expiry visible as a
+   `WATCH TIMEOUT` line. Exit `0` means done. Exit `2` means the plan was rejected. Exit `3` means
+   still running: start the background `wait` again, at most 3 launches in total for one plan,
+   then stop and tell the user. Exit `4` means it was never picked up, so Pi is probably not
+   running: stop and tell the user to start Pi in the repo. Any other exit code means start the
+   background `wait` again, within the same limit of 3 launches. If the error says a module or
+   file was not found, stop at once and tell the user: the installed skill folder is stale. When
+   a run ends (done, a failed gate, rejected, or a decision is needed), send one
+   `PushNotification` with the plan id and the gate result; the tool skips it when the user is at
+   the terminal. On exit `2`, read `.plans/failed/<id>.error.md`, rewrite
    `.plans/inbox/<id>.md.draft` from `.plans/failed/<id>.md` with the fix and `status: draft`,
    rerun preflight, show the user what changed and get their approval again (re-audit first if
    anything beyond the rejected line changed; that re-audit continues the plan's `audit_round`
@@ -200,13 +218,17 @@ Claude models, Sonnet and Opus included, never write code, tests, scripts, confi
 | `pi-plan-dispatch/verify.ts`           | Independent verification (G1): runs `verify:` commands with a timeout, serialises them through a lock, checks executables, builds retry feedback                                                               |
 | `pi-plan-dispatch/review.ts`           | The review contract, pure and with no local imports: `parseReviewReport`, `buildReviewPrompt`, `feedbackFromFindings`, and the finding types shared by pair mode and the security role                         |
 | `pi-plan-dispatch/vault/`              | The agent vault: `schema.ts` (note types, basenames, vocabularies), `privacy.ts` (repo modes, leak checks), `notes.ts` (read, write, boot, stats, index), `git.ts` (lint, staging, pull, push), `lock.ts`      |
-| `pi-plan-dispatch/*.test.ts`           | 476 tests: unit tests with a fake `pi`, plus extension integration tests with a mocked Pi API (`cd pi-plan-dispatch && npm test`, Node 24+)                                                                    |
+| `pi-plan-dispatch/*.test.ts`           | 483 tests: unit tests with a fake `pi`, plus extension integration tests with a mocked Pi API (`cd pi-plan-dispatch && npm test`, Node 24+); the `dispatch-plan` tests run separately with `node --test` there |
 | `pi-plan-dispatch/README.md`           | User-facing install, usage, config, scheduling rules, limits                                                                                                                                                   |
 | `dispatch-plan/SKILL.md`               | Claude Code skill: spec and plan formats, atomic draft, flip, plan audit, wait, gate and evidence, trace events, fix-loop limits                                                                               |
 | `dispatch-plan/ORCHESTRATOR.md`        | The pasteable orchestrator rules block for `CLAUDE.md`, with the `## Delegation rules (dispatch-plan)` marker line                                                                                             |
-| `dispatch-plan/trace.mjs`              | Trace CLI, no dependencies: `event`, `wait`, `gate`, `report`, `new-id`. Installed at `~/.claude/skills/dispatch-plan/trace.mjs`                                                                               |
+| `dispatch-plan/trace.mjs`              | Trace CLI, no dependencies: `event`, `wait`, `watch`, `gate`, `report`, `new-id`. Installed at `~/.claude/skills/dispatch-plan/trace.mjs`                                                                               |
 | `dispatch-plan/preflight.mjs`          | Preflight CLI: runs the dispatcher's parsing and preflight on a plan file, prints every error, exits non-zero on any                                                                                           |
 | `dispatch-plan/config-init.mjs`        | Config CLI: creates `.plans/config.json` with the dispatcher defaults (`--minimal`, `--force`, `--print`)                                                                                                      |
+| `dispatch-plan/decide.mjs`             | Decider CLI, no dependencies: `effort` suggests a thinking level per task, `audit` scores plan-audit findings into an advisory proposal, `stats` joins the decisions with the outcomes                         |
+| `dispatch-plan/decide-core.mjs`        | Pure decider rules: question builders, the effort rule, the noisy-OR aggregate, the proposal, the state building                                                                                               |
+| `dispatch-plan/decide-backend.mjs`     | Decider backend adapter: key loading and redaction, the OpenRouter Decisions API backend, a fake backend for the tests                                                                                         |
+| `dispatch-plan/decide-stats.mjs`       | Pure outcome joins for `decide.mjs stats`: effort suggestions against the thinking level a task ran with, audit proposals against the next verdict or approval                                                 |
 | `dispatch-plan/vault.mjs`              | Vault CLI, the only write path to the vault: `boot`, `note`, `log`, `index`, `repo`, `sync`, `lint`, `stats`, `resolve`, `work`, `restore`, `config`, and `init`/`setup`/`doctor`                              |
 | `dispatch-plan/vault-work.mjs`         | `work` commands: `work add` copies the record of a finished request into `work/<trace>/` (fail-closed, exit `6` partial) and `work pending` lists the finished traces the vault misses                         |
 | `dispatch-plan/vault-restore.mjs`      | `restore`: rebuilds the specs and the draft plans from the vault, never overwrites and never writes a ready plan, then lists the open ideas and the recent runs                                                |
@@ -218,6 +240,7 @@ Claude models, Sonnet and Opus included, never write code, tests, scripts, confi
 | `dispatch-plan/agents/plan-auditor.md` | `plan-auditor` subagent: read-only plan review checklist, verdict format, `plan.audit` event                                                                                                                   |
 | `dispatch-plan/archive/`               | Superseded and archived artifacts, not installed: `INTERFACE-haiku.md`, `planner-subagent.md`, `result-auditor.md`                                                                                             |
 | `docs/roles.md`                        | The worker role model: default roles and models, config, pair mode, security and QA, report formats, the pilot protocol                                                                                        |
+| `docs/decider.md`                      | The decider contract: the checked API shape, the config, the exit codes and the privacy gate; the endpoint is alpha                                                                                            |
 | `docs/vault.md`                        | The agent vault: note types (with `spec` and `idea`), the `work/` and `config/` folders, repo modes, the CLI contract and exit codes, who may write, sync and conflicts, Graphify, non-goals                   |
 | `docs/architecture.md`                 | Architecture diagrams: components and data flow, with built and planned parts, and one request in order                                                                                                        |
 
@@ -231,6 +254,9 @@ Targets `@earendil-works/pi-coding-agent >=1.3.0`. Extensions load through jiti,
 - Pi exits 0 on errors like "No API key found", so a worker with no assistant output counts as failed. Keep that check.
 - The user approves the plan in the main session. Sonnet is the orchestrator, so there is no approval round trip through another model; it shows the plan where the user can ask for changes. Every draft, round 1 and fix rounds, is a `.plans/inbox/<id>.md.draft` file with `status: draft`; the dispatcher reads only `*.md`, so only a flipped plan is picked up. The user is the last gate in pilot mode: the `.plans/config.json` key `autoReady` is false by default, and the orchestrator never enables it.
 - Plan audit replaces result audit. Opus 5.5 runs as the read-only `plan-auditor` subagent before a plan is flipped to ready: it reviews the plan against the spec and the repo, returns severity-tagged findings and logs `plan.audit` itself. Verdict `pass` means zero blockers and zero majors; minors are notes. At most 3 audit rounds, then the orchestrator stops and asks the user. Opus never audits worker results.
+- Decision models (proof of concept). A hosted decider (`dispatch-plan/decide.mjs`, the OpenRouter Decisions API behind a backend adapter) suggests a thinking level per task, which the orchestrator applies in the plan, and scores plan-audit findings into an advisory proposal (`approve`, `hold`, `dismiss` or `fix`).
+  Shadow only: it never replaces the user's yes and never flips a plan. Only `full` repos send text, the key is in a 0600 file and never in a worker's environment, and both modes are `off` until the user sets `decider` in `.plans/config.json`, which the orchestrator never edits.
+  A decider failure never blocks a plan.
 - Fix rounds stop after 3 fix rounds, so the last plan id ends in `-r4`, or when the same finding repeats. The orchestrator logs `loop.stop` with the reason and reports the open findings. A failing gate goes back to planning with the evidence, never forward to a review.
 - The gate is necessary, not sufficient. It passes only when every task is done and there are zero error faults; a dry run never passes. The plan audit checks the plan before it runs; the gate, the `verify:` commands, the live guards and pair review check the result.
 - The orchestrator writes only under `.plans/` (specs, inbox, done, traces) and to the vault through `vault.mjs`. It never edits source and never commits to a project repo, and besides the plan audit it spawns no other agent. In the vault it never writes `work/` or `config/` by hand; only `work add` and `config push` do. `vault.mjs sync push` commits to the vault repo only (A1).
@@ -274,7 +300,7 @@ One trace is one user request across all rounds. Plans link through frontmatter:
   - real cost reporting
   - a real worker run with the worker isolation
   - the new vault commands (`work add`, `work pending`, `restore`, `config push`, `config pull`) against the real vault
-- **Suggested next step:** refresh the installed copies (`mkdir -p ~/.claude/skills/dispatch-plan && cp dispatch-plan/SKILL.md dispatch-plan/ORCHESTRATOR.md dispatch-plan/trace.mjs dispatch-plan/preflight.mjs dispatch-plan/config-init.mjs dispatch-plan/vault.mjs dispatch-plan/vault-work.mjs dispatch-plan/vault-restore.mjs dispatch-plan/vault-config.mjs ~/.claude/skills/dispatch-plan/` and `mkdir -p ~/.claude/agents && cp dispatch-plan/agents/plan-auditor.md ~/.claude/agents/`; anyone who installed an earlier version also runs `rm -f ~/.claude/agents/planner.md ~/.claude/agents/auditor.md`; `node dispatch-plan/vault.mjs setup --force` writes every file of `dispatch-plan/` and the agents for you), paste the block from `dispatch-plan/ORCHESTRATOR.md` into `CLAUDE.md`, install the extension, and log Pi into OpenCode Go. Run a tiny plan with `/plans dry on`, then one small real task with `/plans dry off`.
+- **Suggested next step:** refresh the installed copies (`mkdir -p ~/.claude/skills/dispatch-plan && cp dispatch-plan/SKILL.md dispatch-plan/ORCHESTRATOR.md dispatch-plan/trace.mjs dispatch-plan/preflight.mjs dispatch-plan/config-init.mjs dispatch-plan/vault.mjs dispatch-plan/vault-work.mjs dispatch-plan/vault-restore.mjs dispatch-plan/vault-config.mjs dispatch-plan/decide.mjs dispatch-plan/decide-core.mjs dispatch-plan/decide-backend.mjs dispatch-plan/decide-stats.mjs ~/.claude/skills/dispatch-plan/` and `mkdir -p ~/.claude/agents && cp dispatch-plan/agents/plan-auditor.md ~/.claude/agents/`; anyone who installed an earlier version also runs `rm -f ~/.claude/agents/planner.md ~/.claude/agents/auditor.md`; `node dispatch-plan/vault.mjs setup --force` writes every file of `dispatch-plan/` and the agents for you), paste the block from `dispatch-plan/ORCHESTRATOR.md` into `CLAUDE.md`, install the extension, and log Pi into OpenCode Go. Run a tiny plan with `/plans dry on`, then one small real task with `/plans dry off`.
 
 ## Open questions
 

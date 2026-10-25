@@ -123,6 +123,21 @@ test("runVerify: the child env drops AGENT_VAULT and marks itself a worker", asy
 	}
 });
 
+test("runVerify: the child env drops OPENROUTER_API_KEY", async () => {
+	const dir = tmp();
+	const savedKey = process.env.OPENROUTER_API_KEY;
+	try {
+		process.env.OPENROUTER_API_KEY = "sk-or-parent-key";
+		const r = await runVerify(dir, 'printf "%s" "${OPENROUTER_API_KEY-unset}"', 1);
+		assert.equal(r.ok, true);
+		assert.equal(r.output, "unset");
+		assert.equal(process.env.OPENROUTER_API_KEY, "sk-or-parent-key", "the parent env is not mutated");
+	} finally {
+		if (savedKey === undefined) delete process.env.OPENROUTER_API_KEY;
+		else process.env.OPENROUTER_API_KEY = savedKey;
+	}
+});
+
 test("runVerify: the child env keeps the rest of the environment", async () => {
 	const dir = tmp();
 	const home = path.join(dir, "home");

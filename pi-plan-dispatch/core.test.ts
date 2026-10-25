@@ -401,6 +401,36 @@ Edit api.
 	}
 });
 
+test("workerEnv drops OPENROUTER_API_KEY, with the guards on and off", () => {
+	const dir = tmp();
+	const home = path.join(dir, "home");
+	fs.mkdirSync(home, { recursive: true });
+	const plan = parsePlan(`---
+id: p
+---
+ctx
+
+## task: api
+files: src/api.ts
+Edit api.
+`, "x");
+	const task = plan.tasks[0];
+	const parent = { OPENROUTER_API_KEY: "sk-or-parent-key", KEEP: "yes" };
+	try {
+		const env = workerEnv(DEFAULT_CONFIG, task, parent, home);
+		assert.equal("OPENROUTER_API_KEY" in env, false, "the key is removed, not set to empty");
+		assert.equal(env.KEEP, "yes", "the rest of the parent env is copied");
+		assert.equal(parent.OPENROUTER_API_KEY, "sk-or-parent-key", "the parent env is not mutated");
+
+		// guards off: the key still goes
+		const off = workerEnv({ ...DEFAULT_CONFIG, workerGuards: false }, task, parent, home);
+		assert.equal("OPENROUTER_API_KEY" in off, false);
+		assert.equal(off.KEEP, "yes");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("runWorker: the child gets no AGENT_VAULT", async () => {
 	const dir = tmp();
 	const home = path.join(dir, "home");

@@ -815,17 +815,20 @@ export function findVaultPath(env: NodeJS.ProcessEnv, home: string): string | un
 
 /**
  * The vault variables of a worker-like child: no AGENT_VAULT (a worker never
- * inherits the parent's), and the vault folder in VAULT_ENV, or no variable.
+ * inherits the parent's), the vault folder in VAULT_ENV, or no variable, and no
+ * OPENROUTER_API_KEY.
  */
 function withVaultEnv(env: NodeJS.ProcessEnv, parent: NodeJS.ProcessEnv, home: string): NodeJS.ProcessEnv {
 	delete env.AGENT_VAULT;
+	// A worker never gets the decision-model key.
+	delete env.OPENROUTER_API_KEY;
 	const vault = findVaultPath(parent, home);
 	if (vault === undefined) delete env[VAULT_ENV];
 	else env[VAULT_ENV] = vault;
 	return env;
 }
 
-/** Env for a worker process: no second watcher, the vault folder, plus the guard policy when enabled. */
+/** Env for a worker process: no second watcher, the vault folder, no decision-model key, plus the guard policy when enabled. */
 export function workerEnv(
 	cfg: DispatchConfig,
 	task: PlanTask,

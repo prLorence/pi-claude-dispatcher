@@ -35,12 +35,14 @@ export interface VerifyResult {
 const quote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 /**
- * The environment of the verify child: no AGENT_VAULT, and marked as a worker
- * so the vault CLI refuses every command.
+ * The environment of the verify child: no AGENT_VAULT, no OPENROUTER_API_KEY,
+ * and marked as a worker so the vault CLI refuses every command.
  */
 const verifyEnv = (): NodeJS.ProcessEnv => {
 	const env = { ...process.env };
 	delete env.AGENT_VAULT;
+	// A verify child never gets the decision-model key.
+	delete env.OPENROUTER_API_KEY;
 	env.PI_PLAN_DISPATCH_WORKER = "1";
 	return env;
 };
