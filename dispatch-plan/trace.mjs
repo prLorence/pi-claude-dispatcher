@@ -200,6 +200,14 @@ function watchLine(e) {
 			// An approved review is the normal case and stays quiet.
 			if (d.verdict === "approve" && d.ok !== false) return undefined;
 			return `${t} REVIEW ${dash(e.task)} ${dash(d.verdict)} ok=${dash(d.ok)}`;
+		case "task.resume":
+			return `${t} RESUME ${dash(e.task)} a${e.attempt ?? 1} #${dash(d.resume)} wait=${dash(d.wait_s)}s ${cut(d.error)}`;
+		case "task.stall":
+			return `${t} STALL ${dash(e.task)} ${dash(d.minutes)}min`;
+		case "outage.start":
+			return `${t} OUTAGE START ${cut(d.reason)}`;
+		case "outage.end":
+			return `${t} OUTAGE END ${dash(d.outcome)} after ${dash(d.duration_s)}s`;
 		case "gate":
 			return `${t} GATE pass=${dash(d.pass)} ${JSON.stringify(d.reasons ?? [])}`;
 		case "plan.rejected":

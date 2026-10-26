@@ -2,11 +2,14 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo, Socket } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
 import extension from "./index.ts";
 import { BLOCKED_MARKER } from "./guard.ts";
+import { CONTINUE_PROMPT } from "./resilience.ts";
 import { readEvents } from "./trace.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -19,13 +22,15 @@ async function waitFor(file: string, ms = 15000) {
 	}
 }
 
-function boot(cwd: string, dry: boolean) {
+function boot(cwd: string, dry: boolean, opts: { ui?: boolean } = {}) {
 	// When these tests run inside a Pi worker the guard would disable the extension.
 	delete process.env.PI_PLAN_DISPATCH_WORKER;
 	const handlers = new Map<string, (e: unknown, ctx: unknown) => Promise<void>>();
 	const messages: string[] = [];
 	// A slash command can speak to the user through ctx.ui.notify, so capture it.
 	const notes: string[] = [];
+	// Widget lines, one entry per setWidget call, so a test can read what the plan view shows.
+	const widgets: string[][] = [];
 	type Handler = (args: string, ctx: unknown) => Promise<void>;
 	const commands = new Map<string, Handler>();
 	const pi = {
@@ -36,13 +41,21 @@ function boot(cwd: string, dry: boolean) {
 		sendMessage: (m: { content: string }) => messages.push(m.content),
 	};
 	extension(pi as never);
-	const ctx = { cwd, hasUI: false };
-	const ui = { notify: (msg: string) => notes.push(msg), setStatus() {}, setWidget() {} };
+	const ui = {
+		notify: (msg: string) => notes.push(msg),
+		setStatus() {},
+		setWidget: (_name: string, lines: string[] | undefined) => {
+			if (lines) widgets.push(lines);
+		},
+	};
+	// `ui: true` makes the plan view render, so a test can read the widget.
+	const ctx = { cwd, hasUI: opts.ui === true, ui };
 	return {
 		start: () => handlers.get("session_start")!({}, ctx),
 		stop: () => handlers.get("session_shutdown")!({}, ctx),
 		messages,
 		notes,
+		widgets,
 		command: (args: string) => commands.get("plans")!(args, { cwd, hasUI: true, ui }),
 	};
 }
@@ -53,8 +66,8 @@ type Booted = ReturnType<typeof boot>;
  * Boot the extension, run the body, and always shut it down: a throw must not leave the
  * inbox watcher running, or the test process never exits.
  */
-async function withExtension(dir: string, dry: boolean, fn: (x: Booted) => Promise<void>) {
-	const x = boot(dir, dry);
+async function withExtension(dir: string, dry: boolean, fn: (x: Booted) => Promise<void>, opts: { ui?: boolean } = {}) {
+	const x = boot(dir, dry, opts);
 	try {
 		await x.start();
 		await fn(x);
@@ -1388,4 +1401,379 @@ Rewrite whatever needs rewriting.
 	assert.equal(violation.task, "a");
 	assert.match(violation.message, /src\/x\.ts/);
 	assert.equal(ev.gate.pass, false);
+});
+
+// ---------- Resilience: transient failures, resumes and the outage gate ----------
+
+/** Merge extra keys into the repo's .plans/config.json. */
+function setConfig(dir: string, extra: object) {
+	const file = path.join(dir, ".plans/config.json");
+	fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf8")), ...extra }));
+}
+
+type FakeRun = { argv: string[]; review: boolean };
+
+/** Every spawn the fake `pi` served, in run order. */
+const readRuns = (dir: string): FakeRun[] => {
+	const file = path.join(dir, ".plans/runs.jsonl");
+	if (!fs.existsSync(file)) return [];
+	return fs
+		.readFileSync(file, "utf8")
+		.split("\n")
+		.filter(Boolean)
+		.map((l) => JSON.parse(l) as FakeRun);
+};
+
+/** The prompt of one run is the last argv entry; the session id follows its flag. */
+const promptOf = (argv: string[]) => argv[argv.length - 1];
+const sessionIdOf = (argv: string[]) => argv[argv.indexOf("--session-id") + 1];
+
+/**
+ * Fake pi driven by a list of run outcomes, one per implementer run: `ok`
+ * reports done, `status-fail` reports STATUS: failed, `transient` exits 1 with a
+ * provider error, `silent` exits 1 with no reply at all. With `keepSession`
+ * every run also writes the session file Pi writes, so a later run has a
+ * conversation to reopen. A list of two or more entries is one outcome per run
+ * and its last entry then repeats; `perTask` names the implementer outcome of
+	 * each task by the task name in the `--name` flag, which an outage test needs
+	 * because several tasks run, and `delay` busy-waits that many milliseconds for a
+	 * task before it answers, so its slot frees at a known moment. `onRun` runs
+	 * first, with the argv and the run kind.
+	 */
+function resilienceFake(
+	dir: string,
+	runs: string[],
+	opts: { keepSession?: boolean; review?: string[]; perTask?: Record<string, string[]>; delay?: Record<string, number>; onRun?: string } = {},
+) {
+	const reviews = opts.review ?? ["VERDICT: approve\nFINDINGS: none"];
+	fakePi(
+		dir,
+		`import fs from "node:fs";
+import path from "node:path";
+const out = (o) => console.log(JSON.stringify(o));
+const argv = process.argv.slice(2);
+const prompt = argv[argv.length - 1];
+const isReview = /You are the reviewer for task/.test(prompt);
+// A resumed run continues the conversation, so its prompt names no role: the
+// run keeps the kind of the run before it.
+const previous = fs.existsSync(".plans/kind.txt") ? fs.readFileSync(".plans/kind.txt", "utf8") : "impl";
+const kind = /Your previous request stopped because of a network or provider error/.test(prompt) ? previous : isReview ? "review" : "impl";
+fs.writeFileSync(".plans/kind.txt", kind);
+${opts.onRun ? `(${opts.onRun})(argv, kind === "review");` : ""}
+fs.appendFileSync(".plans/runs.jsonl", JSON.stringify({ argv, review: kind === "review" }) + "\\n");
+const counter = (kind) => {
+	const f = ".plans/" + kind + ".n";
+	const n = fs.existsSync(f) ? Number(fs.readFileSync(f, "utf8")) + 1 : 1;
+	fs.writeFileSync(f, String(n));
+	return n;
+};
+if (${opts.keepSession ? "true" : "false"}) {
+	const id = argv[argv.indexOf("--session-id") + 1];
+	const sessionDir = argv[argv.indexOf("--session-dir") + 1];
+	fs.mkdirSync(sessionDir, { recursive: true });
+	const file = path.join(sessionDir, "1000_" + id + ".jsonl");
+	if (!fs.existsSync(file)) fs.writeFileSync(file, '{"type":"session"}\\n');
+}
+const say = (text) =>
+	out({ type: "message_end", message: { role: "assistant", stopReason: "stop", usage: { input: 5, output: 5, totalTokens: 10, cost: { total: 0.001 } },
+		content: [{ type: "text", text }] } });
+const replies = ${JSON.stringify(runs)};
+const reviewReplies = ${JSON.stringify(reviews)};
+const perTask = ${JSON.stringify(opts.perTask ?? {})};
+// The task name is the tail of the --name flag, which is <plan>/<task>.
+const taskName = (argv[argv.indexOf("--name") + 1] || "").split("/").pop() || "";
+const delayMs = ${JSON.stringify(opts.delay ?? {})}[taskName] ?? 0;
+if (delayMs > 0) for (const end = Date.now() + delayMs; Date.now() < end; ) {}
+const list = kind === "review" ? reviewReplies : perTask[taskName] ?? replies;
+// A list reply may be one entry per run, or a single entry shared by every run.
+const pick = (list, n) => (list.length > 1 ? list[Math.min(n, list.length) - 1] : list[0]);
+const reply = pick(list, counter(kind === "review" ? "review" : "impl:" + taskName));
+if (reply === "ok") say("STATUS: done\\nCHANGED:\\nsrc/api.ts\\nTESTS: none\\nNOTES: n\\nNEEDS: none");
+else if (reply === "status-fail") say("STATUS: failed\\nCHANGED: none\\nTESTS: none\\nNOTES: could not do it\\nNEEDS: none");
+else if (reply.startsWith("VERDICT:")) say(reply);
+else if (reply === "transient") {
+	console.error('Error: 502 "acp-proxy failure"');
+	process.exitCode = 1;
+} else process.exitCode = 1;
+`,
+	);
+	setConfig(dir, { persistSessions: true });
+}
+
+/**
+ * A local HTTP server standing in for the provider. `answer()` decides whether a
+ * request gets any HTTP status at all: no answer means the network looks down.
+ * The default answers 200, which is what `probeUrls` counts as healthy.
+ */
+async function probeTarget(answer: () => boolean = () => true): Promise<{ url: string; close: () => Promise<void> }> {
+	const sockets = new Set<Socket>();
+	const server = createServer((req, res) => {
+		if (!answer()) {
+			// No answer at all: hang up, so the probe sees a network error.
+			req.socket.destroy();
+			return;
+		}
+		res.writeHead(200);
+		res.end("ok");
+	});
+	server.on("connection", (s) => {
+		sockets.add(s);
+		s.on("close", () => sockets.delete(s));
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const { port } = server.address() as AddressInfo;
+	return {
+		url: `http://127.0.0.1:${port}/`,
+		close: () =>
+			new Promise<void>((resolve) => {
+				for (const s of sockets) s.destroy();
+				server.close(() => resolve());
+			}),
+	};
+}
+
+/** Poll a condition that happens while the plan is still running. */
+async function until(ok: () => boolean, ms = 15000) {
+	const t0 = Date.now();
+	while (!ok()) {
+		if (Date.now() - t0 > ms) throw new Error("timed out waiting for the condition");
+		await sleep(25);
+	}
+}
+
+const planKinds = (dir: string) => readEvents(path.join(dir, ".plans"), "tr").map((e) => e.kind);
+
+/** Config values that keep every test in the seconds: fractional backoff and probe. */
+const resumeConfig = (url: string, extra: object = {}) => ({
+	transientRetries: 6,
+	backoffSeconds: [0.05],
+	stallMinutes: 0,
+	outagePauseMinutes: 1,
+	probeSeconds: 0.1,
+	probeUrls: [url],
+	...extra,
+});
+
+test("resilience: a transient failure resumes the same session without using retries", async () => {
+	const dir = repo();
+	resilienceFake(dir, ["transient", "ok"], { keepSession: true });
+	const target = await probeTarget();
+	setConfig(dir, resumeConfig(target.url, { retries: 0 }));
+	try {
+		await withExtension(dir, false, async () => {
+			drop(dir, "rs1", pairPlan("rs1"));
+			await waitFor(path.join(dir, ".plans/done/rs1/_summary.md"));
+		});
+	} finally {
+		await target.close();
+	}
+
+	const ev = evidence(dir, "rs1");
+	assert.equal(ev.gate.pass, true, JSON.stringify(ev.faults));
+	assert.equal(ev.gate.tasks.done, 1);
+	assert.match(fs.readFileSync(path.join(dir, ".plans/done/rs1/api.md"), "utf8"), /# api: done\n- attempts: 1/, "a resume is not an attempt");
+
+	const runs = readRuns(dir);
+	assert.equal(runs.length, 2, "one run, one resume");
+	assert.equal(sessionIdOf(runs[0].argv), sessionIdOf(runs[1].argv), "the resume reopens the same session");
+	assert.notEqual(promptOf(runs[0].argv), CONTINUE_PROMPT);
+	assert.equal(promptOf(runs[1].argv), CONTINUE_PROMPT);
+
+	const events = readEvents(path.join(dir, ".plans"), "tr");
+	const resumes = events.filter((e) => e.kind === "task.resume");
+	assert.equal(resumes.length, 1);
+	assert.equal(resumes[0].task, "api");
+	assert.equal(resumes[0].attempt, 1);
+	assert.equal(resumes[0].span, "task:rs1/api#1:resume1");
+	const data = resumes[0].data as { resume: number; wait_s: number; error: string };
+	assert.equal(data.resume, 1);
+	assert.equal(data.wait_s, 0.05);
+	assert.match(data.error, /acp-proxy failure/);
+	assert.equal(events.filter((e) => e.kind === "outage.start").length, 1, "the gate opened once");
+	assert.equal(events.filter((e) => e.kind === "outage.end").length, 1, "and a probe closed it");
+	assert.equal((events.find((e) => e.kind === "outage.end")!.data as { outcome: string }).outcome, "healthy");
+});
+
+test("resilience: with no session file the resume sends the original prompt again", async () => {
+	const dir = repo();
+	resilienceFake(dir, ["transient", "ok"]);
+	const target = await probeTarget();
+	setConfig(dir, resumeConfig(target.url, { retries: 0 }));
+	try {
+		await withExtension(dir, false, async () => {
+			drop(dir, "rs2", pairPlan("rs2"));
+			await waitFor(path.join(dir, ".plans/done/rs2/_summary.md"));
+		});
+	} finally {
+		await target.close();
+	}
+
+	assert.equal(evidence(dir, "rs2").gate.pass, true);
+	const runs = readRuns(dir);
+	assert.equal(runs.length, 2);
+	assert.notEqual(promptOf(runs[0].argv), CONTINUE_PROMPT);
+	assert.equal(promptOf(runs[1].argv), promptOf(runs[0].argv), "nothing to reopen: the original prompt is sent again");
+	assert.equal(planKinds(dir).filter((k) => k === "task.resume").length, 1);
+});
+
+test("resilience: a permanent failure still takes the ordinary retry-or-fail path", async () => {
+	const dir = repo();
+	resilienceFake(dir, ["status-fail", "ok"]);
+	const target = await probeTarget();
+	setConfig(dir, resumeConfig(target.url, { retries: 0 }));
+	try {
+		await withExtension(dir, false, async () => {
+			drop(dir, "rs3", pairPlan("rs3"));
+			await waitFor(path.join(dir, ".plans/done/rs3/_summary.md"));
+		});
+	} finally {
+		await target.close();
+	}
+
+	const ev = evidence(dir, "rs3");
+	assert.equal(ev.gate.pass, false);
+	assert.equal(ev.gate.tasks.failed, 1);
+	const report = fs.readFileSync(path.join(dir, ".plans/done/rs3/api.md"), "utf8");
+	assert.match(report, /# api: failed\n- attempts: 1/);
+	assert.match(report, /worker reported STATUS: failed/);
+	const k = planKinds(dir);
+	assert.equal(k.filter((x) => x === "task.resume").length, 0, "a real failure is never resumed");
+	assert.equal(k.includes("outage.start"), false, "a real failure opens no gate");
+	assert.equal(readRuns(dir).length, 1, "retries 0 means one run only");
+});
+
+test("resilience: resumes that keep failing fall through to the old retry-or-fail path", async () => {
+	const dir = repo();
+	resilienceFake(dir, ["transient", "transient", "transient", "transient"]);
+	const target = await probeTarget();
+	setConfig(dir, resumeConfig(target.url, { retries: 1, transientRetries: 1 }));
+	try {
+		await withExtension(dir, false, async () => {
+			drop(dir, "rs4", pairPlan("rs4"));
+			await waitFor(path.join(dir, ".plans/done/rs4/_summary.md"));
+		});
+	} finally {
+		await target.close();
+	}
+
+	// Attempt 1 takes one resume and then its own retry; attempt 2 does the same
+	// and, with the retries spent, fails the task: four runs, two attempts.
+	assert.equal(readRuns(dir).length, 4);
+	const report = fs.readFileSync(path.join(dir, ".plans/done/rs4/api.md"), "utf8");
+	assert.match(report, /# api: failed\n- attempts: 2/);
+	assert.match(report, /acp-proxy failure/, "the transience outlasted the resume limit");
+	const k = planKinds(dir);
+	assert.equal(k.filter((x) => x === "task.resume").length, 2, "one resume per attempt, each at its own limit");
+	assert.equal(k.filter((x) => x === "task.end").length, 2, "a retry, then a failure");
+	assert.equal(evidence(dir, "rs4").gate.tasks.failed, 1);
+});
+
+test("resilience: while the gate is open no new task starts, and a probe resumes the plan", async () => {
+	const dir = repo();
+	// The network is down until this file appears; the test creates it once the
+	// plan is visibly paused, so the outage lasts exactly as long as the test wants.
+	const healed = path.join(dir, ".plans/healed");
+	const target = await probeTarget(() => fs.existsSync(healed));
+	// api fails transiently and is resumed at once; b holds its slot for a moment and
+	// then frees it, which is when c could start if the gate did not stop it.
+	resilienceFake(dir, ["ok"], { keepSession: true, perTask: { api: ["transient", "ok"] }, delay: { b: 700 } });
+	// Two slots: api and b start together, and b's slot is free while the gate is
+	// open, so only the gate itself can keep c from starting.
+	setConfig(dir, resumeConfig(target.url, { retries: 0, backoffSeconds: [0.05], probeSeconds: 0.1, maxParallel: 2 }));
+	const seen: { starts: string[]; paused: boolean; waiting: boolean } = { starts: [], paused: false, waiting: false };
+	try {
+		await withExtension(
+			dir,
+			false,
+			async (x) => {
+				drop(
+					dir,
+					"rs5",
+					`---
+id: rs5
+trace: tr
+status: ready
+---
+Context.
+
+## task: api
+files: src/api.ts
+depends_on: []
+Edit the api.
+
+## task: b
+files: src/b.ts
+depends_on: []
+Add b.
+
+## task: c
+files: src/c.ts
+depends_on: []
+Add c.
+`,
+				);
+				// Look while the outage is on: api's resume waits for the probe, b has
+				// finished and freed its slot, and c is runnable but must not start.
+				await until(() => planKinds(dir).includes("outage.start"));
+				await until(() => planKinds(dir).includes("task.resume"));
+				await until(() =>
+					readEvents(path.join(dir, ".plans"), "tr").some((e) => e.kind === "task.end" && e.task === "b"),
+				);
+				await sleep(150);
+				seen.starts = readEvents(path.join(dir, ".plans"), "tr")
+					.filter((e) => e.kind === "task.start")
+					.map((e) => String(e.task));
+				seen.paused = x.widgets.some((lines) => lines.includes("network outage: paused"));
+				seen.waiting = x.widgets.some((lines) => lines.some((l) => /^\s+\S+ api resume 1\/6$/.test(l)));
+				fs.writeFileSync(healed, "1");
+				await waitFor(path.join(dir, ".plans/done/rs5/_summary.md"));
+			},
+			{ ui: true },
+		);
+	} finally {
+		await target.close();
+	}
+
+	const events = readEvents(path.join(dir, ".plans"), "tr");
+	const k = events.map((e) => e.kind);
+	assert.equal(k.filter((x) => x === "outage.start").length, 1, "the transient error opened the gate");
+	assert.equal(k.filter((x) => x === "outage.end").length, 1, "a healthy probe closed it again");
+	assert.equal((events.find((e) => e.kind === "outage.end")!.data as { outcome: string }).outcome, "healthy");
+	assert.deepEqual(seen.starts, ["api", "b"], "c was runnable and b's slot was free, yet it did not start during the outage");
+	assert.equal(seen.paused, true, "the widget says the plan is paused");
+	assert.equal(seen.waiting, true, "and the waiting task shows its resume counter");
+	// Nothing starts while the gate is open, and b and c start once it closes.
+	const outageStart = k.indexOf("outage.start");
+	const outageEnd = k.indexOf("outage.end");
+	assert.equal(k.slice(outageStart, outageEnd).includes("task.start"), false, "no task starts while the gate is open");
+	assert.deepEqual(events.filter((e) => e.kind === "task.start" && e.task !== "api").map((e) => e.task), ["b", "c"]);
+	const ev = evidence(dir, "rs5");
+	assert.equal(ev.gate.pass, true, JSON.stringify(ev.faults));
+	assert.equal(ev.gate.tasks.done, 3);
+	// api's run plus its resume, and one run each for b and c.
+	assert.equal(readRuns(dir).length, 4);
+});
+
+test("resilience: a reviewer whose first run fails transiently is resumed and its verdict kept", async () => {
+	const dir = repo();
+	resilienceFake(dir, ["ok"], { keepSession: true, review: ["transient", "VERDICT: approve\nFINDINGS: none"] });
+	const target = await probeTarget();
+	setConfig(dir, resumeConfig(target.url, { retries: 0 }));
+	try {
+		await withExtension(dir, false, async () => {
+			drop(dir, "rs6", pairPlan("rs6", "pair: review"));
+			await waitFor(path.join(dir, ".plans/done/rs6/_summary.md"));
+		});
+	} finally {
+		await target.close();
+	}
+
+	const ev = evidence(dir, "rs6");
+	assert.equal(ev.gate.pass, true, JSON.stringify(ev.faults));
+	assert.deepEqual(ev.pairs, [{ task: "api", rounds: 1, verdict: "approve", finalVerdict: "approve", unresolved: [], unparsed: false }]);
+	const reviews = readRuns(dir).filter((r) => r.review);
+	assert.equal(reviews.length, 2, "the reviewer ran, failed, and was resumed");
+	assert.equal(reviews[1].argv[reviews[1].argv.length - 1], CONTINUE_PROMPT);
+	const resume = readEvents(path.join(dir, ".plans"), "tr").find((e) => e.kind === "task.resume")!;
+	assert.equal(resume.task, "api", "the resume is reported on the reviewed task");
 });

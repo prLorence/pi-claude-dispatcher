@@ -112,6 +112,12 @@ Commands inside Pi:
 | `maxFilesPerTask` | `10` | Preflight rejects a task listing more files |
 | `maxTaskChars` | `8000` | Preflight rejects a longer task body |
 | `maxRunsPerTask` | `8` | Cap on worker runs per task: implementer plus pair reviewer runs |
+| `transientRetries` | `6` | Resumes of the same session after a transient network or provider error; outside `retries` and `maxRunsPerTask` |
+| `backoffSeconds` | `[15, 30, 60, 120, 300, 300]` | Seconds to wait before resume n (1-based); past the end the last value repeats |
+| `stallMinutes` | `3` | Kill a worker that prints nothing for this long while no tool call is in flight (`0` = off) |
+| `outagePauseMinutes` | `30` | Give up on an outage after this long without a healthy probe |
+| `probeSeconds` | `30` | Wait this long between network probes while an outage is open |
+| `probeUrls` | `["https://openrouter.ai", "https://opencode.ai"]` | Any of these answering with any HTTP status means the network is up |
 | `roles` | see [docs/roles.md](../docs/roles.md) | Map of role name to model, thinking, read-only flag and prompt. A user entry overrides only the fields it sets |
 
 A plan's frontmatter, or an individual task, can override `model` and `thinking`.
@@ -139,6 +145,21 @@ conversation. Setting `persistSessions` to `false` makes workers ephemeral.
 - Failed tasks retry `retries` times. If a task still fails, its dependents are skipped.
 - A malformed plan (unknown dependency, cycle, no tasks) moves to `.plans/failed/` with an `.error.md` explaining why.
 - Workers run with `PI_PLAN_DISPATCH_WORKER=1`, so they never start their own watcher.
+
+## Surviving network and provider failures
+
+A transient failure is the provider or the network dropping the run, not the worker doing something wrong: an HTTP status 429, 502, 503, 504 or 529, `rate limit`, `overloaded`, `bad gateway`, `ECONNRESET`, `ETIMEDOUT`, `EPIPE`, `fetch failed`, `socket hang up`, `terminated`, `Stream ended without finish_reason`, `stalled: no output` and similar. A verification failure, a timeout after `timeoutMinutes`, a bad or missing API key, a context-length error and a content-policy error are permanent, and `aborted` counts only as the whole error text.
+
+- **Resume instead of failing.** A transient error does not consume `retries` or `maxRunsPerTask`: the dispatcher waits `backoffSeconds` for that resume number (past the end of the list the last value repeats) and reopens the same Pi session with a short "carry on from where you stopped" prompt. The wait ends at once when the plan is aborted. After `transientRetries` resumes the last error takes the ordinary retry-or-fail path unchanged. When there is no session file to reopen (`persistSessions` off, a dry run, the file missing), the resume restarts the worker from the original prompt, still outside `retries`. The task's cost and tokens include every resume.
+- **Outage pause.** The first transient error also opens a plan-level gate: new tasks do not start and every resume waits. Every `probeSeconds` a probe requests each of `probeUrls` with a 5 s timeout, and any HTTP status from any of them means the network is up; a healthy probe closes the gate and everything continues. After `outagePauseMinutes` without a healthy probe the gate gives up and the waiting tasks fail through the normal path.
+- **Stall watchdog.** A worker whose JSON stream prints nothing for `stallMinutes` is killed and its run fails with `stalled: no output for <n> min`, which is transient and so resumes. A tool call in flight (a long build or `npm test`) is exempt, so the worker is never killed for a slow command. The `timeoutMinutes` total timeout stays as the backstop.
+- **Reviewers.** A pair or security reviewer that dies with a transient error is resumed the same way, with the same backoff, gate and resume limit, instead of becoming `review_unparsed`. A permanent reviewer failure behaves as today.
+
+Known limit: the probe uses plain `fetch` and does not go through a local proxy. An outage that only takes the proxy down does not stop the probe, so the gate can close early; the resumes then run against the broken proxy and use up their own `transientRetries` limit rather than the pause.
+
+The keys are `transientRetries` (6), `backoffSeconds` (`[15, 30, 60, 120, 300, 300]`), `stallMinutes` (3, `0` turns it off), `outagePauseMinutes` (30), `probeSeconds` (30) and `probeUrls` (`["https://openrouter.ai", "https://opencode.ai"]`). Fractions are allowed, which is how the tests use `probeSeconds: 0.1` and `stallMinutes: 0.02` without really waiting; `transientRetries` must be a whole number and `probeSeconds` and `outagePauseMinutes` must be above 0. An invalid value falls back to the default.
+
+The trace gains `task.resume` (task, attempt, resume number, `wait_s`, the error cut to 200 characters), `task.stall` (task, `minutes`), `outage.start` (`reason`) and `outage.end` (`outcome` `healthy` or `gave-up`, `duration_s`), and `trace.mjs watch` prints them as `RESUME`, `STALL` and `OUTAGE START`/`OUTAGE END` lines while the plan runs. The Pi widget shows `network outage: paused` while the gate is open and `resume <n>/<max>` next to a task that is waiting.
 
 ## Guardrails
 

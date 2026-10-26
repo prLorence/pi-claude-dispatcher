@@ -989,3 +989,223 @@ test("a worker failure drops Pi's \"No project session found\" warning", async (
 	assert.match(real.error ?? "", /No API key found/, "the real error is kept");
 	assert.doesNotMatch(real.error ?? "", /No project session found/);
 });
+
+test("config: the resilience defaults and every fallback of loadConfig", () => {
+	assert.equal(DEFAULT_CONFIG.transientRetries, 6);
+	assert.deepEqual(DEFAULT_CONFIG.backoffSeconds, [15, 30, 60, 120, 300, 300]);
+	assert.equal(DEFAULT_CONFIG.stallMinutes, 3);
+	assert.equal(DEFAULT_CONFIG.outagePauseMinutes, 30);
+	assert.equal(DEFAULT_CONFIG.probeSeconds, 30);
+	assert.deepEqual(DEFAULT_CONFIG.probeUrls, ["https://openrouter.ai", "https://opencode.ai"]);
+
+	const dir = tmp();
+	const dirs = getDirs(dir);
+	ensureDirs(dirs);
+	const load = (value: unknown) => {
+		fs.writeFileSync(path.join(dirs.root, "config.json"), JSON.stringify(value));
+		return loadConfig(dirs);
+	};
+
+	// no file at all: the defaults
+	assert.deepEqual(loadConfig(getDirs(tmp())), { ...DEFAULT_CONFIG });
+
+	// valid values, fractions included, are taken as they are
+	const ok = load({
+		transientRetries: 0,
+		backoffSeconds: [0.05, 0.1],
+		stallMinutes: 0,
+		outagePauseMinutes: 0.5,
+		probeSeconds: 0.1,
+		probeUrls: ["http://127.0.0.1:1"],
+	});
+	assert.equal(ok.transientRetries, 0, "0 is a valid value: resuming off");
+	assert.deepEqual(ok.backoffSeconds, [0.05, 0.1]);
+	assert.equal(ok.stallMinutes, 0, "0 is a valid value: the watchdog off");
+	assert.equal(ok.outagePauseMinutes, 0.5);
+	assert.equal(ok.probeSeconds, 0.1);
+	assert.deepEqual(ok.probeUrls, ["http://127.0.0.1:1"]);
+
+	// a bad value falls back to its own default, never to another key's
+	const bad = load({
+		transientRetries: 1.5,
+		backoffSeconds: [15, -1],
+		stallMinutes: -1,
+		outagePauseMinutes: 0,
+		probeSeconds: 0,
+		probeUrls: ["https://a.example", 7],
+	});
+	assert.equal(bad.transientRetries, 6, "a fraction is not an integer count");
+	assert.deepEqual(bad.backoffSeconds, [15, 30, 60, 120, 300, 300]);
+	assert.equal(bad.stallMinutes, 3);
+	assert.equal(bad.outagePauseMinutes, 30);
+	assert.equal(bad.probeSeconds, 30);
+	assert.deepEqual(bad.probeUrls, ["https://openrouter.ai", "https://opencode.ai"]);
+
+	// non-numbers, NaN, Infinity and the wrong types all fall back
+	for (const value of ["7", Number.NaN, null, true]) {
+		assert.equal(load({ transientRetries: value }).transientRetries, 6, `transientRetries ${String(value)}`);
+		assert.equal(load({ stallMinutes: value }).stallMinutes, 3, `stallMinutes ${String(value)}`);
+		assert.equal(load({ probeSeconds: value }).probeSeconds, 30, `probeSeconds ${String(value)}`);
+	}
+	assert.deepEqual(load({ backoffSeconds: "15" }).backoffSeconds, [15, 30, 60, 120, 300, 300], "a string is not a list");
+	assert.deepEqual(load({ backoffSeconds: {} }).backoffSeconds, [15, 30, 60, 120, 300, 300]);
+	assert.deepEqual(load({ probeUrls: ["ok", ""] }).probeUrls, ["https://openrouter.ai", "https://opencode.ai"], "an empty URL is not a URL");
+	assert.deepEqual(load({ probeUrls: "https://a.example" }).probeUrls, ["https://openrouter.ai", "https://opencode.ai"]);
+	// Infinity is not finite, so it falls back too; a negative transientRetries is not a count
+	assert.equal(load({ transientRetries: -1 }).transientRetries, 6);
+	assert.equal(load({ probeSeconds: Number.POSITIVE_INFINITY }).probeSeconds, 30);
+
+	// the defaults are never mutated by a load
+	load({ backoffSeconds: [1], probeUrls: ["https://x.example"] });
+	assert.deepEqual(DEFAULT_CONFIG.backoffSeconds, [15, 30, 60, 120, 300, 300]);
+	assert.deepEqual(DEFAULT_CONFIG.probeUrls, ["https://openrouter.ai", "https://opencode.ai"]);
+});
+
+/** Fake pi that prints its events, then stays silent; it answers SIGTERM with an aborted turn. */
+function silentPi(dir: string, name: string, opts: { events?: unknown[]; abortedOnTerm?: boolean } = {}): string {
+	const file = path.join(dir, name);
+	const lines = ["#!/usr/bin/env node"];
+	for (const ev of opts.events ?? []) lines.push(`console.log(${JSON.stringify(JSON.stringify(ev))});`);
+	if (opts.abortedOnTerm) {
+		const aborted = {
+			type: "message_end",
+			message: { role: "assistant", content: [], stopReason: "aborted", errorMessage: "Request was aborted" },
+		};
+		lines.push(`process.on("SIGTERM", () => { console.log(${JSON.stringify(JSON.stringify(aborted))}); process.exit(143); });`);
+	}
+	// Nothing else: no reply, no exit. The dispatcher has to kill it.
+	lines.push("setInterval(() => {}, 1000);");
+	fs.writeFileSync(file, lines.join("\n"));
+	fs.chmodSync(file, 0o755);
+	return file;
+}
+
+test("runWorker kills a silent worker as stalled, but never one with a tool call in flight", async () => {
+	const dir = tmp();
+	const plan = parsePlan(`---\nid: p\n---\nctx\n\n## task: api\nfiles: a.ts\nDo.\n`, "x");
+	// 0.01 min is a 600 ms window: short enough to test, long enough to be real
+	const cfg: DispatchConfig = { ...DEFAULT_CONFIG, persistSessions: false, stallMinutes: 0.01 };
+	const oneEvent = { type: "message_start", message: { role: "assistant" } };
+
+	// one event, then silence: killed, and the failure is the stall
+	const stalls: number[] = [];
+	const silent = silentPi(dir, "silent-pi.mjs", { events: [oneEvent] });
+	const r = await runWorker(dir, { ...cfg, piCommand: silent }, plan, plan.tasks[0], new AbortController().signal, undefined, {
+		stallCheckMs: 20,
+		onStall: (minutes) => stalls.push(minutes),
+	});
+	assert.equal(r.ok, false);
+	assert.match(r.error ?? "", /stalled: no output/);
+	assert.match(r.error ?? "", /0\.01 min/, "the minutes are reported as a plain number");
+	assert.deepEqual(stalls, [0.01], "onStall is called once");
+
+	// an open tool call is not a stall: the run lasts longer than the window and is not killed
+	const busy = silentPi(dir, "busy-pi.mjs", {
+		events: [{ type: "tool_execution_start", toolCallId: "1", toolName: "bash", args: { command: "npm test" } }],
+	});
+	const controller = new AbortController();
+	const started = Date.now();
+	let killedAsStalled = false;
+	const running = runWorker(dir, { ...cfg, piCommand: busy }, plan, plan.tasks[0], controller.signal, undefined, {
+		stallCheckMs: 20,
+		onStall: () => {
+			killedAsStalled = true;
+		},
+	});
+	// the wait is longer than the 600 ms window, so only the tool call can save it
+	await new Promise((resolve) => setTimeout(resolve, 900));
+	controller.abort();
+	const busyResult = await running;
+	assert.equal(killedAsStalled, false, "the tracker saw the open tool call");
+	assert.doesNotMatch(busyResult.error ?? "", /stalled/);
+	assert.ok(Date.now() - started >= 800, "the run really outlived the stall window");
+
+	// a stalled kill wins over the aborted turn Pi prints on SIGTERM
+	const aborted = silentPi(dir, "aborted-pi.mjs", { events: [oneEvent], abortedOnTerm: true });
+	const a = await runWorker(dir, { ...cfg, piCommand: aborted }, plan, plan.tasks[0], new AbortController().signal, undefined, {
+		stallCheckMs: 20,
+	});
+	assert.equal(a.ok, false);
+	assert.match(a.error ?? "", /stalled: no output/, "the kill reason beats the later aborted message_end");
+	assert.doesNotMatch(a.error ?? "", /Request was aborted/);
+});
+
+test("runWorker does not start the stall watchdog when stallMinutes is 0", async () => {
+	const dir = tmp();
+	const plan = parsePlan(`---\nid: p\n---\nctx\n\n## task: api\nfiles: a.ts\nDo.\n`, "x");
+	const cfg: DispatchConfig = { ...DEFAULT_CONFIG, persistSessions: false, stallMinutes: 0 };
+	const silent = silentPi(dir, "silent-pi.mjs");
+	const controller = new AbortController();
+	let stalled = false;
+	const running = runWorker(dir, { ...cfg, piCommand: silent }, plan, plan.tasks[0], controller.signal, undefined, {
+		stallCheckMs: 5,
+		onStall: () => {
+			stalled = true;
+		},
+	});
+	await new Promise((resolve) => setTimeout(resolve, 100));
+	controller.abort();
+	const r = await running;
+	assert.equal(stalled, false, "0 turns the watchdog off");
+	assert.equal(r.error, "aborted");
+});
+
+test("runWorker with resume reopens the same session id instead of retiring it", async () => {
+	const dir = tmp();
+	const plan = parsePlan(`---\nid: feat-r2\n---\nctx\n\n## task: api\nfiles: a.ts\nDo.\n`, "x");
+	const task = plan.tasks[0];
+	const reply = "STATUS: done\nCHANGED: none\nTESTS: none\nNOTES: ok\nNEEDS: none";
+	const fake = fakePi(dir, "fake-pi.mjs", reply);
+	const session = sessionFor(dir, DEFAULT_CONFIG, plan, task)!;
+	const existing = path.join(session.dir, `1000_${session.id}.jsonl`);
+	fs.mkdirSync(session.dir, { recursive: true });
+	fs.writeFileSync(existing, "the conversation so far\n");
+
+	const r = await runWorker(
+		dir,
+		{ ...DEFAULT_CONFIG, piCommand: fake },
+		plan,
+		task,
+		new AbortController().signal,
+		undefined,
+		{ resume: true, prompt: "carry on" },
+	);
+	assert.equal(r.ok, true);
+	assert.equal(fs.existsSync(existing), true, "the session file is not moved aside");
+	assert.equal(fs.readFileSync(existing, "utf8"), "the conversation so far\n", "the history is kept in place");
+	assert.deepEqual(fs.readdirSync(session.dir), [`1000_${session.id}.jsonl`], "nothing was retired");
+	const argv = readArgv(dir);
+	assert.equal(argv[argv.indexOf("--session-id") + 1], session.id, "the same session id is reopened");
+	assert.equal(argv[argv.length - 1], "carry on", "the prompt of the resume is sent as it is");
+	assert.equal(r.session?.id, session.id);
+	assert.equal(r.session?.file, `1000_${session.id}.jsonl`, "the file is found under its own name");
+
+	// without a session file to reopen, the run behaves as a fresh attempt
+	const fresh = tmp();
+	const freshPlan = parsePlan(`---\nid: feat-r2\n---\nctx\n\n## task: api\nfiles: a.ts\nDo.\n`, "x");
+	const freshSession = sessionFor(fresh, DEFAULT_CONFIG, freshPlan, freshPlan.tasks[0])!;
+	const freshFake = fakePi(fresh, "fake-pi.mjs", reply);
+	const again = await runWorker(
+		fresh,
+		{ ...DEFAULT_CONFIG, piCommand: freshFake },
+		freshPlan,
+		freshPlan.tasks[0],
+		new AbortController().signal,
+		undefined,
+		{ resume: true },
+	);
+	assert.equal(again.ok, true, "it spawns normally instead of failing");
+	const freshArgv = readArgv(fresh);
+	assert.equal(freshArgv[freshArgv.indexOf("--session-id") + 1], freshSession.id);
+	assert.equal(freshArgv[freshArgv.length - 1], buildWorkerPrompt(freshPlan, freshPlan.tasks[0]), "the original prompt is used");
+
+	// and without resume the old behaviour is unchanged: the file is retired
+	const plain = tmp();
+	const plainPlan = parsePlan(`---\nid: feat-r2\n---\nctx\n\n## task: api\nfiles: a.ts\nDo.\n`, "x");
+	const plainSession = sessionFor(plain, DEFAULT_CONFIG, plainPlan, plainPlan.tasks[0])!;
+	const stale = path.join(plainSession.dir, `1000_${plainSession.id}.jsonl`);
+	fs.mkdirSync(plainSession.dir, { recursive: true });
+	fs.writeFileSync(stale, "old\n");
+	await runWorker(plain, { ...DEFAULT_CONFIG, piCommand: fakePi(plain, "fake-pi.mjs", reply) }, plainPlan, plainPlan.tasks[0], new AbortController().signal);
+	assert.equal(fs.existsSync(stale), false, "without resume the old file is moved aside as before");
+});

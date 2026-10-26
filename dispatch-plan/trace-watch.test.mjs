@@ -272,6 +272,100 @@ test("watch tolerates a missing trace file and a line written in two chunks", as
 	w.kill();
 });
 
+test("watch prints a RESUME line for a task.resume event", async (t) => {
+	const dir = tmp();
+	let w;
+	t.after(() => {
+		w?.kill();
+		fs.rmSync(dir, { recursive: true, force: true });
+	});
+	writePlan(dir, "running", "p1", "wa");
+	w = startWatch(dir, ["--plan", "p1", "--timeout", "15"]);
+	await sleep(BOOT);
+
+	const ts = new Date().toISOString();
+	appendTrace(dir, "wa", [
+		ev("wa", "task.resume", { ts, task: "a", attempt: 2, data: { resume: 1, wait_s: 4, error: `connection reset ${"y".repeat(200)}` } }),
+		ev("wa", "plan.end", { data: { done: 1, failed: 0, skipped: 0, gate_pass: true, cost: 0 } }),
+	]);
+
+	assert.equal(await w.done(), 0);
+	const lines = w.lines();
+	assert.match(lines[0], new RegExp(`^${hhmmss(ts)} RESUME a a2 #1 wait=4s connection reset y+$`));
+	assert.ok(lines[0].length < 160, `the error is cut short: ${lines[0]}`);
+});
+
+test("watch prints a STALL line for a task.stall event", async (t) => {
+	const dir = tmp();
+	let w;
+	t.after(() => {
+		w?.kill();
+		fs.rmSync(dir, { recursive: true, force: true });
+	});
+	writePlan(dir, "running", "p1", "wb");
+	w = startWatch(dir, ["--plan", "p1", "--timeout", "15"]);
+	await sleep(BOOT);
+
+	const ts = new Date().toISOString();
+	appendTrace(dir, "wb", [
+		ev("wb", "task.stall", { ts, task: "b", attempt: 1, data: { minutes: 10 } }),
+		ev("wb", "plan.end", { data: { done: 1, failed: 0, skipped: 0, gate_pass: true, cost: 0 } }),
+	]);
+
+	assert.equal(await w.done(), 0);
+	assert.equal(w.lines()[0], `${hhmmss(ts)} STALL b 10min`);
+});
+
+test("watch prints OUTAGE START then OUTAGE END in event order", async (t) => {
+	const dir = tmp();
+	let w;
+	t.after(() => {
+		w?.kill();
+		fs.rmSync(dir, { recursive: true, force: true });
+	});
+	writePlan(dir, "running", "p1", "wc");
+	w = startWatch(dir, ["--plan", "p1", "--timeout", "15"]);
+	await sleep(BOOT);
+
+	const startTs = new Date().toISOString();
+	const endTs = new Date().toISOString();
+	appendTrace(dir, "wc", [
+		ev("wc", "outage.start", { ts: startTs, task: undefined, data: { reason: `fetch failed ${"z".repeat(200)}` } }),
+		ev("wc", "outage.end", { ts: endTs, task: undefined, data: { outcome: "healthy", duration_s: 42 } }),
+		ev("wc", "plan.end", { data: { done: 1, failed: 0, skipped: 0, gate_pass: true, cost: 0 } }),
+	]);
+
+	assert.equal(await w.done(), 0);
+	const lines = w.lines();
+	assert.match(lines[0], new RegExp(`^${hhmmss(startTs)} OUTAGE START fetch failed z+$`));
+	assert.ok(lines[0].length < 160, `the reason is cut short: ${lines[0]}`);
+	assert.equal(lines[1], `${hhmmss(endTs)} OUTAGE END healthy after 42s`);
+});
+
+test("watch ignores an outage event of another plan", async (t) => {
+	const dir = tmp();
+	let w;
+	t.after(() => {
+		w?.kill();
+		fs.rmSync(dir, { recursive: true, force: true });
+	});
+	writePlan(dir, "running", "p1", "wd");
+	w = startWatch(dir, ["--plan", "p1", "--timeout", "15"]);
+	await sleep(BOOT);
+
+	appendTrace(dir, "wd", [
+		ev("wd", "outage.start", { plan: "p2", task: undefined, data: { reason: "another plan's outage" } }),
+		ev("wd", "outage.end", { plan: "p2", task: undefined, data: { outcome: "gave-up", duration_s: 7 } }),
+		ev("wd", "plan.end", { data: { done: 1, failed: 0, skipped: 0, gate_pass: true, cost: 0 } }),
+	]);
+
+	assert.equal(await w.done(), 0);
+	const lines = w.lines();
+	assert.equal(lines.length, 1, lines.join("\n"));
+	assert.match(lines[0], /PLAN END/);
+	assert.ok(!w.out.join("").includes("another plan's outage"), "another plan's outage is ignored");
+});
+
 test("watch exits 64 on a usage error", (t) => {
 	const dir = tmp();
 	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

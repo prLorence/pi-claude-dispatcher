@@ -67,6 +67,7 @@ import {
 import { type ReviewFinding, type ReviewReport, buildReviewPrompt, feedbackFromFindings, parseReviewReport } from "./review.ts";
 import { checkToolCall, policyFromEnv } from "./guard.ts";
 import { type VerifyResult, commandExists, createVerifyLock, runVerify, verifyFeedback } from "./verify.ts";
+import { CONTINUE_PROMPT, OutageGate, probeUrls, runWithResume } from "./resilience.ts";
 
 const ICON: Record<string, string> = { pending: "·", running: "▶", done: "✓", failed: "✗", skipped: "−" };
 
@@ -161,7 +162,12 @@ export default function (pi: ExtensionAPI) {
 	let current: Plan | undefined;
 	let ctxRef: ExtensionContext | undefined;
 	let dirs: Dirs | undefined;
+	// The outage gate of the plan run in progress: closed by the drain loop, so a
+	// plan that threw cannot leave a probe loop running.
+	let planGate: OutageGate | undefined;
 	const lastLine = new Map<string, string>();
+	/** Tasks waiting for a resume right now: the widget shows their counter. */
+	const resuming = new Map<string, { n: number; max: number }>();
 
 	const isWorker = () => process.env.PI_PLAN_DISPATCH_WORKER === "1";
 
@@ -182,13 +188,17 @@ export default function (pi: ExtensionAPI) {
 		}
 		const done = current.tasks.filter((t) => t.state === "done").length;
 		ctx.ui.setStatus("plans", `plans: ${current.id} ${done}/${current.tasks.length}`);
+		const paused = planGate?.open === true;
 		ctx.ui.setWidget(
 			"plans",
 			[
 				`Plan ${current.id}${config().dryRun ? " (dry run)" : ""}`,
+				...(paused ? ["network outage: paused"] : []),
 				...current.tasks.map((t) => {
 					const extra = t.state === "running" && lastLine.get(t.id) ? `  ${lastLine.get(t.id)}` : "";
-					return `  ${ICON[t.state]} ${t.id}${t.attempts > 1 ? ` (try ${t.attempts})` : ""}${extra}`;
+					const waiting = resuming.get(t.id);
+					const resume = waiting ? ` resume ${waiting.n}/${waiting.max}` : "";
+					return `  ${ICON[t.state]} ${t.id}${t.attempts > 1 ? ` (try ${t.attempts})` : ""}${resume}${extra}`;
 				}),
 			],
 			{ placement: "belowEditor" },
@@ -228,6 +238,9 @@ export default function (pi: ExtensionAPI) {
 			for (let f = readyFiles()[0]; f; f = readyFiles()[0]) await runPlanFile(f);
 		} finally {
 			busy = false;
+			// The plan run is over, however it ended: stop probing for the network.
+			planGate?.close();
+			planGate = undefined;
 			current = undefined;
 			render();
 		}
@@ -294,6 +307,30 @@ export default function (pi: ExtensionAPI) {
 			}
 		};
 		const pSpan = planSpan(plan.id);
+		// R3: one outage gate per plan run. The first transient error opens it, a
+		// probe closes it, and the scheduler starts no new task while it is open.
+		const outageGate = new OutageGate({
+			pauseMs: cfg.outagePauseMinutes * 60_000,
+			probeMs: cfg.probeSeconds * 1000,
+			probe: () => probeUrls(cfg.probeUrls),
+			onStart: (reason) => {
+				emit({ span: `${pSpan}:outage`, parent: pSpan, actor: "pi-dispatch", kind: "outage.start", data: { reason } });
+				render();
+			},
+			onEnd: (durationMs, outcome) => {
+				emit({
+					span: `${pSpan}:outage`,
+					parent: pSpan,
+					actor: "pi-dispatch",
+					kind: "outage.end",
+					data: { outcome, duration_s: Math.round(durationMs / 1000) },
+				});
+				render();
+			},
+		});
+		planGate = outageGate;
+		// The stop handler cannot reach this plan's gate, so the abort closes it.
+		abort.signal.addEventListener("abort", () => outageGate.close(), { once: true });
 		const planStart = Date.now();
 		const results = new Map<string, WorkerResult>();
 		const sessions: { task: string; attempt: number; id: string; file?: string; resume: string }[] = [];
@@ -334,6 +371,55 @@ export default function (pi: ExtensionAPI) {
 		});
 
 		const inflight = new Map<string, Promise<void>>();
+
+		/**
+		 * One worker run inside the transient-failure resume loop of `resilience.ts`:
+		 * the backoff, the same-session reopen and the outage gate live there. `owner`
+		 * is the task the events and the widget belong to (for a pair reviewer, the
+		 * reviewed task), `runTask` is the task handed to the worker.
+		 */
+		const runResumed = async (
+			owner: PlanTask,
+			runTask: PlanTask,
+			prompt: string,
+			onLine: (line: string) => void,
+		): Promise<WorkerResult & { resumes: number }> => {
+			const span = taskSpan(plan.id, owner.id, owner.attempts);
+			const onStall = (minutes: number) =>
+				emit({ span: `${span}:stall`, parent: span, actor: "pi-dispatch", kind: "task.stall", task: owner.id, attempt: owner.attempts, data: { minutes } });
+			/** The first run gets the original prompt; a resume continues the session when it can. */
+			const workerOpts = (info: { continueSession: boolean } | null) => {
+				if (info === null) return { prompt, onStall };
+				if (info.continueSession) return { prompt: CONTINUE_PROMPT, resume: true, onStall };
+				return { prompt, onStall };
+			};
+			try {
+				return await runWithResume<WorkerResult>({
+					run: (info) => runWorker(cwd, cfg, plan, runTask, abort!.signal, onLine, workerOpts(info)),
+					hasSession: (r) => !!r.session?.file,
+					gate: outageGate,
+					maxResumes: cfg.transientRetries,
+					backoff: cfg.backoffSeconds,
+					signal: abort!.signal,
+					onResume: (i) => {
+						resuming.set(owner.id, { n: i.resume, max: cfg.transientRetries });
+						emit({
+							span: `${span}:resume${i.resume}`,
+							parent: span,
+							actor: "pi-dispatch",
+							kind: "task.resume",
+							task: owner.id,
+							attempt: owner.attempts,
+							data: { resume: i.resume, wait_s: i.waitSec, error: i.error.slice(0, 200) },
+						});
+						render();
+					},
+				});
+			} finally {
+				resuming.delete(owner.id);
+				render();
+			}
+		};
 
 		/** Open a window before a read-only run: who else is running now, and the files as they are. */
 		const openWindow = (kind: OpenWindow["kind"], taskId: string): OpenWindow => {
@@ -420,18 +506,11 @@ export default function (pi: ExtensionAPI) {
 			// A reviewer can write through the shell, which the live guard cannot block:
 			// the window around its run is the backstop.
 			const window = openWindow("reviewer", t.id);
-			const rr = await runWorker(
-				cwd,
-				cfg,
-				plan,
-				reviewTask,
-				abort!.signal,
-				(line) => {
-					lastLine.set(t.id, `review: ${line}`);
-					render();
-				},
-				{ prompt },
-			);
+			const rr = await runResumed(t, reviewTask, prompt, (line) => {
+				lastLine.set(t.id, `review: ${line}`);
+				render();
+			});
+			t.resumes = (t.resumes ?? 0) + rr.resumes;
 			closeWindow(window);
 			lastLine.delete(t.id);
 			// Every reviewer run's tool calls stay with the task they reviewed.
@@ -553,18 +632,12 @@ export default function (pi: ExtensionAPI) {
 			});
 			render();
 			const runWindow = readonlyRun ? openWindow("readonly", t.id) : undefined;
-			const r = await runWorker(
-				cwd,
-				cfg,
-				plan,
-				t,
-				abort!.signal,
-				(line) => {
-					lastLine.set(t.id, line);
-					render();
-				},
-				{ prompt },
-			);
+			const r = await runResumed(t, t, prompt, (line) => {
+				lastLine.set(t.id, line);
+				render();
+			});
+			// A resume is not an attempt: it grows this task-wide counter only.
+			t.resumes = (t.resumes ?? 0) + r.resumes;
 			if (runWindow) closeWindow(runWindow);
 			t.endedAt = Date.now();
 			t.cost = (t.cost || 0) + r.cost;
@@ -684,11 +757,18 @@ export default function (pi: ExtensionAPI) {
 					t.state = "skipped";
 					t.summary = "Skipped: plan was stopped.";
 				}
-			} else {
+			} else if (!outageGate.open) {
+				// During an outage no new task starts: the ones in flight resume first.
 				for (const t of pickRunnable(plan, limit)) start(t);
 			}
 			if (inflight.size === 0) {
 				if (isPlanFinished(plan)) break;
+				if (outageGate.open) {
+					// Nothing in flight and the network is down: wait for the probe
+					// instead of skipping the tasks that are merely paused.
+					await outageGate.changed();
+					continue;
+				}
 				// Nothing running and nothing runnable: remaining tasks are blocked.
 				for (const t of plan.tasks) if (t.state === "pending") {
 					t.state = "skipped";
@@ -696,7 +776,9 @@ export default function (pi: ExtensionAPI) {
 				}
 				break;
 			}
-			await Promise.race(inflight.values());
+			// Wake on a task finishing and on the gate flipping, so the runnable tasks
+			// start as soon as a probe is healthy.
+			await Promise.race([...inflight.values(), ...(outageGate.open ? [outageGate.changed()] : [])]);
 		}
 		await Promise.all(inflight.values());
 

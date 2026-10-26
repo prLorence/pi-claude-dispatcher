@@ -8,6 +8,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { BLOCKED_MARKER, GUARD_ENV, VAULT_ENV } from "./guard.ts";
+import { StallTracker } from "./resilience.ts";
 
 // ---------- Roles ----------
 
@@ -128,6 +129,18 @@ export interface DispatchConfig {
 	roles: Record<string, RoleConfig>;
 	/** Cap on worker runs for one task: implementer runs plus pair reviewer runs */
 	maxRunsPerTask: number;
+	/** Resumes of the same session after a transient error, before `retries` applies (0 = off) */
+	transientRetries: number;
+	/** Seconds to wait before resume n (1-based); past the end the last value repeats */
+	backoffSeconds: number[];
+	/** Kill a worker that prints nothing for this many minutes (0 = off) */
+	stallMinutes: number;
+	/** Give up on an outage after this many minutes without a healthy probe */
+	outagePauseMinutes: number;
+	/** Wait this long between network probes while an outage is open */
+	probeSeconds: number;
+	/** Any of these URLs answering with any HTTP status means the network is up */
+	probeUrls: string[];
 }
 
 export const DEFAULT_CONFIG: DispatchConfig = {
@@ -146,6 +159,12 @@ export const DEFAULT_CONFIG: DispatchConfig = {
 	maxTaskChars: 8000,
 	roles: cloneRoles(DEFAULT_ROLES),
 	maxRunsPerTask: 8,
+	transientRetries: 6,
+	backoffSeconds: [15, 30, 60, 120, 300, 300],
+	stallMinutes: 3,
+	outagePauseMinutes: 30,
+	probeSeconds: 30,
+	probeUrls: ["https://openrouter.ai", "https://opencode.ai"],
 };
 
 export type TaskState = "pending" | "running" | "done" | "failed" | "skipped";
@@ -166,6 +185,8 @@ export interface PlanTask {
 	pairRound: number;
 	/** Shell command the dispatcher runs after a successful attempt (exit 0 = verified) */
 	verify?: string;
+	/** Resumes of this task's session after transient errors so far; counted apart from attempts */
+	resumes?: number;
 	/** Failure output fed to the next attempt */
 	feedback?: string;
 	/** What `feedback` is: a verify failure (default) or review findings */
@@ -221,14 +242,43 @@ export function ensureDirs(d: Dirs) {
 	for (const p of [d.inbox, d.running, d.done, d.failed]) fs.mkdirSync(p, { recursive: true });
 }
 
+/** A finite number that passes `ok`, else the default; fractions are allowed. */
+function numberOr(value: unknown, fallback: number, ok: (n: number) => boolean = (n) => n >= 0): number {
+	return typeof value === "number" && Number.isFinite(value) && ok(value) ? value : fallback;
+}
+
+/** A list of positive numbers, else the default. An empty list is valid. */
+function numbersOr(value: unknown, fallback: number[]): number[] {
+	if (!Array.isArray(value)) return [...fallback];
+	if (!value.every((v) => typeof v === "number" && Number.isFinite(v) && v > 0)) return [...fallback];
+	return [...(value as number[])];
+}
+
+/** A list of non-empty strings, else the default. An empty list is valid. */
+function stringsOr(value: unknown, fallback: string[]): string[] {
+	if (!Array.isArray(value)) return [...fallback];
+	if (!value.every((v) => typeof v === "string" && v.length > 0)) return [...fallback];
+	return [...(value as string[])];
+}
+
 export function loadConfig(d: Dirs): DispatchConfig {
 	const file = path.join(d.root, "config.json");
+	let raw: any;
 	try {
-		const raw = JSON.parse(fs.readFileSync(file, "utf8"));
-		return { ...DEFAULT_CONFIG, ...raw, roles: mergeRoles(raw?.roles) };
+		raw = JSON.parse(fs.readFileSync(file, "utf8"));
 	} catch {
 		return { ...DEFAULT_CONFIG, roles: cloneRoles(DEFAULT_ROLES) };
 	}
+	const cfg: DispatchConfig = { ...DEFAULT_CONFIG, ...raw, roles: mergeRoles(raw?.roles) };
+	// Resilience keys are repaired rather than trusted: a typo must not turn a
+	// guard off silently or make the dispatcher wait forever.
+	cfg.transientRetries = numberOr(raw?.transientRetries, DEFAULT_CONFIG.transientRetries, (n) => Number.isInteger(n) && n >= 0);
+	cfg.backoffSeconds = numbersOr(raw?.backoffSeconds, DEFAULT_CONFIG.backoffSeconds);
+	cfg.stallMinutes = numberOr(raw?.stallMinutes, DEFAULT_CONFIG.stallMinutes, (n) => n >= 0);
+	cfg.outagePauseMinutes = numberOr(raw?.outagePauseMinutes, DEFAULT_CONFIG.outagePauseMinutes, (n) => n > 0);
+	cfg.probeSeconds = numberOr(raw?.probeSeconds, DEFAULT_CONFIG.probeSeconds, (n) => n > 0);
+	cfg.probeUrls = stringsOr(raw?.probeUrls, DEFAULT_CONFIG.probeUrls);
+	return cfg;
 }
 
 /** Every role name the config knows: the built-ins plus any the user added. */
@@ -715,7 +765,10 @@ interface WorkerStreamState {
 	plain: string;
 }
 
-function createWorkerStream(onText?: (text: string) => void): { state: WorkerStreamState; handle: (line: string) => void } {
+function createWorkerStream(
+	onText?: (text: string) => void,
+	onEvent?: (ev: any) => void,
+): { state: WorkerStreamState; handle: (line: string) => void } {
 	const state: WorkerStreamState = {
 		finalText: "",
 		cost: 0,
@@ -738,6 +791,9 @@ function createWorkerStream(onText?: (text: string) => void): { state: WorkerStr
 			if (state.plain.length > 20_000) state.plain = state.plain.slice(-20_000);
 			return;
 		}
+		// Every parsed event is reported before it is interpreted, so a caller can
+		// watch the stream (the stall watchdog uses it for the tool calls).
+		onEvent?.(ev);
 		if (ev.type === "tool_execution_start") {
 			const a = ev.args || {};
 			const rec: ToolRecord = {
@@ -853,7 +909,15 @@ export function runWorker(
 	task: PlanTask,
 	signal: AbortSignal,
 	onLine?: (line: string) => void,
-	opts?: { prompt?: string },
+	opts?: {
+		prompt?: string;
+		/** Reopen the task's session instead of starting a fresh one (resume of spec R2) */
+		resume?: boolean;
+		/** How often the stall tracker is checked; default min(10s, max(100ms, stallMs / 4)) */
+		stallCheckMs?: number;
+		/** Called once when the worker is killed as stalled, with the minutes waited */
+		onStall?: (minutes: number) => void;
+	},
 ): Promise<WorkerResult> {
 	const prompt = opts?.prompt ?? buildWorkerPrompt(plan, task, cfg);
 
@@ -881,7 +945,11 @@ export function runWorker(
 	const args = ["--mode", "json", "-p"];
 	const session = sessionFor(cwd, cfg, plan, task);
 	if (session) {
-		retireSession(session);
+		// A resume continues the conversation: the file stays and the same id is
+		// reopened. Without a file there is nothing to reopen, so a fresh session
+		// starts and the caller passes the original prompt.
+		const reopening = opts?.resume === true && findSessionFile(session) !== undefined;
+		if (!reopening) retireSession(session);
 		args.push("--session-id", session.id, "--session-dir", session.dir, "--name", `${plan.id}/${task.id}`);
 	} else args.push("--no-session");
 	args.push("--model", model);
@@ -890,11 +958,23 @@ export function runWorker(
 	args.push(prompt);
 
 	return new Promise((resolve) => {
-		const stream = createWorkerStream((text) => onLine?.(text.split("\n")[0].slice(0, 120)));
+		const stallMs = cfg.stallMinutes * 60_000;
+		const tracker = new StallTracker({ stallMs });
+		const stream = createWorkerStream(
+			(text) => onLine?.(text.split("\n")[0].slice(0, 120)),
+			(ev) => {
+				tracker.touch();
+				if (ev.type === "tool_execution_start" && ev.toolCallId) tracker.toolStart(String(ev.toolCallId));
+				else if (ev.type === "tool_execution_end" && ev.toolCallId) tracker.toolEnd(String(ev.toolCallId));
+			},
+		);
 		const state = stream.state;
 		let stderr = "";
 		let buffer = "";
 		let settled = false;
+		/** The first deliberate kill's reason; it wins over a later aborted turn. */
+		let killReason = "";
+		let stallTimer: NodeJS.Timeout | undefined;
 
 		const proc = spawn(cfg.piCommand, args, {
 			cwd,
@@ -909,10 +989,14 @@ export function runWorker(
 			if (settled) return;
 			settled = true;
 			clearTimeout(timeout);
+			if (stallTimer) clearInterval(stallTimer);
 			resolve(r);
 		};
 
 		const kill = (why: string) => {
+			// A later assistant `message_end` (Pi answering SIGTERM with an aborted
+			// turn) overwrites state.errorMessage, so keep the first reason here too.
+			if (!killReason) killReason = why;
 			state.errorMessage = why;
 			proc.kill("SIGTERM");
 			setTimeout(() => {
@@ -921,6 +1005,19 @@ export function runWorker(
 		};
 		const timeout = setTimeout(() => kill(`timed out after ${cfg.timeoutMinutes} min`), cfg.timeoutMinutes * 60_000);
 		signal.addEventListener("abort", () => kill("aborted"), { once: true });
+		if (stallMs > 0) {
+			const every = opts?.stallCheckMs ?? Math.min(10_000, Math.max(100, stallMs / 4));
+			// The child needs a moment to die, so the tick would see the same stall
+			// again: report and kill once.
+			let stallKilled = false;
+			stallTimer = setInterval(() => {
+				if (stallKilled || !tracker.stalled()) return;
+				stallKilled = true;
+				const minutes = cfg.stallMinutes;
+				opts?.onStall?.(minutes);
+				kill(`stalled: no output for ${minutes} min`);
+			}, every);
+		}
 
 		const handle = stream.handle;
 
@@ -928,7 +1025,10 @@ export function runWorker(
 			buffer += d.toString();
 			const lines = buffer.split("\n");
 			buffer = lines.pop() || "";
-			for (const l of lines) handle(l);
+			for (const l of lines) {
+				tracker.touch();
+				handle(l);
+			}
 		});
 		proc.stderr.on("data", (d) => {
 			stderr += d.toString();
@@ -954,6 +1054,7 @@ export function runWorker(
 			const failed =
 				code !== 0 || state.stopReason === "error" || state.stopReason === "aborted" || !!state.errorMessage || selfReportedFail || noOutput;
 				const why =
+				killReason ||
 				state.errorMessage ||
 				(selfReportedFail ? "worker reported STATUS: failed" : "") ||
 				dropSessionWarning(`${stderr}${state.plain}`).trim().slice(-2000) ||
