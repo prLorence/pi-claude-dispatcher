@@ -288,6 +288,51 @@ test(
 );
 
 test(
+	"search keeps a none repo's slug out of the trace event",
+	withRoot(async ({ root }) => {
+		const vault = makeVault(root);
+		const fakes = makeFakes(root);
+		const reposFile = path.join(vault, "repos.json");
+		const repos = JSON.parse(fs.readFileSync(reposFile, "utf8"));
+		repos.repos["github.com/o/secret"] = { mode: "none" };
+		write(vault, "repos.json", `${JSON.stringify(repos, null, 2)}\n`);
+		const env = { VAULT_SEARCH_BIN: fakes.fake };
+		const traceRoot = path.join(root, "events");
+
+		const hidden = run(
+			root,
+			["search", "github.com/o/secret", "--repo", "github.com/o/r", "--root", traceRoot, "--trace", "t3"],
+			{ vault, env },
+		);
+		assert.equal(hidden.code, 0, hidden.err);
+		const traceFile = path.join(traceRoot, ".plans", "traces", "t3.jsonl");
+		assert.equal(fs.readFileSync(traceFile, "utf8").includes("github.com/o/secret"), false, "the slug is not in the trace");
+		const [hiddenEvent] = events(root, "t3");
+		assert.equal(hiddenEvent.kind, "vault.search");
+		assert.equal("query" in hiddenEvent.data, false);
+		assert.equal(hiddenEvent.data.query_len, "github.com/o/secret".length);
+
+		const ordinary = run(
+			root,
+			["search", "alpha beta", "--repo", "github.com/o/r", "--root", traceRoot, "--trace", "t4"],
+			{ vault, env },
+		);
+		assert.equal(ordinary.code, 0, ordinary.err);
+		const [ordinaryEvent] = events(root, "t4");
+		assert.equal(ordinaryEvent.data.query, "alpha beta");
+
+		const meta = run(
+			root,
+			["search", "alpha beta", "--repo", "github.com/o/m", "--root", traceRoot, "--trace", "t5"],
+			{ vault, env },
+		);
+		assert.equal(meta.code, 0, meta.err);
+		const [metaEvent] = events(root, "t5");
+		assert.equal("query" in metaEvent.data, false);
+	}),
+);
+
+test(
 	"a query with shell characters reaches the binary as one intact argument",
 	withRoot(async ({ root }) => {
 		const vault = makeVault(root);

@@ -61,6 +61,16 @@ function repoMode(c, repo) {
 	}
 }
 
+/** True when the text names a repo the vault keeps out of notes, so it stays out of the event. */
+function namesNoneRepo(c, text) {
+	try {
+		const repos = c.modules.notes.readRepos(c.vault);
+		return c.modules.privacy.leaksNoneRepo(repos, text).length > 0;
+	} catch {
+		return true;
+	}
+}
+
 function textBlock(hit) {
 	const score = typeof hit.score === "number" ? hit.score.toFixed(3) : "0.000";
 	const lines = [`${hit.basename} | ${hit.type} | ${hit.repo} | ${hit.status} | ${score}`];
@@ -126,7 +136,7 @@ export function searchCommand(c, options) {
 		include_work: options.includeWork === true,
 		limit,
 	};
-	if (repoMode(c, options.repo) === "full") data.query = query;
+	if (repoMode(c, options.repo) === "full" && !namesNoneRepo(c, query)) data.query = query;
 	return { code: 0, event: { kind: "vault.search", data } };
 }
 

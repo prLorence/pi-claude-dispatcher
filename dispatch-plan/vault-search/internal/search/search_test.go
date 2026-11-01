@@ -1,10 +1,12 @@
 package search
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -420,6 +422,53 @@ func TestReadOnly(t *testing.T) {
 	if !reflect.DeepEqual(before, after) {
 		t.Fatalf("search changed the vault\nbefore: %#v\nafter:  %#v", before, after)
 	}
+}
+
+// TestScanJobsDoesNotRetainFileText guards the retained-substring bug:
+// parseFrontmatter returns substrings of the file text, so keeping repo,
+// status or type in a docSummary kept every scanned note's whole text alive.
+// Measured here on macOS arm64: HeapAlloc 19,664,000 bytes against
+// 16,432,000 bytes written before the clone fix, 816,048 bytes after it.
+func TestScanJobsDoesNotRetainFileText(t *testing.T) {
+	vaultDir := t.TempDir()
+	decisions := filepath.Join(vaultDir, "decisions")
+	if err := os.MkdirAll(decisions, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	const noteCount = 2000
+	const noteBytes = 8192
+	var note strings.Builder
+	// Unquoted scalars keep the parsed values as substrings of the file text.
+	note.WriteString("---\ntype: decision\nstatus: active\nrepo: github.com/acme/app\n---\n\n")
+	for note.Len() < noteBytes {
+		note.WriteString("filler words about a decision and the reasons behind it.\n")
+	}
+	content := note.String()
+	var totalBytes int64
+	for i := 0; i < noteCount; i++ {
+		name := filepath.Join(decisions, fmt.Sprintf("decision-memory-%04d.md", i))
+		if err := os.WriteFile(name, []byte(content), 0o644); err != nil {
+			t.Fatalf("write note %d: %v", i, err)
+		}
+		totalBytes += int64(len(content))
+	}
+
+	opts := Options{Vault: vaultDir, All: true, MaxFileBytes: 262144}
+	docs := scanJobs(opts, collectJobs(opts), map[string]bool{"needle": true})
+	if len(docs) != noteCount {
+		t.Fatalf("scanned %d docs, want %d", len(docs), noteCount)
+	}
+
+	runtime.GC()
+	var stats runtime.MemStats
+	runtime.ReadMemStats(&stats)
+	// Keep the summaries reachable across the measurement above.
+	runtime.KeepAlive(docs)
+
+	if int64(stats.HeapAlloc) >= totalBytes/2 {
+		t.Fatalf("HeapAlloc %d bytes (HeapInuse %d) is not under half of the %d bytes written: the scan retains the file text", stats.HeapAlloc, stats.HeapInuse, totalBytes)
+	}
+	t.Logf("HeapAlloc %d bytes, HeapInuse %d bytes, written %d bytes", stats.HeapAlloc, stats.HeapInuse, totalBytes)
 }
 
 func TestRepeatedRunsIdentical(t *testing.T) {

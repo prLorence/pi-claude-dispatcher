@@ -5,12 +5,28 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"strings"
 
 	"vault-search/internal/search"
 )
 
 const version = "vault-search 0.1.0"
+
+// tuneCollector lets the heap grow to a soft ceiling instead of collecting
+// proportionally. The scan reads every note, copies its text a few times and
+// keeps only a small summary, so a proportional target over a tiny live heap
+// runs dozens of cycles over data that is about to die and costs about a third
+// of the scan time. Measured with bench -gate at 10000 notes on macOS arm64:
+// the default collector kept peak RSS near 23 MB but p95 at 284-380 ms over
+// several runs; this ceiling gives about 61 MB and p95 210-238 ms, inside the
+// 100 MB and 250 ms limits. The ceiling is well above the roughly 5 MB of live
+// summaries, so it never thrashes, and it only applies to this short-lived
+// command.
+func tuneCollector() {
+	debug.SetGCPercent(-1)
+	debug.SetMemoryLimit(64 << 20)
+}
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -62,6 +78,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "vault-search: a query is required")
 		return 2
 	}
+
+	tuneCollector()
 
 	hits, err := search.Run(search.Options{
 		Vault:       *vault,

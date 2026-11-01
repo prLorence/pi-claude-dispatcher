@@ -17,6 +17,9 @@ import * as path from "node:path";
 const EVAL_DIR = "eval";
 const EVAL_FILE = "golden.json";
 const LINE_BREAK_RE = /[\r\n]/;
+// Mirrors BASENAME_RE in pi-plan-dispatch/vault/schema.ts, so an expected name
+// stays a note basename and can never walk out of the vault with `/`, `\` or `..`.
+const EXPECT_BASENAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 let tempCounter = 0;
 
@@ -88,6 +91,9 @@ export function evalAdd(c, { query, expect }) {
 	if (trimmed === "") return refusal(c, "eval add needs a non-empty --query");
 	if (LINE_BREAK_RE.test(raw)) return refusal(c, "eval add --query must be a single line");
 	if (basename === "") return refusal(c, "eval add needs --expect");
+	if (!EXPECT_BASENAME_RE.test(basename)) {
+		return refusal(c, `eval add --expect must match ^[a-z0-9]+(-[a-z0-9]+)*$: ${basename}`);
+	}
 	if (c.modules.notes.readNote(c.vault, basename) === undefined) {
 		return refusal(c, `no note named ${basename}`);
 	}

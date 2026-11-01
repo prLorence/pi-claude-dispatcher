@@ -136,6 +136,28 @@ test(
 );
 
 test(
+	"an expect value that is not a note basename is refused before any read or write",
+	withRoot(async ({ root, vault }) => {
+		// A decoy note outside the vault that `../../elsewhere/x` would reach if the
+		// name went to readNote unchecked. It must stay unread and unrecorded.
+		const decoy = writeText(root, "elsewhere/x.md", note("decision", "x", "Outside the vault."));
+		const decoyText = fs.readFileSync(decoy, "utf8");
+		for (const expect of ["../../elsewhere/x", "a/b", "a\\b", "..", "Decision-Alpha", "decision.alpha"]) {
+			const { c, err } = makeContext(vault);
+			assert.equal(evalAdd(c, { query: "alpha", expect }).code, 2);
+			assert.equal(err.length, 1);
+			assert.match(err[0], /must match \^\[a-z0-9\]\+\(-\[a-z0-9\]\+\)\*\$/);
+			assert.equal(bytesOf(vault), undefined);
+			assert.equal(fs.readFileSync(decoy, "utf8"), decoyText);
+		}
+
+		const { c, out } = makeContext(vault);
+		assert.equal(evalAdd(c, { query: "alpha", expect: "decision-alpha" }).code, 0);
+		assert.equal(out[0], goldenFile(vault));
+	}),
+);
+
+test(
 	"a query that names a none-mode repo is refused and writes nothing",
 	withRoot(async ({ vault }) => {
 		const { c, err } = makeContext(vault);
