@@ -29,6 +29,7 @@ import {
 	DEFAULT_PAIR_ROUNDS,
 	PlanParseError,
 	buildWorkerPrompt,
+	eligibleForDecider,
 	ensureDirs,
 	getDirs,
 	isPlanFinished,
@@ -38,6 +39,7 @@ import {
 	preflightPlan,
 	resolveModel,
 	resolveRole,
+	resolveThinking,
 	resumeCommand,
 	sessionFor,
 	pickRunnable,
@@ -65,6 +67,8 @@ import {
 	trackedFiles,
 } from "./trace.ts";
 import { type ReviewFinding, type ReviewReport, buildReviewPrompt, feedbackFromFindings, parseReviewReport } from "./review.ts";
+import type { Backend } from "./decider/backend.ts";
+import { type DecideResult, decideTaskLevel } from "./decider/dispatch.ts";
 import { checkToolCall, policyFromEnv } from "./guard.ts";
 import { type VerifyResult, commandExists, createVerifyLock, runVerify, verifyFeedback } from "./verify.ts";
 import { CONTINUE_PROMPT, OutageGate, probeUrls, runWithResume } from "./resilience.ts";
@@ -151,7 +155,9 @@ function writeVerifyReport(outDir: string, file: string, command: string, r: Ver
 	fs.writeFileSync(path.join(outDir, file), `${body.join("\n")}\n`);
 }
 
-export default function (pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI, options: { deciderBackend?: Backend } = {}) {
+	// Tests inject the decision backend here; in Pi the decider builds its own.
+	const deciderBackend = options.deciderBackend;
 	pi.registerFlag("plans-dry-run", { description: "Simulate plan workers instead of calling a model", type: "boolean", default: false });
 
 	let watcher: fs.FSWatcher | undefined;
@@ -332,6 +338,9 @@ export default function (pi: ExtensionAPI) {
 		// The stop handler cannot reach this plan's gate, so the abort closes it.
 		abort.signal.addEventListener("abort", () => outageGate.close(), { once: true });
 		const planStart = Date.now();
+		// R3: the one decision per task for this plan run, a failure included, so no
+		// retry or pair re-run ever asks the decider a second time.
+		const decisions = new Map<string, DecideResult>();
 		const results = new Map<string, WorkerResult>();
 		const sessions: { task: string; attempt: number; id: string; file?: string; resume: string }[] = [];
 		// G1: one lock per plan, because every task verifies against the same checkout.
@@ -383,15 +392,19 @@ export default function (pi: ExtensionAPI) {
 			runTask: PlanTask,
 			prompt: string,
 			onLine: (line: string) => void,
+			thinking?: string,
 		): Promise<WorkerResult & { resumes: number }> => {
 			const span = taskSpan(plan.id, owner.id, owner.attempts);
 			const onStall = (minutes: number) =>
 				emit({ span: `${span}:stall`, parent: span, actor: "pi-dispatch", kind: "task.stall", task: owner.id, attempt: owner.attempts, data: { minutes } });
-			/** The first run gets the original prompt; a resume continues the session when it can. */
+			/**
+			 * The first run gets the original prompt; a resume continues the session when it can.
+			 * The decided level rides along every branch, so a resume keeps it (R4).
+			 */
 			const workerOpts = (info: { continueSession: boolean } | null) => {
-				if (info === null) return { prompt, onStall };
-				if (info.continueSession) return { prompt: CONTINUE_PROMPT, resume: true, onStall };
-				return { prompt, onStall };
+				if (info === null) return { prompt, onStall, thinking };
+				if (info.continueSession) return { prompt: CONTINUE_PROMPT, resume: true, onStall, thinking };
+				return { prompt, onStall, thinking };
 			};
 			try {
 				return await runWithResume<WorkerResult>({
@@ -589,7 +602,59 @@ export default function (pi: ExtensionAPI) {
 			t.state = "running";
 			t.attempts++;
 			t.startedAt = Date.now();
-			const { model, thinking, role } = resolveModel(cfg, plan, t);
+			// R3: one decision per task, before its first attempt. A failure is stored
+			// too, so a retry never asks again, and a dry run asks nothing at all.
+			let decision = decisions.get(t.id);
+			if (decision === undefined && !cfg.dryRun && eligibleForDecider(cfg, plan, t)) {
+				decision = await decideTaskLevel({
+					cfg: cfg.decider,
+					task: { id: t.id, body: t.body, files: t.files, role: t.role || "implement" },
+					root: cwd,
+					backend: deciderBackend,
+				});
+				decisions.set(t.id, decision);
+				if (decision.ok) {
+					emit({
+						span: `${pSpan}:decision:${t.id}`,
+						parent: pSpan,
+						actor: "decider",
+						kind: "decision.effort",
+						task: t.id,
+						data: {
+							task: t.id,
+							suggested: decision.suggested,
+							probabilities: decision.probabilities,
+							confidence: decision.confidence,
+							complexity: decision.complexity,
+							model: decision.model,
+							cost: decision.cost,
+							mode: "dispatch",
+							phase: "dispatch",
+						},
+					});
+				} else {
+					emit({
+						span: `${pSpan}:decision:${t.id}`,
+						parent: pSpan,
+						actor: "decider",
+						kind: "decision.error",
+						task: t.id,
+						data: {
+							command: "dispatch",
+							phase: "dispatch",
+							kind: decision.reason,
+							status: decision.status ?? 0,
+							message: decision.error ?? decision.reason,
+						},
+					});
+				}
+			}
+			const { model, role } = resolveModel(cfg, plan, t);
+			// R7: every real re-run (a failed attempt or a pair `changes` round) moves
+			// the level up the ladder; a transient resume stays inside one attempt.
+			const steps = cfg.dryRun ? 0 : Math.max(0, t.attempts - 1);
+			const decided = decision !== undefined && decision.ok ? decision.suggested : undefined;
+			const { thinking, source } = resolveThinking(cfg, plan, t, decided, steps);
 			const isSecurity = role === "security";
 			// A read-only task can write through the shell, which the live guard cannot
 			// block: the window around its own run is the backstop.
@@ -623,6 +688,7 @@ export default function (pi: ExtensionAPI) {
 					role,
 					model,
 					thinking,
+					thinking_source: source,
 					files: t.files,
 					depends_on: t.dependsOn,
 					prompt_sha: shortHash(prompt),
@@ -632,10 +698,16 @@ export default function (pi: ExtensionAPI) {
 			});
 			render();
 			const runWindow = readonlyRun ? openWindow("readonly", t.id) : undefined;
-			const r = await runResumed(t, t, prompt, (line) => {
-				lastLine.set(t.id, line);
-				render();
-			});
+			const r = await runResumed(
+				t,
+				t,
+				prompt,
+				(line) => {
+					lastLine.set(t.id, line);
+					render();
+				},
+				thinking,
+			);
 			// A resume is not an attempt: it grows this task-wide counter only.
 			t.resumes = (t.resumes ?? 0) + r.resumes;
 			if (runWindow) closeWindow(runWindow);

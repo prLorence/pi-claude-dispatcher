@@ -9,10 +9,18 @@
  *                          --audit-round <n> --verdict pass|fail --trace <T> [--root <dir>]
  *   node decide.mjs stats  [--root <dir>]
  *
- * The pure rules live in decide-core.mjs, the network in decide-backend.mjs and
- * the outcome joins in decide-stats.mjs. This file reads the files, runs the
- * privacy gate, calls the backend once per request and writes the trace events.
- * `--root` defaults to the working directory.
+ * The pure rules live in decide-core.mjs and the outcome joins in
+ * decide-stats.mjs. The config parse, the effort question and rule and the
+ * network live in the extension, under `pi-plan-dispatch/decider/`, and are
+ * loaded from the dispatcher folder the same way `core.ts` is loaded for the
+ * plan parser. This file reads the files, runs the privacy gate, calls the
+ * backend once per request and writes the trace events. `--root` defaults to
+ * the working directory.
+ *
+ * The decider modules are loaded once, after every usage check and before the
+ * config, privacy and key checks, so a missing or stale dispatcher folder
+ * exits 2 first. That is the one change to the exit order, and docs/decider.md
+ * documents it.
  *
  * Exit codes: 0 ok / 2 dispatcher modules not found / 3 no key / 4 disabled /
  *             5 not allowed / 6 backend error / 64 usage or too many requests.
@@ -23,22 +31,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-	BackendError,
-	fakeBackend,
-	loadKey,
-	openRouterBackend,
-	redact,
-} from "./decide-backend.mjs";
-import {
 	MAX_REQUESTS,
 	aggregate,
 	auditRequest,
-	effortRequest,
-	loadDeciderConfig,
 	parseSpecRequirements,
 	proposal,
 	realDefectP,
-	suggestEffort,
 } from "./decide-core.mjs";
 import { renderStats, statsReport } from "./decide-stats.mjs";
 
@@ -77,6 +75,9 @@ const REQUIRED = {
 };
 
 const SEVERITIES = ["blocker", "major", "minor"];
+const DISPATCHER_FILES = ["core.ts", "verify.ts", path.join("decider", "backend.ts")];
+const LOCAL_KEY_PATTERN = /sk-or-[A-Za-z0-9_-]+/g;
+const REDACTED = "<redacted>";
 const GATE_TIMEOUT_MS = 30000;
 const EVENT_TIMEOUT_MS = 30000;
 const NOT_ALLOWED = "not allowed: the vault does not allow this repo";
@@ -91,14 +92,25 @@ function errorText(error) {
 	return String(error);
 }
 
+/**
+ * While the dispatcher modules are not loaded: every `sk-or-` token is masked,
+ * so a usage or argument error can never print a key. The shared `redact` of
+ * the backend replaces this one once the modules are loaded.
+ */
+function localRedact(text) {
+	return String(text).replace(LOCAL_KEY_PATTERN, REDACTED);
+}
+
+let redactText = localRedact;
+
 /** One line on stdout, redacted, so a key can never reach it (R3). */
 function say(text) {
-	console.log(redact(text));
+	console.log(redactText(text));
 }
 
 /** One line on stderr, redacted (R3). */
 function warn(text) {
-	console.error(redact(text));
+	console.error(redactText(text));
 }
 
 /** `~` means the home directory; HOME can redirect it in tests. */
@@ -109,7 +121,7 @@ function expand(p) {
 }
 
 function isDispatcherDir(dir) {
-	return fs.existsSync(path.join(dir, "core.ts")) && fs.existsSync(path.join(dir, "verify.ts"));
+	return DISPATCHER_FILES.every((name) => fs.existsSync(path.join(dir, name)));
 }
 
 /** Local package folders from the `packages` array, resolved against that file. */
@@ -175,7 +187,7 @@ function usage(message) {
 }
 
 /** The `decider` value of `.plans/config.json`; a missing or broken file gives the defaults. */
-function readDeciderConfig(root) {
+function readDeciderConfig(root, loadDeciderConfig) {
 	const file = path.join(root, ".plans", "config.json");
 	let parsed;
 	try {
@@ -184,6 +196,33 @@ function readDeciderConfig(root) {
 		return loadDeciderConfig(undefined);
 	}
 	return loadDeciderConfig(parsed?.decider);
+}
+
+/**
+ * The three decider modules of the dispatcher folder, loaded once and only for
+ * `effort` and `audit`, so `stats` and the usage errors never depend on it. A
+ * missing folder, or one without `decider/backend.ts`, is exit 2.
+ */
+async function loadDecider(root) {
+	const dir = dispatcherCandidates(root).find(isDispatcherDir);
+	if (dir === undefined) {
+		return {
+			code: 2,
+			message: "cannot find the pi-plan-dispatch modules (core.ts, verify.ts, decider/backend.ts)",
+		};
+	}
+	let config;
+	let effort;
+	let backend;
+	try {
+		config = await import(pathToFileURL(path.join(dir, "decider", "config.ts")).href);
+		effort = await import(pathToFileURL(path.join(dir, "decider", "effort.ts")).href);
+		backend = await import(pathToFileURL(path.join(dir, "decider", "backend.ts")).href);
+	} catch (error) {
+		return { code: 2, message: `cannot load the dispatcher: ${errorText(error)}` };
+	}
+	redactText = (text, key) => backend.redact(text, key);
+	return { dir, mods: { config, effort, backend } };
 }
 
 /**
@@ -202,8 +241,8 @@ function fullModeRepo(root) {
 }
 
 /** The config, the privacy gate and the key (R5, R4, R3), in that order. */
-function prepare(root, command) {
-	const config = readDeciderConfig(root);
+function prepare(root, command, mods) {
+	const config = readDeciderConfig(root, mods.config.loadDeciderConfig);
 	const wanted = command === "effort" ? "apply" : "shadow";
 	const mode = command === "effort" ? config.effort : config.audit;
 	if (mode !== wanted) {
@@ -214,7 +253,7 @@ function prepare(root, command) {
 		warn(NOT_ALLOWED);
 		return { code: 5 };
 	}
-	const key = loadKey(process.env, os.homedir());
+	const key = mods.backend.loadKey(process.env, os.homedir());
 	if (key === null) {
 		warn(NO_KEY);
 		return { code: 3 };
@@ -223,16 +262,12 @@ function prepare(root, command) {
 }
 
 /** The plan, parsed by the dispatcher's own parser; `code` and `message` on a stop. */
-async function loadPlan(root, file) {
+async function loadPlan(file, dir) {
 	let text;
 	try {
 		text = fs.readFileSync(path.resolve(file), "utf8");
 	} catch {
 		return { code: 64, message: `cannot read the plan file: ${file}` };
-	}
-	const dir = dispatcherCandidates(root).find(isDispatcherDir);
-	if (dir === undefined) {
-		return { code: 2, message: "cannot find the pi-plan-dispatch modules (core.ts, verify.ts)" };
 	}
 	let core;
 	try {
@@ -291,16 +326,16 @@ function readFindings(file) {
  * allows it, the OpenRouter backend otherwise. The fake is a test switch and
  * needs both variables, so a stray one can never reach the network in a test.
  */
-function makeBackend(config, key, env = process.env) {
+function makeBackend(config, key, mods, env = process.env) {
 	const fake = env.DECIDE_FAKE_BACKEND;
 	if (env.DECIDE_ALLOW_FAKE === "1" && typeof fake === "string" && fake !== "") {
-		return replayBackend(fake);
+		return replayBackend(fake, mods);
 	}
-	return openRouterBackend({ key, model: config.model, timeoutMs: config.timeoutMs });
+	return mods.backend.openRouterBackend({ key, model: config.model, timeoutMs: config.timeoutMs });
 }
 
 /** A backend that replays a JSON array of results in call order; tests only. */
-function replayBackend(file) {
+function replayBackend(file, mods) {
 	let results = [];
 	try {
 		results = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -309,21 +344,21 @@ function replayBackend(file) {
 	}
 	if (!Array.isArray(results)) results = [];
 	let index = 0;
-	return fakeBackend(() => {
+	return mods.backend.fakeBackend(() => {
 		const result = results[index];
 		index += 1;
 		if (!isPlainObject(result)) {
-			throw new BackendError("fake backend: no result left for this request", { kind: "malformed" });
+			throw new mods.backend.BackendError("fake backend: no result left for this request", { kind: "malformed" });
 		}
 		return result;
 	});
 }
 
 /** One request through the backend, refusing an answer that is not the agreed shape (R2). */
-async function askOne(backend, request) {
+async function askOne(backend, request, mods) {
 	const result = await backend.ask(request);
 	if (!isPlainObject(result) || !isPlainObject(result.answers)) {
-		throw new BackendError("the backend answer is malformed", { kind: "malformed" });
+		throw new mods.backend.BackendError("the backend answer is malformed", { kind: "malformed" });
 	}
 	return result;
 }
@@ -353,7 +388,7 @@ function writeEvent({ root, trace, plan, round, kind, data, key }) {
 		"--root",
 		root,
 		"--data",
-		redact(JSON.stringify(data), key),
+		redactText(JSON.stringify(data), key),
 	];
 	if (round !== undefined) args.push("--round", String(round));
 	const result = spawnSync(process.execPath, args, { encoding: "utf8", timeout: EVENT_TIMEOUT_MS });
@@ -362,17 +397,20 @@ function writeEvent({ root, trace, plan, round, kind, data, key }) {
 
 /** The decided JSON and nothing else, redacted, on stdout. */
 function printJson(value, key) {
-	console.log(redact(JSON.stringify(value), key));
+	console.log(redactText(JSON.stringify(value), key));
 }
 
 /** A backend or malformed-answer failure: one stderr line, one event, exit 6 (R9). */
-function backendFailure({ error, command, root, trace, plan, key }) {
+function backendFailure({ error, command, root, trace, plan, key, mods }) {
 	const failure =
-		error instanceof BackendError
+		error instanceof mods.backend.BackendError
 			? error
-			: new BackendError(`malformed answer: ${errorText(error)}`, { status: 0, kind: "malformed" });
-	const message = redact(failure.message, key);
-	console.error(redact(`backend error: ${message}`, key));
+			: new mods.backend.BackendError(`malformed answer: ${errorText(error)}`, {
+					status: 0,
+					kind: "malformed",
+				});
+	const message = redactText(failure.message, key);
+	console.error(redactText(`backend error: ${message}`, key));
 	writeEvent({
 		root,
 		trace,
@@ -386,13 +424,13 @@ function backendFailure({ error, command, root, trace, plan, key }) {
 }
 
 /** One request per sent task, one suggestion and one event each, then the JSON. */
-async function runEffort({ backend, config, plan, tasks, requests, root, trace, key }) {
+async function runEffort({ backend, config, plan, tasks, requests, root, trace, key, mods }) {
 	const results = [];
-	for (const request of requests) results.push(await askOne(backend, request));
+	for (const request of requests) results.push(await askOne(backend, request, mods));
 	const rows = [];
 	let cost = 0;
 	for (const [index, result] of results.entries()) {
-		const suggestion = suggestEffort(result.answers, config.thresholds);
+		const suggestion = mods.effort.suggestEffort(result.answers, config.thresholds);
 		const task = tasks[index];
 		const taskCost = costOf(result);
 		cost += taskCost;
@@ -421,9 +459,9 @@ async function runEffort({ backend, config, plan, tasks, requests, root, trace, 
 }
 
 /** One request per finding, the aggregate, the proposal, one event for the command, then the JSON. */
-async function runAudit({ backend, config, plan, findings, requests, verdict, auditRound, root, trace, key }) {
+async function runAudit({ backend, config, plan, findings, requests, verdict, auditRound, root, trace, key, mods }) {
 	const results = [];
-	for (const request of requests) results.push(await askOne(backend, request));
+	for (const request of requests) results.push(await askOne(backend, request, mods));
 	const scored = findings.map((finding, index) => ({
 		id: finding.id,
 		severity: finding.severity,
@@ -446,11 +484,11 @@ async function runAudit({ backend, config, plan, findings, requests, verdict, au
 	return 0;
 }
 
-async function effort(root, flags) {
-	const ready = prepare(root, "effort");
+async function effort(root, flags, mods, dir) {
+	const ready = prepare(root, "effort", mods);
 	if (ready.code !== undefined) return ready.code;
 	const { config, key } = ready;
-	const loaded = await loadPlan(root, flags.plan);
+	const loaded = await loadPlan(flags.plan, dir);
 	if (loaded.code !== undefined) {
 		warn(loaded.message);
 		return loaded.code;
@@ -468,26 +506,33 @@ async function effort(root, flags) {
 		warn(`too many requests: ${tasks.length} tasks, the limit is ${MAX_REQUESTS}`);
 		return 64;
 	}
-	const requests = tasks.map((task) => effortRequest(task));
-	const backend = makeBackend(config, key);
+	const requests = tasks.map((task) => mods.effort.effortRequest(task));
+	const backend = makeBackend(config, key, mods);
 	try {
-		return await runEffort({ backend, config, plan, tasks, requests, root, trace: flags.trace, key });
+		return await runEffort({ backend, config, plan, tasks, requests, root, trace: flags.trace, key, mods });
 	} catch (error) {
-		return backendFailure({ error, command: "effort", root, trace: flags.trace, plan, key });
+		return backendFailure({ error, command: "effort", root, trace: flags.trace, plan, key, mods });
 	}
 }
 
-async function audit(root, flags) {
+/** A `--verdict` or `--audit-round` problem, checked before the modules are loaded. */
+function auditFlagProblem(flags) {
 	const verdict = flags.verdict;
-	if (verdict !== "pass" && verdict !== "fail") return usage("--verdict must be pass or fail");
+	if (verdict !== "pass" && verdict !== "fail") return "--verdict must be pass or fail";
 	const auditRound = Number(flags.auditRound);
 	if (!Number.isInteger(auditRound) || auditRound < 1) {
-		return usage("--audit-round must be a positive integer");
+		return "--audit-round must be a positive integer";
 	}
-	const ready = prepare(root, "audit");
+	return undefined;
+}
+
+async function audit(root, flags, mods, dir) {
+	const verdict = flags.verdict;
+	const auditRound = Number(flags.auditRound);
+	const ready = prepare(root, "audit", mods);
 	if (ready.code !== undefined) return ready.code;
 	const { config, key } = ready;
-	const loaded = await loadPlan(root, flags.plan);
+	const loaded = await loadPlan(flags.plan, dir);
 	if (loaded.code !== undefined) {
 		warn(loaded.message);
 		return loaded.code;
@@ -507,7 +552,7 @@ async function audit(root, flags) {
 		planContext: plan.context,
 	};
 	const requests = findings.list.map((finding) => auditRequest(finding, ctx));
-	const backend = makeBackend(config, key);
+	const backend = makeBackend(config, key, mods);
 	try {
 		return await runAudit({
 			backend,
@@ -520,9 +565,10 @@ async function audit(root, flags) {
 			root,
 			trace: flags.trace,
 			key,
+			mods,
 		});
 	} catch (error) {
-		return backendFailure({ error, command: "audit", root, trace: flags.trace, plan, key });
+		return backendFailure({ error, command: "audit", root, trace: flags.trace, plan, key, mods });
 	}
 }
 
@@ -573,7 +619,18 @@ async function main() {
 	}
 	const root = path.resolve(flags.root ?? process.cwd());
 	if (command === "stats") return stats(root);
-	return command === "effort" ? effort(root, flags) : audit(root, flags);
+	if (command === "audit") {
+		const problem = auditFlagProblem(flags);
+		if (problem !== undefined) return usage(problem);
+	}
+	const loaded = await loadDecider(root);
+	if (loaded.code !== undefined) {
+		warn(loaded.message);
+		return loaded.code;
+	}
+	return command === "effort"
+		? effort(root, flags, loaded.mods, loaded.dir)
+		: audit(root, flags, loaded.mods, loaded.dir);
 }
 
 process.exitCode = await main();

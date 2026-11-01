@@ -567,6 +567,54 @@ test(
 );
 
 test(
+	"effort in dispatch mode prints disabled and exits 4 without a call",
+	withRoot(async ({ root }) => {
+		const vault = makeVault(root, { "github.com/o/n": { mode: "full" } });
+		const project = makeProject(root, "project", FULL_REMOTE);
+		writeConfig(project, { effort: "dispatch" });
+		const planFile = write(project, ".plans/inbox/cli-effort-r1.md.draft", PLAN);
+		// An empty replay file: a command that reached the backend would exit 6.
+		const fake = writeFake(root, "fake", []);
+		const result = run(project, ["effort", "--plan", planFile, "--trace", "cli-effort"], {
+			vault,
+			env: { OPENROUTER_API_KEY: KEY, ...fakeEnv(fake) },
+		});
+		assert.equal(result.code, 4, result.err);
+		assert.equal(result.out.trim(), "disabled");
+		assert.deepEqual(events(project, "cli-effort"), []);
+	}),
+);
+
+test(
+	"a missing or stale dispatcher folder exits 2 before the config check",
+	withRoot(async ({ root }) => {
+		const project = makeProject(root, "project", FULL_REMOTE);
+		// The mode would be allowed, so exit 2 proves the modules are checked first.
+		writeConfig(project, { effort: "apply" });
+		const planFile = write(project, ".plans/inbox/cli-effort-r1.md.draft", PLAN);
+		const empty = path.join(root, "empty");
+		fs.mkdirSync(empty, { recursive: true });
+		const missing = run(project, ["effort", "--plan", planFile, "--trace", "cli-effort"], {
+			env: { PI_PLAN_DISPATCH_DIR: empty },
+		});
+		assert.equal(missing.code, 2, missing.err);
+		assert.match(missing.err, /cannot find the pi-plan-dispatch modules/);
+		assert.deepEqual(events(project, "cli-effort"), []);
+		// A folder with core.ts and verify.ts but no decider/backend.ts is stale and skipped.
+		const stale = path.join(root, "stale");
+		fs.mkdirSync(path.join(stale, "decider"), { recursive: true });
+		fs.writeFileSync(path.join(stale, "core.ts"), "");
+		fs.writeFileSync(path.join(stale, "verify.ts"), "");
+		const skipped = run(project, ["effort", "--plan", planFile, "--trace", "cli-effort"], {
+			env: { PI_PLAN_DISPATCH_DIR: stale },
+		});
+		assert.equal(skipped.code, 2, skipped.err);
+		assert.match(skipped.err, /cannot find the pi-plan-dispatch modules/);
+		assert.deepEqual(events(project, "cli-effort"), []);
+	}),
+);
+
+test(
 	"stats joins the recorded decisions with what happened",
 	withRoot(async ({ root }) => {
 		const project = makeProject(root, "project", FULL_REMOTE);

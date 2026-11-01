@@ -8,6 +8,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
 import extension from "./index.ts";
+import { type Backend, fakeBackend } from "./decider/backend.ts";
 import { BLOCKED_MARKER } from "./guard.ts";
 import { CONTINUE_PROMPT } from "./resilience.ts";
 import { readEvents } from "./trace.ts";
@@ -22,7 +23,7 @@ async function waitFor(file: string, ms = 15000) {
 	}
 }
 
-function boot(cwd: string, dry: boolean, opts: { ui?: boolean } = {}) {
+function boot(cwd: string, dry: boolean, opts: { ui?: boolean; backend?: Backend } = {}) {
 	// When these tests run inside a Pi worker the guard would disable the extension.
 	delete process.env.PI_PLAN_DISPATCH_WORKER;
 	const handlers = new Map<string, (e: unknown, ctx: unknown) => Promise<void>>();
@@ -40,7 +41,7 @@ function boot(cwd: string, dry: boolean, opts: { ui?: boolean } = {}) {
 		on: (n: string, h: (e: unknown, ctx: unknown) => Promise<void>) => handlers.set(n, h),
 		sendMessage: (m: { content: string }) => messages.push(m.content),
 	};
-	extension(pi as never);
+	extension(pi as never, opts.backend === undefined ? {} : { deciderBackend: opts.backend });
 	const ui = {
 		notify: (msg: string) => notes.push(msg),
 		setStatus() {},
@@ -66,7 +67,7 @@ type Booted = ReturnType<typeof boot>;
  * Boot the extension, run the body, and always shut it down: a throw must not leave the
  * inbox watcher running, or the test process never exits.
  */
-async function withExtension(dir: string, dry: boolean, fn: (x: Booted) => Promise<void>, opts: { ui?: boolean } = {}) {
+async function withExtension(dir: string, dry: boolean, fn: (x: Booted) => Promise<void>, opts: { ui?: boolean; backend?: Backend } = {}) {
 	const x = boot(dir, dry, opts);
 	try {
 		await x.start();
@@ -1776,4 +1777,557 @@ test("resilience: a reviewer whose first run fails transiently is resumed and it
 	assert.equal(reviews[1].argv[reviews[1].argv.length - 1], CONTINUE_PROMPT);
 	const resume = readEvents(path.join(dir, ".plans"), "tr").find((e) => e.kind === "task.resume")!;
 	assert.equal(resume.task, "api", "the resume is reported on the reviewed task");
+});
+
+// ---------- Decider: dispatch effort, escalation and isolation (R3-R11) ----------
+
+/** Give the repo an origin, so the vault can resolve its mode from repos.json. */
+function addOrigin(dir: string, name: string) {
+	execFileSync("git", ["remote", "add", "origin", `git@github.com:${name}.git`], { cwd: dir });
+}
+
+/**
+ * Point HOME and AGENT_VAULT at temporary folders for one test. The real machine has a
+ * key file and a vault config, so without this a test could reach the network or the
+ * real vault. Any key from the parent environment is removed unless the case sets one.
+ */
+function deciderEnv(opts: { repo?: string; key?: string } = {}) {
+	const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-decider-home-"));
+	const vault = fs.mkdtempSync(path.join(os.tmpdir(), "pi-decider-vault-"));
+	const slug = `github.com/${opts.repo ?? "owner/full"}`;
+	fs.writeFileSync(
+		path.join(vault, "repos.json"),
+		JSON.stringify({ repos: { [slug]: { mode: opts.repo === "owner/meta" ? "meta" : "full" } }, aliases: {} }),
+	);
+	const before: Record<string, string | undefined> = {
+		HOME: process.env.HOME,
+		AGENT_VAULT: process.env.AGENT_VAULT,
+		OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
+	};
+	process.env.HOME = home;
+	process.env.AGENT_VAULT = vault;
+	if (opts.key === undefined) delete process.env.OPENROUTER_API_KEY;
+	else process.env.OPENROUTER_API_KEY = opts.key;
+	return {
+		restore: () => {
+			for (const name of ["HOME", "AGENT_VAULT", "OPENROUTER_API_KEY"]) {
+				const value = before[name];
+				if (value === undefined) delete process.env[name];
+				else process.env[name] = value;
+			}
+			fs.rmSync(home, { recursive: true, force: true });
+			fs.rmSync(vault, { recursive: true, force: true });
+		},
+	};
+}
+
+/** A dispatch decider config with the test's own model and a short timeout. */
+const decider = (over: object = {}) => ({ effort: "dispatch", model: "perplexity/test-decider", timeoutMs: 1000, ...over });
+
+/** The answer that suggests "high": a complexity score over the default threshold of 3. */
+const HIGH_ANSWER = {
+	answers: {
+		effort: { type: "choice", choice: "high", probabilities: { low: 0.1, high: 0.8, max: 0.1 }, confidence: 0.9 },
+		complexity: { type: "score", score: 3.5 },
+	},
+	usage: { input_tokens: 10, output_tokens: 1, cost: 0.000004 },
+	model: "perplexity/test-decider-2026",
+};
+const highBackend = () => fakeBackend(() => HIGH_ANSWER);
+const thinkingOf = (argv: string[]) => {
+	const i = argv.indexOf("--thinking");
+	return i < 0 ? undefined : argv[i + 1];
+};
+
+/** A fake `pi` that writes src/api.ts on every run and opens `.plans/ready` at `readyAt`. */
+function countingFake(dir: string, o: { readyAt?: number } = {}) {
+	fakePi(
+		dir,
+		`import fs from "node:fs";
+const out = (o) => console.log(JSON.stringify(o));
+fs.appendFileSync(".plans/runs.jsonl", JSON.stringify({ argv: process.argv.slice(2), review: false }) + "\\n");
+const file = ".plans/run.n";
+const n = fs.existsSync(file) ? Number(fs.readFileSync(file, "utf8")) + 1 : 1;
+fs.writeFileSync(file, String(n));
+fs.writeFileSync("src/api.ts", "v" + (n + 1));
+if (n >= ${o.readyAt ?? 0}) fs.writeFileSync(".plans/ready", "ok");
+out({ type: "tool_execution_start", toolCallId: "1", toolName: "read", args: { path: "src/api.ts" } });
+out({ type: "tool_execution_start", toolCallId: "2", toolName: "edit", args: { path: "src/api.ts" } });
+out({ type: "message_end", message: { role: "assistant", stopReason: "stop", usage: { input: 5, output: 5, totalTokens: 10, cost: { total: 0 } },
+  content: [{ type: "text", text: "STATUS: done\\nNOTES: run " + n + "\\nCOST: 0\\n" }] } });
+`,
+	);
+}
+
+/** A read-only security run that fails once with no output, then reports clean. */
+function securityRetryFake(dir: string) {
+	fakePi(
+		dir,
+		`import fs from "node:fs";
+const out = (o) => console.log(JSON.stringify(o));
+fs.appendFileSync(".plans/runs.jsonl", JSON.stringify({ argv: process.argv.slice(2), review: false }) + "\\n");
+const file = ".plans/security.n";
+const n = fs.existsSync(file) ? Number(fs.readFileSync(file, "utf8")) + 1 : 1;
+fs.writeFileSync(file, String(n));
+if (n === 1) process.exit(1);
+out({ type: "message_end", message: { role: "assistant", stopReason: "stop", usage: { input: 5, output: 5, totalTokens: 10, cost: { total: 0 } },
+  content: [{ type: "text", text: ${JSON.stringify(SECURITY_CLEAN)} }] } });
+`,
+	);
+}
+
+/** A fake `pi` that records the environment it was spawned with, per role. */
+function envProbeFake(dir: string) {
+	fakePi(
+		dir,
+		`import fs from "node:fs";
+const out = (o) => console.log(JSON.stringify(o));
+const prompt = process.argv[process.argv.length - 1];
+const review = /You are the reviewer for task/.test(prompt);
+fs.writeFileSync(review ? ".plans/env-review.json" : ".plans/env-impl.json", JSON.stringify({
+  key: process.env.OPENROUTER_API_KEY ?? null,
+  vault: process.env.AGENT_VAULT ?? null,
+}));
+if (!review) fs.writeFileSync("src/api.ts", "v2");
+const text = review ? ${JSON.stringify(APPROVE)} : ${JSON.stringify(REPORT_DONE)};
+out({ type: "message_end", message: { role: "assistant", stopReason: "stop", usage: { input: 5, output: 5, totalTokens: 10, cost: { total: 0 } },
+  content: [{ type: "text", text }] } });
+`,
+	);
+}
+
+const deciderKinds = (dir: string) => readEvents(path.join(dir, ".plans"), "tr").filter((e) => e.kind.startsWith("decision."));
+
+test("decider: dispatch effort sets the level on attempt 1 and reports where it came from", async () => {
+	const dir = repo();
+	addOrigin(dir, "owner/full");
+	countingFake(dir);
+	setConfig(dir, { decider: decider() });
+	const backend = highBackend();
+	const env = deciderEnv({ key: "sk-or-parent-key" });
+	try {
+		await withExtension(
+			dir,
+			false,
+			async () => {
+				drop(dir, "dc1", pairPlan("dc1"));
+				await waitFor(path.join(dir, ".plans/done/dc1/_summary.md"));
+			},
+			{ backend },
+		);
+	} finally {
+		env.restore();
+	}
+
+	const events = readEvents(path.join(dir, ".plans"), "tr");
+	const efforts = events.filter((e) => e.kind === "decision.effort");
+	assert.equal(efforts.length, 1);
+	assert.equal(efforts[0].actor, "decider");
+	assert.equal(efforts[0].task, "api");
+	assert.equal(efforts[0].data?.task, "api");
+	assert.equal(efforts[0].data?.suggested, "high");
+	assert.equal(efforts[0].data?.mode, "dispatch");
+	assert.equal(efforts[0].data?.phase, "dispatch");
+	assert.equal(efforts[0].data?.model, "perplexity/test-decider-2026");
+	assert.equal(efforts[0].data?.cost, 0.000004);
+	assert.deepEqual(efforts[0].data?.probabilities, { low: 0.1, high: 0.8, max: 0.1 });
+	assert.equal(efforts[0].data?.confidence, 0.9);
+	assert.equal(efforts[0].data?.complexity, 3.5);
+	assert.equal(backend.calls.length, 1, "one decision per task");
+	assert.equal(backend.calls[0].state.role, "implement");
+	assert.match(String(backend.calls[0].state.task), /Edit the api/);
+	assert.equal(events.some((e) => e.kind === "decision.error"), false);
+
+	const start = events.find((e) => e.kind === "task.start")!;
+	assert.equal(start.data?.thinking, "high");
+	assert.equal(start.data?.thinking_source, "decider");
+	assert.equal(events.find((e) => e.kind === "task.end")!.data?.thinking, "high");
+	assert.deepEqual(
+		readRuns(dir).map((r) => thinkingOf(r.argv)),
+		["high"],
+	);
+	assert.equal(evidence(dir, "dc1").gate.pass, true);
+});
+
+test("decider: with escalate on, a verify retry moves one step up and stops at max", async () => {
+	const dir = repo();
+	addOrigin(dir, "owner/full");
+	countingFake(dir, { readyAt: 3 });
+	setConfig(dir, { retries: 2, decider: decider({ escalate: true }) });
+	const backend = highBackend();
+	const env = deciderEnv();
+	try {
+		await withExtension(
+			dir,
+			false,
+			async () => {
+				drop(dir, "dc2", pairPlan("dc2", "verify: test -f .plans/ready"));
+				await waitFor(path.join(dir, ".plans/done/dc2/_summary.md"));
+			},
+			{ backend },
+		);
+	} finally {
+		env.restore();
+	}
+
+	const events = readEvents(path.join(dir, ".plans"), "tr");
+	const starts = events.filter((e) => e.kind === "task.start");
+	assert.deepEqual(
+		starts.map((e) => e.data?.thinking),
+		["high", "max", "max"],
+	);
+	assert.deepEqual(
+		starts.map((e) => e.data?.thinking_source),
+		["decider", "escalated", "escalated"],
+	);
+	assert.deepEqual(
+		events.filter((e) => e.kind === "task.end").map((e) => e.data?.thinking),
+		["high", "max", "max"],
+	);
+	assert.deepEqual(
+		readRuns(dir).map((r) => thinkingOf(r.argv)),
+		["high", "max", "max"],
+	);
+	assert.equal(backend.calls.length, 1, "a retry never asks the decider again");
+	assert.equal(evidence(dir, "dc2").gate.pass, true, JSON.stringify(evidence(dir, "dc2").faults));
+});
+
+test("decider: with escalate off, a retry keeps the decided level", async () => {
+	const dir = repo();
+	addOrigin(dir, "owner/full");
+	countingFake(dir, { readyAt: 2 });
+	setConfig(dir, { retries: 1, decider: decider() });
+	const backend = highBackend();
+	const env = deciderEnv();
+	try {
+		await withExtension(
+			dir,
+			false,
+			async () => {
+				drop(dir, "dc3", pairPlan("dc3", "verify: test -f .plans/ready"));
+				await waitFor(path.join(dir, ".plans/done/dc3/_summary.md"));
+			},
+			{ backend },
+		);
+	} finally {
+		env.restore();
+	}
+
+	const starts = readEvents(path.join(dir, ".plans"), "tr").filter((e) => e.kind === "task.start");
+	assert.deepEqual(
+		starts.map((e) => e.data?.thinking),
+		["high", "high"],
+	);
+	assert.deepEqual(
+		starts.map((e) => e.data?.thinking_source),
+		["decider", "decider"],
+	);
+	assert.equal(backend.calls.length, 1);
+	assert.equal(evidence(dir, "dc3").gate.pass, true, JSON.stringify(evidence(dir, "dc3").faults));
+});
+
+test("decider: a pair changes round escalates the implementer but not the reviewer", async () => {
+	const dir = repo();
+	addOrigin(dir, "owner/full");
+	pairFake(dir, [REPORT_DONE, REPORT_DONE], [CHANGES, APPROVE], { decider: decider({ escalate: true }) });
+	const backend = highBackend();
+	const env = deciderEnv();
+	try {
+		await withExtension(
+			dir,
+			false,
+			async () => {
+				drop(dir, "dc4", pairPlan("dc4", "pair: review"));
+				await waitFor(path.join(dir, ".plans/done/dc4/_summary.md"));
+			},
+			{ backend },
+		);
+	} finally {
+		env.restore();
+	}
+
+	const events = readEvents(path.join(dir, ".plans"), "tr");
+	const starts = events.filter((e) => e.kind === "task.start");
+	assert.deepEqual(
+		starts.map((e) => e.data?.thinking),
+		["high", "max"],
+	);
+	assert.deepEqual(
+		starts.map((e) => e.data?.thinking_source),
+		["decider", "escalated"],
+	);
+	const reviews = events.filter((e) => e.kind === "task.review");
+	assert.equal(reviews.length, 2);
+	assert.deepEqual(
+		reviews.map((e) => e.data?.thinking),
+		["low", "low"],
+		"a reviewer never goes through attempt and keeps its role's level",
+	);
+	assert.equal(backend.calls.length, 1, "only the implementer is decided");
+	assert.equal(evidence(dir, "dc4").gate.pass, true, JSON.stringify(evidence(dir, "dc4").faults));
+});
+
+test("decider: a transient resume keeps the decided level", async () => {
+	const dir = repo();
+	addOrigin(dir, "owner/full");
+	resilienceFake(dir, ["transient", "ok"], { keepSession: true });
+	const target = await probeTarget();
+	setConfig(dir, resumeConfig(target.url, { retries: 0, decider: decider({ escalate: true }) }));
+	const backend = highBackend();
+	const env = deciderEnv();
+	try {
+		await withExtension(
+			dir,
+			false,
+			async () => {
+				drop(dir, "dc5", pairPlan("dc5"));
+				await waitFor(path.join(dir, ".plans/done/dc5/_summary.md"));
+			},
+			{ backend },
+		);
+	} finally {
+		await target.close();
+		env.restore();
+	}
+
+	const runs = readRuns(dir);
+	assert.equal(runs.length, 2);
+	assert.deepEqual(
+		runs.map((r) => thinkingOf(r.argv)),
+		["high", "high"],
+		"the resume lives inside one attempt, so the level does not move",
+	);
+	const starts = readEvents(path.join(dir, ".plans"), "tr").filter((e) => e.kind === "task.start");
+	assert.equal(starts.length, 1, "a resume is not a new attempt");
+	assert.equal(starts[0].data?.thinking_source, "decider");
+	assert.equal(backend.calls.length, 1);
+	assert.equal(evidence(dir, "dc5").gate.pass, true, JSON.stringify(evidence(dir, "dc5").faults));
+});
+
+test("decider: a task thinking line wins in every mode and is never sent to the decider", async () => {
+	const dir = repo();
+	addOrigin(dir, "owner/full");
+	countingFake(dir, { readyAt: 2 });
+	setConfig(dir, { retries: 1, decider: decider({ escalate: true }) });
+	const backend = highBackend();
+	const env = deciderEnv();
+	try {
+		await withExtension(
+			dir,
+			false,
+			async () => {
+				drop(dir, "dc6", pairPlan("dc6", "thinking: low\nverify: test -f .plans/ready"));
+				await waitFor(path.join(dir, ".plans/done/dc6/_summary.md"));
+			},
+			{ backend },
+		);
+	} finally {
+		env.restore();
+	}
+
+	const events = readEvents(path.join(dir, ".plans"), "tr");
+	const starts = events.filter((e) => e.kind === "task.start");
+	assert.deepEqual(
+		starts.map((e) => e.data?.thinking),
+		["low", "low"],
+	);
+	assert.deepEqual(
+		starts.map((e) => e.data?.thinking_source),
+		["task", "task"],
+	);
+	assert.equal(backend.calls.length, 0, "a pinned task is not eligible");
+	assert.equal(events.some((e) => e.kind === "decision.error"), false);
+});
+
+test("decider: a backend error leaves the default level and one decision.error, not a failed task", async () => {
+	const dir = repo();
+	addOrigin(dir, "owner/full");
+	countingFake(dir);
+	setConfig(dir, { decider: decider() });
+	const backend = fakeBackend(() => {
+		throw new Error("boom: the decision service is down");
+	});
+	const env = deciderEnv({ key: "sk-or-parent-key" });
+	try {
+		await withExtension(
+			dir,
+			false,
+			async () => {
+				drop(dir, "dc7", pairPlan("dc7"));
+				await waitFor(path.join(dir, ".plans/done/dc7/_summary.md"));
+			},
+			{ backend },
+		);
+	} finally {
+		env.restore();
+	}
+
+	const events = readEvents(path.join(dir, ".plans"), "tr");
+	const errors = events.filter((e) => e.kind === "decision.error");
+	assert.equal(errors.length, 1);
+	assert.equal(errors[0].actor, "decider");
+	assert.equal(errors[0].task, "api");
+	assert.equal(errors[0].data?.command, "dispatch");
+	assert.equal(errors[0].data?.phase, "dispatch");
+	assert.equal(errors[0].data?.kind, "error");
+	assert.equal(errors[0].data?.status, 0);
+	assert.match(String(errors[0].data?.message), /boom/);
+	const start = events.find((e) => e.kind === "task.start")!;
+	assert.equal(start.data?.thinking, "low");
+	assert.equal(start.data?.thinking_source, "config");
+	assert.equal(evidence(dir, "dc7").gate.pass, true, JSON.stringify(evidence(dir, "dc7").faults));
+});
+
+test("decider: a meta repo is never sent to the decider and keeps the default level", async () => {
+	const dir = repo();
+	addOrigin(dir, "owner/meta");
+	countingFake(dir);
+	setConfig(dir, { decider: decider() });
+	const backend = highBackend();
+	const env = deciderEnv({ repo: "owner/meta" });
+	try {
+		await withExtension(
+			dir,
+			false,
+			async () => {
+				drop(dir, "dc8", pairPlan("dc8"));
+				await waitFor(path.join(dir, ".plans/done/dc8/_summary.md"));
+			},
+			{ backend },
+		);
+	} finally {
+		env.restore();
+	}
+
+	assert.equal(backend.calls.length, 0, "a meta repo never sends text");
+	const errors = deciderKinds(dir).filter((e) => e.kind === "decision.error");
+	assert.equal(errors.length, 1);
+	assert.equal(errors[0].data?.kind, "not-full");
+	assert.equal(errors[0].data?.status, 0);
+	assert.equal(readEvents(path.join(dir, ".plans"), "tr").find((e) => e.kind === "task.start")!.data?.thinking, "low");
+	assert.equal(evidence(dir, "dc8").gate.pass, true, JSON.stringify(evidence(dir, "dc8").faults));
+});
+
+test("decider: with no key the task keeps the default level and decision.error says no-key", async () => {
+	const dir = repo();
+	addOrigin(dir, "owner/full");
+	countingFake(dir);
+	setConfig(dir, { decider: decider() });
+	// No key in the environment and none in the temporary home: the call stops before the network.
+	const env = deciderEnv();
+	try {
+		await withExtension(dir, false, async () => {
+			drop(dir, "dc9", pairPlan("dc9"));
+			await waitFor(path.join(dir, ".plans/done/dc9/_summary.md"));
+		});
+	} finally {
+		env.restore();
+	}
+
+	const errors = deciderKinds(dir).filter((e) => e.kind === "decision.error");
+	assert.equal(errors.length, 1);
+	assert.equal(errors[0].data?.kind, "no-key");
+	assert.equal(errors[0].data?.status, 0);
+	assert.equal(readEvents(path.join(dir, ".plans"), "tr").find((e) => e.kind === "task.start")!.data?.thinking, "low");
+	assert.equal(evidence(dir, "dc9").gate.pass, true, JSON.stringify(evidence(dir, "dc9").faults));
+});
+
+test("decider: a dry run never calls the decider and writes no decision event", async () => {
+	const dir = repo();
+	addOrigin(dir, "owner/full");
+	countingFake(dir);
+	setConfig(dir, { decider: decider({ escalate: true }) });
+	const backend = highBackend();
+	const env = deciderEnv();
+	try {
+		await withExtension(
+			dir,
+			true,
+			async () => {
+				drop(dir, "dc10", pairPlan("dc10"));
+				await waitFor(path.join(dir, ".plans/done/dc10/_summary.md"));
+			},
+			{ backend },
+		);
+	} finally {
+		env.restore();
+	}
+
+	assert.equal(backend.calls.length, 0);
+	assert.equal(deciderKinds(dir).length, 0, "a dry run asks nothing and reports nothing");
+	assert.equal(readEvents(path.join(dir, ".plans"), "tr").find((e) => e.kind === "task.start")!.data?.thinking_source, "config");
+});
+
+test("decider: a read-only security task is never sent to the decider but escalates on a retry", async () => {
+	const dir = repo();
+	addOrigin(dir, "owner/full");
+	securityRetryFake(dir);
+	setConfig(dir, { retries: 1, decider: decider({ escalate: true }) });
+	const backend = highBackend();
+	const env = deciderEnv();
+	try {
+		await withExtension(
+			dir,
+			false,
+			async () => {
+				drop(dir, "dc11", securityPlan("dc11"));
+				await waitFor(path.join(dir, ".plans/done/dc11/_summary.md"));
+			},
+			{ backend },
+		);
+	} finally {
+		env.restore();
+	}
+
+	const events = readEvents(path.join(dir, ".plans"), "tr");
+	assert.equal(backend.calls.length, 0, "a read-only role never reaches the decider");
+	assert.equal(events.some((e) => e.kind === "decision.error"), false);
+	const starts = events.filter((e) => e.kind === "task.start");
+	assert.deepEqual(
+		starts.map((e) => e.data?.thinking),
+		["high", "max"],
+	);
+	assert.deepEqual(
+		starts.map((e) => e.data?.thinking_source),
+		["role", "escalated"],
+	);
+	const reviews = events.filter((e) => e.kind === "task.review");
+	assert.equal(reviews.length, 1);
+	assert.equal(reviews[0].data?.thinking, "max", "the review event carries the level that ran");
+	assert.equal(evidence(dir, "dc11").gate.pass, true, JSON.stringify(evidence(dir, "dc11").faults));
+});
+
+test("decider: the parent key never reaches a worker, a reviewer or a verify child", async () => {
+	const dir = repo();
+	addOrigin(dir, "owner/full");
+	envProbeFake(dir);
+	setConfig(dir, { decider: decider() });
+	const backend = highBackend();
+	const key = "sk-or-v1-test-key";
+	const env = deciderEnv({ key });
+	try {
+		await withExtension(
+			dir,
+			false,
+			async () => {
+				drop(dir, "dc12", pairPlan("dc12", 'pair: review\nverify: test -z "$OPENROUTER_API_KEY"'));
+				await waitFor(path.join(dir, ".plans/done/dc12/_summary.md"));
+			},
+			{ backend },
+		);
+		assert.equal(process.env.OPENROUTER_API_KEY, key, "the dispatcher keeps its own key");
+	} finally {
+		env.restore();
+	}
+
+	const impl = JSON.parse(fs.readFileSync(path.join(dir, ".plans/env-impl.json"), "utf8"));
+	const review = JSON.parse(fs.readFileSync(path.join(dir, ".plans/env-review.json"), "utf8"));
+	assert.equal(impl.key, null);
+	assert.equal(impl.vault, null);
+	assert.equal(review.key, null);
+	assert.equal(review.vault, null);
+	const ev = evidence(dir, "dc12");
+	assert.equal(ev.gate.pass, true, JSON.stringify(ev.faults));
+	assert.equal(ev.verify.length, 1);
+	assert.equal(ev.verify[0].ok, true, "the verify child saw no key either");
 });

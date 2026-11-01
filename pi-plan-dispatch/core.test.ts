@@ -9,6 +9,7 @@ import {
 	DEFAULT_PAIR_ROUNDS,
 	DEFAULT_ROLES,
 	buildWorkerPrompt,
+	eligibleForDecider,
 	ensureDirs,
 	findVaultPath,
 	getDirs,
@@ -18,6 +19,7 @@ import {
 	preflightPlan,
 	resolveModel,
 	resolveRole,
+	resolveThinking,
 	resumeCommand,
 	runWorker,
 	sessionFor,
@@ -681,6 +683,201 @@ No thinking flag.
 		thinking: "",
 		role: "qa",
 	});
+});
+
+test("config: the decider key parses with a fresh copy of the defaults", () => {
+	const dir = tmp();
+	const dirs = getDirs(dir);
+	ensureDirs(dirs);
+	const load = (value: unknown) => {
+		fs.writeFileSync(path.join(dirs.root, "config.json"), JSON.stringify(value));
+		return loadConfig(dirs);
+	};
+
+	const plain = load({});
+	assert.equal(plain.decider.effort, "off");
+	assert.equal(plain.decider.audit, "off");
+	assert.equal(plain.decider.escalate, false);
+	assert.deepEqual(plain.decider.thresholds, DEFAULT_CONFIG.decider.thresholds);
+
+	const again = load({});
+	assert.notEqual(plain.decider, again.decider, "each load gets its own decider object");
+	assert.notEqual(plain.decider.thresholds, again.decider.thresholds);
+
+	const dispatch = load({ decider: { effort: "dispatch" } });
+	assert.equal(dispatch.decider.effort, "dispatch", "only the given key changes");
+	assert.equal(dispatch.decider.escalate, false);
+
+	assert.equal(load({ decider: { effort: "dispatch", escalate: true } }).decider.escalate, true);
+	assert.equal(load({ decider: { escalate: "true" } }).decider.escalate, false, "escalate needs the boolean true");
+	assert.equal(load({ decider: { effort: "sometimes" } }).decider.effort, "off", "an unknown mode is off");
+	assert.equal(load({ decider: "dispatch" }).decider.effort, "off", "a non-object value is the defaults");
+});
+
+test("resolveThinking: task, decider, role, plan and config order, and escalation", () => {
+	const cfg: DispatchConfig = { ...DEFAULT_CONFIG, thinking: "cfg-thinking", decider: { ...DEFAULT_CONFIG.decider } };
+	const plan = parsePlan(
+		`---
+id: p
+thinking: plan-thinking
+---
+ctx
+
+## task: plain
+files: a.ts
+Do it.
+
+## task: pinned
+thinking: low # pinned: manual choice
+files: b.ts
+Do it.
+
+## task: empty
+thinking:
+files: c.ts
+Do it.
+
+## task: reviewer
+role: review
+files: d.ts
+Review it.
+
+## task: security
+role: security
+files: e.ts
+Check it.
+
+## task: qa
+role: qa
+files: f.ts
+Test it.
+`,
+		"x",
+	);
+	const task = (id: string): PlanTask => {
+		const found = plan.tasks.find((t) => t.id === id);
+		assert.ok(found, id);
+		return found;
+	};
+	const disp = (escalate: boolean): DispatchConfig => ({
+		...cfg,
+		decider: { ...cfg.decider, effort: "dispatch", escalate },
+	});
+
+	// an explicit line wins, pinned or empty, and is never escalated
+	assert.deepEqual(resolveThinking(disp(true), plan, task("pinned"), "max", 2), { thinking: "low", source: "task" });
+	assert.deepEqual(resolveThinking(disp(true), plan, task("empty"), "max", 2), { thinking: "", source: "task" });
+
+	// the decider's level beats the role, the plan and the config
+	assert.deepEqual(resolveThinking(disp(false), plan, task("plain"), "high"), { thinking: "high", source: "decider" });
+	assert.deepEqual(resolveThinking(cfg, plan, task("plain")), { thinking: "plan-thinking", source: "plan" });
+	assert.deepEqual(resolveThinking(cfg, { ...plan, thinking: undefined }, task("plain")), {
+		thinking: "cfg-thinking",
+		source: "config",
+	});
+	assert.deepEqual(resolveThinking(cfg, plan, task("reviewer")), { thinking: "low", source: "role" });
+
+	// one step per real re-run, only in dispatch mode with escalate on
+	assert.deepEqual(resolveThinking(disp(true), plan, task("plain"), "low", 1), { thinking: "high", source: "escalated" });
+	assert.deepEqual(resolveThinking(disp(true), plan, task("plain"), "low", 2), { thinking: "max", source: "escalated" });
+	assert.deepEqual(resolveThinking(disp(true), plan, task("plain"), "low", 0), { thinking: "low", source: "decider" });
+	assert.deepEqual(resolveThinking(disp(false), plan, task("plain"), "low", 1), { thinking: "low", source: "decider" });
+	assert.deepEqual(resolveThinking({ ...cfg, decider: { ...cfg.decider, escalate: true } }, plan, task("plain"), "low", 1), {
+		thinking: "low",
+		source: "decider",
+	});
+
+	// max is the ceiling and keeps its base source; an off-ladder level is unchanged
+	assert.deepEqual(resolveThinking(disp(true), plan, task("plain"), "max", 3), { thinking: "max", source: "decider" });
+	assert.deepEqual(resolveThinking(disp(true), plan, task("plain"), "", 1), { thinking: "", source: "decider" });
+	assert.deepEqual(resolveThinking(disp(true), plan, task("plain"), "medium", 1), { thinking: "medium", source: "decider" });
+
+	// a read-only role with no line still escalates through resolveThinking (R7)
+	assert.deepEqual(resolveThinking(disp(true), plan, task("security"), undefined, 1), {
+		thinking: "max",
+		source: "escalated",
+	});
+});
+
+test("eligibleForDecider: dispatch mode, no task line, a writable role with a non-empty level", () => {
+	const cfg: DispatchConfig = { ...DEFAULT_CONFIG, decider: { ...DEFAULT_CONFIG.decider, effort: "dispatch" } };
+	const plan = parsePlan(
+		`---
+id: p
+---
+ctx
+
+## task: plain
+files: a.ts
+Do it.
+
+## task: pinned
+thinking: low
+files: b.ts
+Do it.
+
+## task: empty
+thinking:
+files: c.ts
+Do it.
+
+## task: reviewer
+role: review
+files: d.ts
+Review it.
+
+## task: security
+role: security
+files: e.ts
+Check it.
+
+## task: qa
+role: qa
+files: f.ts
+Test it.
+`,
+		"x",
+	);
+	const task = (id: string): PlanTask => {
+		const found = plan.tasks.find((t) => t.id === id);
+		assert.ok(found, id);
+		return found;
+	};
+
+	assert.equal(eligibleForDecider(cfg, plan, task("plain")), true, "implement has no thinking key, not an empty one");
+	assert.equal(eligibleForDecider(cfg, plan, task("pinned")), false, "an explicit line wins over the decider");
+	assert.equal(eligibleForDecider(cfg, plan, task("empty")), false, "an empty line is still an explicit line");
+	assert.equal(eligibleForDecider(cfg, plan, task("reviewer")), false, "read-only roles are never decided");
+	assert.equal(eligibleForDecider(cfg, plan, task("security")), false, "read-only roles are never decided");
+	assert.equal(eligibleForDecider(cfg, plan, task("qa")), false, "qa's empty level means no call");
+	assert.equal(eligibleForDecider({ ...cfg, decider: { ...cfg.decider, effort: "apply" } }, plan, task("plain")), false);
+	assert.equal(eligibleForDecider({ ...cfg, decider: { ...cfg.decider, effort: "off" } }, plan, task("plain")), false);
+
+	// a user role with no thinking key is eligible like implement
+	const custom: DispatchConfig = { ...cfg, roles: { ...cfg.roles, custom: { prompt: "x" } } };
+	assert.equal(eligibleForDecider(custom, plan, { ...task("plain"), role: "custom" }), true);
+});
+
+test("runWorker opts.thinking overrides the resolved level, and an empty string omits the flag", async () => {
+	const dir = tmp();
+	const fake = fakePi(dir, "fake-pi.mjs", "STATUS: done\nCHANGED: none\nTESTS: none\nNOTES: ok\nNEEDS: none");
+	const cfg: DispatchConfig = { ...DEFAULT_CONFIG, piCommand: fake, persistSessions: false, thinking: "low" };
+	const plan = parsePlan(`---\nid: p\n---\nctx\n\n## task: a\nfiles: x.ts\nDo.\n`, "x");
+
+	const override = await runWorker(dir, cfg, plan, plan.tasks[0], new AbortController().signal, undefined, { thinking: "max" });
+	assert.equal(override.ok, true);
+	assert.equal(override.thinking, "max");
+	const argv = readArgv(dir);
+	assert.deepEqual(argv.slice(argv.indexOf("--thinking"), argv.indexOf("--thinking") + 2), ["--thinking", "max"]);
+
+	const empty = await runWorker(dir, cfg, plan, plan.tasks[0], new AbortController().signal, undefined, { thinking: "" });
+	assert.equal(empty.ok, true);
+	assert.equal(empty.thinking, "");
+	assert.ok(!readArgv(dir).includes("--thinking"), "an empty override means no --thinking flag");
+
+	const fallback = await runWorker(dir, cfg, plan, plan.tasks[0], new AbortController().signal);
+	assert.equal(fallback.ok, true);
+	assert.equal(fallback.thinking, "low", "without the option resolveModel decides as before");
 });
 
 test("buildWorkerPrompt appends the role prompt, and readonly roles reach the guard", async () => {

@@ -17,21 +17,48 @@ const REDACTED = "<redacted>";
 const RETRY_PAUSE_MS = 2000;
 const ERROR_TEXT_MAX = 200;
 
-const realSleep = (ms) =>
+const realSleep = (ms: number): Promise<void> =>
 	new Promise((resolve) => {
 		setTimeout(resolve, ms);
 	});
 
-function isObject(value) {
+export interface BackendRequest {
+	state: Record<string, unknown>;
+	questions: Record<string, unknown>;
+}
+
+export interface BackendUsage {
+	input_tokens: number;
+	output_tokens: number;
+	cost: number;
+	[k: string]: unknown;
+}
+
+export interface BackendResult {
+	answers: Record<string, unknown>;
+	usage?: BackendUsage;
+	model?: string;
+	[k: string]: unknown;
+}
+
+export interface Backend {
+	name: string;
+	ask(req: BackendRequest): Promise<BackendResult>;
+	calls?: BackendRequest[];
+}
+
+export type BackendErrorKind = "http" | "timeout" | "malformed";
+
+function isObject(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function numberOrZero(value) {
+function numberOrZero(value: unknown): number {
 	return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 /** The first line of a text, trimmed; an empty string when there is no text. */
-function firstLine(value) {
+function firstLine(value: unknown): string {
 	if (typeof value !== "string") return "";
 	return (value.split(/\r?\n/u)[0] ?? "").trim();
 }
@@ -41,11 +68,11 @@ function firstLine(value) {
  * `<home>/.config/pi-plan-dispatch/openrouter.key`. Null when neither has one,
  * and never a throw for an unreadable file.
  */
-export function loadKey(env, home) {
+export function loadKey(env: NodeJS.ProcessEnv, home: string): string | null {
 	const fromEnv = firstLine(env?.OPENROUTER_API_KEY);
 	if (fromEnv !== "") return fromEnv;
 	if (typeof home !== "string" || home === "") return null;
-	let text;
+	let text: string;
 	try {
 		text = fs.readFileSync(path.join(home, KEY_FILE), "utf8");
 	} catch {
@@ -56,7 +83,7 @@ export function loadKey(env, home) {
 }
 
 /** Every `sk-or-` token, and the exact key when it is passed, become `<redacted>`. */
-export function redact(text, key) {
+export function redact(text: string, key?: string): string {
 	let out = String(text);
 	if (typeof key === "string" && key !== "") {
 		out = out.split(key).join(REDACTED);
@@ -66,7 +93,13 @@ export function redact(text, key) {
 
 /** A backend failure: `http` with the status (0 for no response), `timeout` or `malformed`. */
 export class BackendError extends Error {
-	constructor(message, { status = 0, kind = "http" } = {}) {
+	status: number;
+	kind: BackendErrorKind;
+
+	constructor(
+		message: string,
+		{ status = 0, kind = "http" }: { status?: number; kind?: BackendErrorKind } = {},
+	) {
 		super(message);
 		this.name = "BackendError";
 		this.status = status;
@@ -74,7 +107,7 @@ export class BackendError extends Error {
 	}
 }
 
-function isAbort(error) {
+function isAbort(error: any): boolean {
 	return (
 		error?.name === "TimeoutError" ||
 		error?.name === "AbortError" ||
@@ -82,7 +115,7 @@ function isAbort(error) {
 	);
 }
 
-function transportError(error, key) {
+function transportError(error: any, key: string): BackendError {
 	if (isAbort(error)) {
 		return new BackendError(redact("openrouter: the request timed out", key), {
 			status: 0,
@@ -90,19 +123,19 @@ function transportError(error, key) {
 		});
 	}
 	const detail = typeof error?.message === "string" ? error.message : String(error);
-	return new BackendError(
-		redact(`openrouter: the request failed: ${detail}`, key),
-		{ status: 0, kind: "http" },
-	);
+	return new BackendError(redact(`openrouter: the request failed: ${detail}`, key), {
+		status: 0,
+		kind: "http",
+	});
 }
 
-function retryable(status) {
+function retryable(status: number): boolean {
 	return status === 429 || (status >= 500 && status <= 599);
 }
 
 /** The server's own message, one line and cut to 200 characters; never the request. */
-async function errorText(response) {
-	let text;
+async function errorText(response: Response): Promise<string> {
+	let text: string;
 	try {
 		text = await response.text();
 	} catch {
@@ -110,7 +143,7 @@ async function errorText(response) {
 	}
 	let message = text;
 	try {
-		const parsed = JSON.parse(text);
+		const parsed: unknown = JSON.parse(text);
 		if (isObject(parsed) && isObject(parsed.error) && typeof parsed.error.message === "string") {
 			message = parsed.error.message;
 		}
@@ -120,7 +153,7 @@ async function errorText(response) {
 	return message.replace(/\s+/gu, " ").trim().slice(0, ERROR_TEXT_MAX);
 }
 
-async function httpError(response, key) {
+async function httpError(response: Response, key: string): Promise<BackendError> {
 	const message = await errorText(response);
 	const suffix = message === "" ? "" : `: ${message}`;
 	return new BackendError(redact(`openrouter: HTTP ${response.status}${suffix}`, key), {
@@ -129,8 +162,8 @@ async function httpError(response, key) {
 	});
 }
 
-function usageOf(body) {
-	const usage = isObject(body.usage) ? body.usage : {};
+function usageOf(body: Record<string, unknown>): BackendUsage {
+	const usage: Record<string, unknown> = isObject(body.usage) ? body.usage : {};
 	return {
 		input_tokens: numberOrZero(usage.input_tokens),
 		output_tokens: numberOrZero(usage.output_tokens),
@@ -138,23 +171,23 @@ function usageOf(body) {
 	};
 }
 
-async function readAnswer(response, key) {
-	let body;
+async function readAnswer(response: Response, key: string): Promise<BackendResult> {
+	let body: unknown;
 	try {
 		body = await response.json();
 	} catch {
-		throw new BackendError(
-			redact("openrouter: the answer is not JSON", key),
-			{ status: response.status, kind: "malformed" },
-		);
+		throw new BackendError(redact("openrouter: the answer is not JSON", key), {
+			status: response.status,
+			kind: "malformed",
+		});
 	}
 	if (!isObject(body) || !isObject(body.answers)) {
-		throw new BackendError(
-			redact("openrouter: the answer has no answers object", key),
-			{ status: response.status, kind: "malformed" },
-		);
+		throw new BackendError(redact("openrouter: the answer has no answers object", key), {
+			status: response.status,
+			kind: "malformed",
+		});
 	}
-	return { answers: body.answers, usage: usageOf(body), model: body.model };
+	return { answers: body.answers, usage: usageOf(body), model: body.model as string | undefined };
 }
 
 /**
@@ -168,10 +201,16 @@ export function openRouterBackend({
 	timeoutMs = 30000,
 	fetchImpl = fetch,
 	sleep = realSleep,
-} = {}) {
-	async function ask({ state, questions }) {
+}: {
+	key: string;
+	model: string;
+	timeoutMs?: number;
+	fetchImpl?: typeof fetch;
+	sleep?: (ms: number) => Promise<void>;
+}): Backend {
+	async function ask({ state, questions }: BackendRequest): Promise<BackendResult> {
 		for (let attempt = 0; ; attempt += 1) {
-			let response;
+			let response: Response;
 			try {
 				response = await fetchImpl(ENDPOINT, {
 					method: "POST",
@@ -198,14 +237,16 @@ export function openRouterBackend({
 }
 
 /** A backend for the tests: `handler(request)` gives the result, `calls` records every request. */
-export function fakeBackend(handler) {
-	const calls = [];
+export function fakeBackend(
+	handler: (request: BackendRequest) => BackendResult | Promise<BackendResult>,
+): Backend & { calls: BackendRequest[] } {
+	const calls: BackendRequest[] = [];
 	return {
 		name: "fake",
 		calls,
-		ask(request) {
+		ask(request: BackendRequest): Promise<BackendResult> {
 			calls.push(request);
-			return handler(request);
+			return Promise.resolve(handler(request));
 		},
 	};
 }

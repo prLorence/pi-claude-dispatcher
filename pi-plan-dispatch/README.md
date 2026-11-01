@@ -49,9 +49,9 @@ mkdir -p ~/.claude/skills/dispatch-plan/bin && cp dispatch-plan/bin/vault-search
 
 Add `.plans/` to your `.gitignore`.
 
-Reload or restart Pi after updating the extension: a running Pi keeps the old code in memory.
+Reload or restart Pi after updating the extension: a running Pi keeps the old code in memory, so a new `index.ts` or `core.ts` is only loaded after a restart.
 
-The install copies the CLIs to `~/.claude/skills/dispatch-plan/`, and the orchestrator and the `plan-auditor` call them there: `trace.mjs` for events, waits and reports, `preflight.mjs` for the plan check. Refresh the installed copies after pulling changes; a missing module means a stale install. The vault's instruction file is `AGENTS.md`; `CLAUDE.md` is the shim that imports it with `@AGENTS.md`. `vault search` ranks the notes with BM25 and is documented, with the eval cases and the measures, in [docs/vault.md](../docs/vault.md).
+The install copies the CLIs to `~/.claude/skills/dispatch-plan/`, and the orchestrator and the `plan-auditor` call them there: `trace.mjs` for events, waits and reports, `preflight.mjs` for the plan check. Refresh the installed copies after pulling changes, including `decide.mjs` and `decide-core.mjs` after the dispatch-time effort change; a missing module means a stale install. The vault's instruction file is `AGENTS.md`; `CLAUDE.md` is the shim that imports it with `@AGENTS.md`. `vault search` ranks the notes with BM25 and is documented, with the eval cases and the measures, in [docs/vault.md](../docs/vault.md).
 
 ## Use
 
@@ -95,6 +95,7 @@ Commands inside Pi:
   "maxFilesPerTask": 10,
   "maxTaskChars": 8000,
   "maxRunsPerTask": 8,
+  "decider": { "effort": "off", "audit": "off", "escalate": false },
   "roles": {
     "review": { "model": "opencode-go/minimax-m3.1-flash-free", "thinking": "low" },
     "security": { "model": "opencode-go/glm-5.3-flash", "thinking": "high" }
@@ -124,6 +125,7 @@ Commands inside Pi:
 | `probeSeconds` | `30` | Wait this long between network probes while an outage is open |
 | `probeUrls` | `["https://openrouter.ai", "https://opencode.ai"]` | Any of these answering with any HTTP status means the network is up |
 | `roles` | see [docs/roles.md](../docs/roles.md) | Map of role name to model, thinking, read-only flag and prompt. A user entry overrides only the fields it sets |
+| `decider` | `{"effort": "off", "audit": "off", "escalate": false}` | Decider settings: `effort` is `off`, `apply` or `dispatch`; `audit` is `off` or `shadow`; `escalate` steps a retried task's level up in `dispatch` mode. See [docs/decider.md](../docs/decider.md) |
 
 A plan's frontmatter, or an individual task, can override `model` and `thinking`.
 A task may name a `role:` (default `implement`), and risky tasks can add a pair
@@ -132,9 +134,20 @@ the four default roles, their models and prices, pair mode, and the security and
 roles.
 
 `node ~/.claude/skills/dispatch-plan/config-init.mjs` writes this file with the
-dispatcher's defaults: `--minimal` writes only the review role and `autoReady`,
-`--force` replaces an existing file after a `.bak-<timestamp>` copy, and `--print`
-shows the JSON without writing it.
+dispatcher's defaults, including the `decider` block with `effort` `off`: `--minimal`
+writes only the review role and `autoReady`, `--force` replaces an existing file after
+a `.bak-<timestamp>` copy, and `--print` shows the JSON without writing it.
+
+### Decider (optional)
+
+The decider is an advisory hosted model. With `decider.effort` set to `apply`, the
+orchestrator writes a suggested `thinking:` level into each task. With `dispatch`, the
+dispatcher asks for the level when a task starts, and `decider.escalate` steps a retried
+task's level up the ladder `low`, `high`, `max`. The decider never fails a task or a plan:
+a missing key, a timeout, an error or a repo that is not `full` leaves the task on its
+normal level. The effort code lives in `pi-plan-dispatch/decider/`. See
+[docs/decider.md](../docs/decider.md) for the config, the privacy gate and the trace
+events.
 
 With `persistSessions` on, each task attempt keeps its Pi session, so its conversation
 can be reopened. Re-running the same plan id renames the old session files to

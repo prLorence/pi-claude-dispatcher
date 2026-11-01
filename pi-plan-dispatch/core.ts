@@ -7,6 +7,8 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { DECIDER_DEFAULTS, loadDeciderConfig, type DeciderConfig } from "./decider/config.ts";
+import { escalateLevel } from "./decider/effort.ts";
 import { BLOCKED_MARKER, GUARD_ENV, VAULT_ENV } from "./guard.ts";
 import { StallTracker } from "./resilience.ts";
 
@@ -141,6 +143,13 @@ export interface DispatchConfig {
 	probeSeconds: number;
 	/** Any of these URLs answering with any HTTP status means the network is up */
 	probeUrls: string[];
+	/** The decision model's effort, audit, model, timeout and thresholds */
+	decider: DeciderConfig;
+}
+
+/** A copy of the decider defaults, so two configs never share a thresholds object. */
+function defaultDecider(): DeciderConfig {
+	return { ...DECIDER_DEFAULTS, thresholds: { ...DECIDER_DEFAULTS.thresholds } };
 }
 
 export const DEFAULT_CONFIG: DispatchConfig = {
@@ -165,6 +174,7 @@ export const DEFAULT_CONFIG: DispatchConfig = {
 	outagePauseMinutes: 30,
 	probeSeconds: 30,
 	probeUrls: ["https://openrouter.ai", "https://opencode.ai"],
+	decider: defaultDecider(),
 };
 
 export type TaskState = "pending" | "running" | "done" | "failed" | "skipped";
@@ -267,9 +277,10 @@ export function loadConfig(d: Dirs): DispatchConfig {
 	try {
 		raw = JSON.parse(fs.readFileSync(file, "utf8"));
 	} catch {
-		return { ...DEFAULT_CONFIG, roles: cloneRoles(DEFAULT_ROLES) };
+		return { ...DEFAULT_CONFIG, roles: cloneRoles(DEFAULT_ROLES), decider: defaultDecider() };
 	}
 	const cfg: DispatchConfig = { ...DEFAULT_CONFIG, ...raw, roles: mergeRoles(raw?.roles) };
+	cfg.decider = loadDeciderConfig(raw?.decider);
 	// Resilience keys are repaired rather than trusted: a typo must not turn a
 	// guard off silently or make the dispatcher wait forever.
 	cfg.transientRetries = numberOr(raw?.transientRetries, DEFAULT_CONFIG.transientRetries, (n) => Number.isInteger(n) && n >= 0);
@@ -311,6 +322,66 @@ export function resolveModel(cfg: DispatchConfig, plan: Plan, task: PlanTask): R
 		thinking: task.thinking ?? rc.thinking ?? plan.thinking ?? cfg.thinking ?? "",
 		role,
 	};
+}
+
+/** Where a task's thinking level came from, in precedence order (R8). */
+export type ThinkingSource = "task" | "decider" | "role" | "plan" | "config" | "escalated";
+
+/**
+ * Whether dispatch-time effort may ask the decider for this task (R3): the mode
+ * is `dispatch`, the task has no `thinking:` line, its role is not read-only and
+ * the role's own level is not the empty string (as for `qa`). A role with no
+ * `thinking` key at all, such as the default `implement`, is eligible.
+ */
+export function eligibleForDecider(cfg: DispatchConfig, plan: Plan, task: PlanTask): boolean {
+	if (cfg.decider.effort !== "dispatch") return false;
+	if (task.thinking !== undefined) return false;
+	const rc = resolveRole(cfg, task.role || "implement");
+	if (rc.readonly === true) return false;
+	return rc.thinking !== "";
+}
+
+/**
+ * Pick the thinking level a task runs with and where it came from: an explicit
+ * `thinking:` line wins and is never escalated; otherwise the decider's level,
+ * then the role, plan or config value in the order of `resolveModel`. With
+ * mode `dispatch` and `escalate` on, `steps` real re-runs move the level up the
+ * ladder (R7); the source becomes `escalated` only when the level changed.
+ */
+export function resolveThinking(
+	cfg: DispatchConfig,
+	plan: Plan,
+	task: PlanTask,
+	decided?: string,
+	steps?: number,
+): { thinking: string; source: ThinkingSource } {
+	if (task.thinking !== undefined) return { thinking: task.thinking, source: "task" };
+
+	let thinking: string;
+	let source: ThinkingSource;
+	if (decided !== undefined) {
+		thinking = decided;
+		source = "decider";
+	} else {
+		const rc = resolveRole(cfg, task.role || "implement");
+		if (rc.thinking !== undefined) {
+			thinking = rc.thinking;
+			source = "role";
+		} else if (plan.thinking !== undefined) {
+			thinking = plan.thinking;
+			source = "plan";
+		} else {
+			thinking = cfg.thinking ?? "";
+			source = "config";
+		}
+	}
+
+	const n = steps ?? 0;
+	if (cfg.decider.effort === "dispatch" && cfg.decider.escalate && n > 0) {
+		const next = escalateLevel(thinking, n);
+		if (next !== thinking) return { thinking: next, source: "escalated" };
+	}
+	return { thinking, source };
 }
 
 // ---------- Parsing ----------
@@ -917,6 +988,8 @@ export function runWorker(
 		stallCheckMs?: number;
 		/** Called once when the worker is killed as stalled, with the minutes waited */
 		onStall?: (minutes: number) => void;
+		/** Overrides the resolveModel thinking level, including "" for no --thinking flag */
+		thinking?: string;
 	},
 ): Promise<WorkerResult> {
 	const prompt = opts?.prompt ?? buildWorkerPrompt(plan, task, cfg);
@@ -941,7 +1014,9 @@ export function runWorker(
 		});
 	}
 
-	const { model, thinking } = resolveModel(cfg, plan, task);
+	const resolved = resolveModel(cfg, plan, task);
+	const model = resolved.model;
+	const thinking = opts?.thinking !== undefined ? opts.thinking : resolved.thinking;
 	const args = ["--mode", "json", "-p"];
 	const session = sessionFor(cwd, cfg, plan, task);
 	if (session) {

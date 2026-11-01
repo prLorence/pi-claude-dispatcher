@@ -34,7 +34,10 @@ and Pi workers write all the code. Steps 1 to 8 are the whole flow for one reque
    `node ~/.claude/skills/dispatch-plan/decide.mjs effort --plan <draft> --trace <T> --root <repo root>`
    and write each task's `thinking:` line from its `suggested` value; a level you pin instead
    carries `# pinned: <reason>` after the value. A non-zero exit never blocks the plan: carry
-   on as before and say so once.
+   on as before and say so once. When it is `dispatch`, do not run `decide.mjs effort` (it
+   exits `4`) and write no `thinking:` lines: the dispatcher asks the decider when a task
+   starts and steps the level up on retries when `decider.escalate` is true. You never edit
+   the `decider` config.
 
 4. **Plan audit.** Run `node ~/.claude/skills/dispatch-plan/preflight.mjs <plan file>` and fix
    every `ERROR:` before spending an audit round. Then spawn the read-only `plan-auditor`
