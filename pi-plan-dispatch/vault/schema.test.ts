@@ -5,10 +5,12 @@ import { test } from "node:test";
 import {
 	NOTE_TYPES,
 	REQUIRED_PROPS,
+	RETIRED_STATUSES,
 	SCHEMA_VERSION,
 	TYPE_FOLDER,
 	VOCAB,
 	fingerprintHash,
+	isActiveNote,
 	parseNote,
 	serializeNote,
 	slug,
@@ -126,6 +128,7 @@ test("constants: schema version, note types, folders, required properties and vo
 		planStatus: ["draft", "ready", "done", "failed"],
 		specStatus: ["draft", "confirmed", "done"],
 		ideaStatus: ["open", "taken", "dropped"],
+		knowledgeStatus: ["active", "superseded", "stale"],
 		audit: ["pass", "fail"],
 		gate: ["pass", "fail"],
 		findingStatus: ["open", "closed"],
@@ -250,6 +253,56 @@ test("validateNote accepts every value of each status vocabulary", () => {
 	for (const audit of VOCAB.audit) {
 		assert.deepEqual(validateNote(makeNote("plan", { audit })), [], audit);
 	}
+});
+
+test("validateNote accepts the knowledge statuses on decision and lesson notes", () => {
+	for (const type of ["decision", "lesson"] as NoteType[]) {
+		for (const status of VOCAB.knowledgeStatus) {
+			assert.deepEqual(validateNote(makeNote(type, { status })), [], `${type} ${status}`);
+		}
+		assert.deepEqual(validateNote(makeNote(type)), [], `${type} with no status`);
+		assert.ok(hasErr(makeNote(type, { status: "old" }), /status must be one of: active, superseded, stale/), type);
+	}
+});
+
+test("validateNote accepts and rejects the optional knowledge properties", () => {
+	for (const type of ["decision", "lesson"] as NoteType[]) {
+		assert.deepEqual(
+			validateNote(
+				makeNote(type, {
+					last_verified: "2026-10-27",
+					superseded_by: "decision-demo-use-y",
+					supersedes: "decision-demo-use-x",
+				}),
+			),
+			[],
+			type,
+		);
+	}
+	const BAD_DATE = /last_verified must be YYYY-MM-DD/;
+	for (const last_verified of ["27-10-2026", "2026-10-27T00:00", "", 7 as unknown as string, ["2026-10-27"]]) {
+		assert.ok(hasErr(makeNote("lesson", { last_verified }), BAD_DATE), String(last_verified));
+	}
+	for (const key of ["superseded_by", "supersedes"]) {
+		const BAD_BASENAME = new RegExp(`${key} must be a note basename`);
+		for (const value of ["Bad Baseline", "", "two\nlines", 7 as unknown as string, ["decision-demo-use-x"]]) {
+			assert.ok(hasErr(makeNote("decision", { [key]: value }), BAD_BASENAME), `${key} ${String(value)}`);
+		}
+	}
+});
+
+test("isActiveNote covers absent, active and retired statuses", () => {
+	assert.deepEqual([...RETIRED_STATUSES], ["closed", "superseded", "stale", "dropped"]);
+	assert.equal(isActiveNote(makeNote("decision")), true, "no status");
+	for (const status of ["active", "open", "done", "confirmed"]) {
+		assert.equal(isActiveNote(makeNote("decision", { status })), true, status);
+		assert.equal(isActiveNote(makeNote("lesson", { status })), true, `${status} on a lesson`);
+	}
+	for (const status of RETIRED_STATUSES) {
+		assert.equal(isActiveNote(makeNote("decision", { status })), false, status);
+		assert.equal(isActiveNote(makeNote("lesson", { status })), false, `${status} on a lesson`);
+	}
+	assert.equal(isActiveNote(makeNote("decision", { status: ["closed"] })), true, "a non-string status is not retired");
 });
 
 test("validateNote checks the file property of spec and plan notes", () => {

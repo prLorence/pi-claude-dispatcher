@@ -614,7 +614,7 @@ test(
 	withVault(async ({ root, vault }) => {
 		const clean = run(root, ["lint"], { vault });
 		assert.equal(clean.code, 0, clean.out);
-		assert.match(clean.out, /^lint: 0 errors, \d+ info$/m);
+		assert.match(clean.out, /^lint: 0 errors, 0 warnings, \d+ info$/m);
 		const secret = ["sk-", "ant-", "api03", "-abcdefghijklmnop"].join("");
 		const created = run(root, ["note", "new", "lesson", "lesson-secret", "--set", "project=project-one", "--set", "repo=github.com/o/n", "--body-stdin"], {
 			vault,
@@ -624,10 +624,43 @@ test(
 		const dirty = run(root, ["lint"], { vault });
 		assert.equal(dirty.code, 1);
 		assert.match(dirty.out, /^ERROR secret lessons\/lesson-secret\.md /m);
-		assert.match(dirty.out, /^lint: 1 errors, \d+ info$/m);
+		assert.match(dirty.out, /^lint: 1 errors, 0 warnings, \d+ info$/m);
 		const ranged = run(root, ["lint", "--range"], { vault });
 		assert.ok(ranged.code === 0 || ranged.code === 1, ranged.err);
-		assert.match(ranged.out, /^lint: \d+ errors, \d+ info$/m);
+		assert.match(ranged.out, /^lint: \d+ errors, \d+ warnings, \d+ info$/m);
+	}),
+);
+
+test(
+	"lint warns about a decision and a lesson unverified for over 90 days and still exits 0",
+	withVault(async ({ root, vault }) => {
+		write(
+			vault,
+			"decisions/decision-old.md",
+			"---\ntype: decision\nproject: project-one\nrepo: github.com/o/n\ncreated: 2026-01-01\nupdated: 2026-01-01\n---\n\nan old decision\n",
+		);
+		write(
+			vault,
+			"lessons/lesson-old.md",
+			"---\ntype: lesson\nproject: project-one\nrepo: github.com/o/n\ncreated: 2026-01-01\nupdated: 2026-02-01\nlast_verified: 2026-02-01\n---\n\nan old lesson\n",
+		);
+		const result = run(root, ["lint"], { vault });
+		assert.equal(result.code, 0, result.out);
+		assert.match(result.out, /^WARN stale-unverified decisions\/decision-old\.md not verified for \d+ days /m);
+		assert.match(result.out, /^WARN stale-unverified lessons\/lesson-old\.md not verified for \d+ days /m);
+		assert.match(result.out, /^lint: 0 errors, 2 warnings, \d+ info$/m);
+	}),
+);
+
+test(
+	"a recent or verified decision raises no stale warning",
+	withVault(async ({ root, vault }) => {
+		const created = run(root, ["note", "new", "decision", "decision-fresh", "--set", "project=project-one", "--set", "repo=github.com/o/n"], { vault });
+		assert.equal(created.code, 0, created.err);
+		const result = run(root, ["lint"], { vault });
+		assert.equal(result.code, 0, result.out);
+		assert.equal(result.out.includes("stale-unverified"), false, result.out);
+		assert.match(result.out, /^lint: 0 errors, 0 warnings, \d+ info$/m);
 	}),
 );
 
@@ -1137,12 +1170,123 @@ test(
 
 		const badValue = run(root, ["note", "status", "idea-pair-mode", "closed"], { vault });
 		assert.equal(badValue.code, 2);
-		assert.match(badValue.err, /status works on finding notes \(open, closed\) and idea notes \(open, taken, dropped\)/);
+		assert.match(badValue.err, /status works on finding notes \(open, closed\), idea notes \(open, taken, dropped\) and decision and lesson notes \(active, superseded, stale\)/);
 		assert.match(read(file), /^status: dropped$/m, "a refused value writes nothing");
 
 		const decision = run(root, ["note", "new", "decision", "decision-three", "--set", "project=project-one", "--set", "repo=github.com/o/n"], { vault });
 		assert.equal(decision.code, 0, decision.err);
 		assert.equal(run(root, ["note", "status", "decision-three", "taken"], { vault }).code, 2);
+	}),
+);
+
+test(
+	"note supersede links two decisions and keeps their properties and bodies",
+	withVault(async ({ root, vault }) => {
+		const first = run(root, ["note", "new", "decision", "decision-old", "--set", "project=project-one", "--set", "repo=github.com/o/n", "--body-stdin"], { vault, input: "the old choice\n" });
+		assert.equal(first.code, 0, first.err);
+		const second = run(root, ["note", "new", "decision", "decision-new", "--set", "project=project-one", "--set", "repo=github.com/o/n", "--body-stdin"], { vault, input: "the new choice\n" });
+		assert.equal(second.code, 0, second.err);
+		const result = run(root, ["note", "supersede", "decision-old", "decision-new", "--root", path.join(root, "events"), "--trace", "sup1"], { vault });
+		assert.equal(result.code, 0, result.err);
+		const oldText = read(path.join(vault, "decisions", "decision-old.md"));
+		assert.match(oldText, /^status: superseded$/m);
+		assert.match(oldText, /^superseded_by: decision-new$/m);
+		assert.match(oldText, /^project: project-one$/m);
+		assert.match(oldText, /^repo: github\.com\/o\/n$/m);
+		assert.ok(oldText.endsWith("the old choice\n"), oldText);
+		const newText = read(path.join(vault, "decisions", "decision-new.md"));
+		assert.match(newText, /^supersedes: decision-old$/m);
+		assert.match(newText, /^project: project-one$/m);
+		assert.equal(/^status:/m.test(newText), false, "the new note keeps the status it had (none)");
+		assert.ok(newText.endsWith("the new choice\n"), newText);
+		const boot = run(root, ["boot", "--repo", "github.com/o/n"], { vault });
+		assert.equal(boot.code, 0);
+		assert.equal(boot.out.includes("[[decision-old]]"), false, "a superseded decision leaves the boot index");
+		assert.ok(boot.out.includes("[[decision-new]]"), boot.out);
+		assert.ok(fs.existsSync(path.join(vault, "decisions", "decision-old.md")), "the old note is never deleted");
+		assert.deepEqual(
+			events(root, "sup1").map((event) => event.data),
+			[
+				{ type: "decision", id: "decision-old", op: "supersede" },
+				{ type: "decision", id: "decision-new", op: "supersede" },
+			],
+		);
+	}),
+);
+
+test(
+	"note supersede links two lessons",
+	withVault(async ({ root, vault }) => {
+		for (const name of ["lesson-old", "lesson-new"]) {
+			const created = run(root, ["note", "new", "lesson", name, "--set", "project=project-one", "--set", "repo=github.com/o/n", "--body-stdin"], { vault, input: `${name} body\n` });
+			assert.equal(created.code, 0, created.err);
+		}
+		const result = run(root, ["note", "supersede", "lesson-old", "lesson-new"], { vault });
+		assert.equal(result.code, 0, result.err);
+		const oldText = read(path.join(vault, "lessons", "lesson-old.md"));
+		assert.match(oldText, /^status: superseded$/m);
+		assert.match(oldText, /^superseded_by: lesson-new$/m);
+		assert.ok(oldText.endsWith("lesson-old body\n"), oldText);
+		const newText = read(path.join(vault, "lessons", "lesson-new.md"));
+		assert.match(newText, /^supersedes: lesson-old$/m);
+		assert.ok(newText.endsWith("lesson-new body\n"), newText);
+	}),
+);
+
+test(
+	"note supersede refuses and leaves both notes unchanged",
+	withVault(async ({ root, vault }) => {
+		const created = [
+			["note", "new", "decision", "decision-a", "--set", "project=project-one", "--set", "repo=github.com/o/n"],
+			["note", "new", "decision", "decision-b", "--set", "project=project-one", "--set", "repo=github.com/o/n"],
+			["note", "new", "lesson", "lesson-a", "--set", "project=project-one", "--set", "repo=github.com/o/n"],
+			["note", "new", "run", "sup-a-run", ...RUN_ARGS],
+			["note", "new", "run", "sup-b-run", ...RUN_ARGS],
+		];
+		for (const args of created) assert.equal(run(root, args, { vault }).code, 0, args.join(" "));
+		const files = [
+			path.join(vault, "decisions", "decision-a.md"),
+			path.join(vault, "decisions", "decision-b.md"),
+			path.join(vault, "lessons", "lesson-a.md"),
+			path.join(vault, "runs", "sup-a-run.md"),
+			path.join(vault, "runs", "sup-b-run.md"),
+		];
+		const snapshot = () => files.map((file) => read(file));
+		const before = snapshot();
+		const cases = [
+			["note", "supersede", "decision-a", "decision-missing"],
+			["note", "supersede", "decision-missing", "decision-b"],
+			["note", "supersede", "decision-a", "lesson-a"],
+			["note", "supersede", "sup-a-run", "sup-b-run"],
+			["note", "supersede", "decision-a", "decision-a"],
+		];
+		for (const args of cases) {
+			const result = run(root, args, { vault });
+			assert.equal(result.code, 2, `${args.join(" ")}: ${result.err}`);
+			assert.deepEqual(snapshot(), before, `a refused ${args.join(" ")} writes nothing`);
+		}
+		const linked = run(root, ["note", "supersede", "decision-a", "decision-b"], { vault });
+		assert.equal(linked.code, 0, linked.err);
+		const afterLink = snapshot();
+		const again = run(root, ["note", "supersede", "decision-a", "decision-b"], { vault });
+		assert.equal(again.code, 2);
+		assert.match(again.err, /already superseded/);
+		assert.deepEqual(snapshot(), afterLink, "an already superseded note is left as it is");
+	}),
+);
+
+test(
+	"note status sets a decision or lesson status and refuses another value",
+	withVault(async ({ root, vault }) => {
+		const created = run(root, ["note", "new", "decision", "decision-four", "--set", "project=project-one", "--set", "repo=github.com/o/n"], { vault });
+		assert.equal(created.code, 0, created.err);
+		const file = path.join(vault, "decisions", "decision-four.md");
+		const stale = run(root, ["note", "status", "decision-four", "stale"], { vault });
+		assert.equal(stale.code, 0, stale.err);
+		assert.match(read(file), /^status: stale$/m);
+		const bogus = run(root, ["note", "status", "decision-four", "bogus"], { vault });
+		assert.equal(bogus.code, 2);
+		assert.match(read(file), /^status: stale$/m, "a refused value writes nothing");
 	}),
 );
 

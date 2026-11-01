@@ -29,6 +29,15 @@ if [ ! -d "$harness" ]; then
 	git clone "$harness_repo" "$harness"
 fi
 
+# Search is optional: a missing or broken Go build only warns.
+if command -v go >/dev/null 2>&1; then
+	if ! (cd "$harness" && go build -o dispatch-plan/bin/vault-search ./dispatch-plan/vault-search); then
+		echo "bootstrap: warning: could not build vault-search, so search will be unavailable" >&2
+	fi
+else
+	echo "bootstrap: warning: go not found, so vault-search is not built; search is optional. Install Go with 'mise use -g go@latest' or 'brew install go'." >&2
+fi
+
 # The dispatcher folder is passed in: on a new machine Pi and the skill are not
 # registered yet, so the CLI has no other way to find it.
 #   PI_PLAN_DISPATCH_DIR=<harness>/pi-plan-dispatch node <harness>/dispatch-plan/vault.mjs setup --path <vault>

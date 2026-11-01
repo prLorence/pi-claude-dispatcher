@@ -11,13 +11,16 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Note, NoteType } from "./schema.ts";
-import { NOTE_TYPES, TYPE_FOLDER, parseNote, serializeNote, slug } from "./schema.ts";
+import { NOTE_TYPES, TYPE_FOLDER, isActiveNote, parseNote, serializeNote, slug } from "./schema.ts";
 import type { Repos } from "./privacy.ts";
 import { parseRepos } from "./privacy.ts";
 
 const DEFAULT_BOOT_BUDGET_TOKENS = 4000;
 const CHARS_PER_TOKEN = 4;
 const LOG_TAIL_LINES = 20;
+const INDEX_RECENT = 5;
+const INDEX_SUMMARY_CHARS = 80;
+const INDEX_SEARCH_LINE = 'more: node ~/.claude/skills/dispatch-plan/vault.mjs search "<query>"';
 const NEWEST_SEVERITY: Record<string, number> = {
 	blocker: 0,
 	error: 0,
@@ -332,6 +335,63 @@ function sectionItem(header: string, lines: string[]): BootItem[] {
 	return lines.length === 0 ? [] : [{ header, content: `${lines.join("\n")}\n` }];
 }
 
+/** A note is in scope for boot when the repo matches, it is global, or a project lists the repo. */
+function inBootScope(note: Note, repo: string | undefined): boolean {
+	if (repo === undefined) return true;
+	if (note.type === "project") return reposOf(note).includes(repo);
+	const noteRepo = propOf(note, "repo");
+	return noteRepo === "-" || noteRepo === repo;
+}
+
+function updatedOf(note: Note): string {
+	const value = note.props.updated;
+	return typeof value === "string" ? value : "";
+}
+
+/** The first non-empty body line, cut to the index summary width. */
+function summaryOf(note: Note): string {
+	for (const raw of note.body.split("\n")) {
+		const line = raw.trim();
+		if (line !== "") return line.slice(0, INDEX_SUMMARY_CHARS);
+	}
+	return "";
+}
+
+/** The compact boot index: knowledge, counts, recent notes and the search pointer. */
+export function bootIndexText(notes: Note[], repo: string | undefined): string {
+	const scoped = notes.filter((note) => inBootScope(note, repo));
+	const knowledge = scoped
+		.filter((note) => (note.type === "decision" || note.type === "lesson") && isActiveNote(note))
+		.sort(compareBasename);
+
+	const lines = ["# Boot index", "## Decisions and lessons"];
+	for (const note of knowledge) {
+		const summary = summaryOf(note);
+		lines.push(summary === "" ? `- [[${note.basename}]]` : `- [[${note.basename}]] ${summary}`);
+	}
+
+	lines.push("## Counts");
+	const counts = NOTE_TYPES.map((type) => {
+		const count = scoped.filter((note) => note.type === type).length;
+		return count === 0 ? undefined : `${type} ${count}`;
+	}).filter((part): part is string => part !== undefined);
+	if (counts.length > 0) lines.push(counts.join(", "));
+
+	lines.push("## Recent");
+	const listed = new Set(knowledge.map((note) => note.basename));
+	const recent = scoped
+		.filter((note) => isActiveNote(note) && !listed.has(note.basename))
+		.sort((a, b) => compareStrings(updatedOf(b), updatedOf(a)) || compareBasename(a, b))
+		.slice(0, INDEX_RECENT);
+	for (const note of recent) {
+		const updated = updatedOf(note);
+		lines.push(updated === "" ? `- [[${note.basename}]] ${note.type}` : `- [[${note.basename}]] ${note.type} ${updated}`);
+	}
+
+	lines.push(INDEX_SEARCH_LINE);
+	return `${lines.join("\n")}\n`;
+}
+
 function bootItems(notes: Note[], repo: string | undefined, logLines: string[]): BootItem[] {
 	const items: BootItem[] = [];
 	const project = projectFor(notes, repo);
@@ -352,7 +412,7 @@ function bootItems(notes: Note[], repo: string | undefined, logLines: string[]):
 	if (logLines.length > 0) {
 		items.push({ header: "=== log tail ===", content: `${logLines.join("\n")}\n` });
 	}
-	items.push({ header: "=== index ===", content: indexText(notes) });
+	items.push({ header: "=== index ===", content: bootIndexText(notes, repo) });
 	return items;
 }
 
@@ -376,7 +436,7 @@ function truncationLine(dropped: number): string {
 	return `\n[truncated: ${dropped} items]`;
 }
 
-/** The budget covers the items and the truncation line, not the CLAUDE.md text before them. */
+/** The budget covers the items and the truncation line, not the vault instruction text before them. */
 function bestLayout(
 	claude: string,
 	items: BootItem[],
@@ -394,10 +454,18 @@ function bestLayout(
 	return undefined;
 }
 
+/** The vault instruction file: AGENTS.md when the vault has one, else the CLAUDE.md fallback. */
+function readInstruction(vault: string): { name: string; text: string } {
+	const agentsFile = path.join(vault, "AGENTS.md");
+	if (fs.existsSync(agentsFile)) return { name: "AGENTS.md", text: readText(agentsFile) ?? "" };
+	return { name: "CLAUDE.md", text: readText(path.join(vault, "CLAUDE.md")) ?? "" };
+}
+
 export function bootText(vault: string, opts: { repo?: string; budgetTokens?: number } = {}): string {
 	const budgetChars = Math.max(0, (opts.budgetTokens ?? DEFAULT_BOOT_BUDGET_TOKENS) * CHARS_PER_TOKEN);
-	const claude = readText(path.join(vault, "CLAUDE.md")) ?? "";
-	if (claude.length > budgetChars) return `${claude}\n[over budget: CLAUDE.md]\n`;
+	const instruction = readInstruction(vault);
+	const claude = instruction.text;
+	if (claude.length > budgetChars) return `${claude}\n[over budget: ${instruction.name}]\n`;
 
 	const notes = listNotes(vault);
 	const tail = logTail(vault);

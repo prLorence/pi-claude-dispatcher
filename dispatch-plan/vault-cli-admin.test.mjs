@@ -77,7 +77,9 @@ test(
 		const result = run(root, ["init", "--path", vault]);
 		assert.equal(result.code, 0, result.err);
 		assert.ok(fs.existsSync(path.join(vault, "harness.json")), "the template lands in place");
+		assert.ok(fs.existsSync(path.join(vault, "AGENTS.md")));
 		assert.ok(fs.existsSync(path.join(vault, "CLAUDE.md")));
+		assert.equal(fs.readFileSync(path.join(vault, "CLAUDE.md"), "utf8"), "@AGENTS.md\n");
 		assert.equal(git(vault, ["rev-list", "--count", "HEAD"]).trim(), "1");
 	}),
 );

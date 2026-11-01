@@ -6,7 +6,8 @@ milestone, and the record of a finished run is copied in. What they learned
 survives the next session and the next machine.
 
 Notes are written only through the `vault` CLI. No agent edits a note file by
-hand, so the schema, the allowlist and the privacy rules are always applied.
+hand, so the schema, the allowlist and the privacy rules are always applied. A
+new request recalls them with `vault search`, a BM25 ranking over the notes.
 
 ## Layout
 
@@ -26,19 +27,24 @@ hand, so the schema, the allowlist and the privacy rules are always applied.
 | `log.md` | append-only one-line log, merged with `merge=union` |
 | `repos.json` | the allowlist and the privacy mode of each repo |
 | `harness.json` | schema version, harness repo, boot budget, minimum Node |
-| `CLAUDE.md` | the schema the agents follow |
+| `AGENTS.md` | the schema the agents follow |
+| `CLAUDE.md` | the shim that imports the schema for Claude Code (`@AGENTS.md`) |
 | `bootstrap.sh` | sets up a new machine |
 | `work/` | the run record of finished requests, written only by the CLI, not a note folder |
 | `config/` | `dispatch.json`, the dispatcher config |
 
-Each type folder is flat. The agent schema is in `CLAUDE.md`.
+Each type folder is flat. The agent schema is in `AGENTS.md`, the tool-neutral
+instruction file every agent reads; `CLAUDE.md` is only the `@AGENTS.md` import
+for Claude Code. Search (`vault search`), the golden eval cases and the measures
+are documented in the harness at `docs/vault.md`.
 
 ## A new machine
 
 1. Clone this vault.
 2. Run `./bootstrap.sh`. It checks Node and git, clones the harness repo into a
    sibling folder named `pi-plan-dispatch-phase1` when that folder is missing,
-   and runs `vault setup` from there.
+   builds the `vault-search` binary when Go is installed, and runs `vault setup`
+   from there.
 3. Do the rest by hand, as the script prints:
    - log Pi into OpenCode Go;
    - register the extension package in `~/.pi/agent/settings.json`;

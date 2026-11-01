@@ -41,10 +41,14 @@ const USAGE = [
 	"  resolve                                     print the vault path, host and remote",
 	"  boot [--repo <slug>] [--budget <tokens>]    print the text an agent boots with",
 	"  lint [--range]                              check the vault, exit 1 on an error",
-	"  stats [--repo <slug> | --all]               count notes, boot tokens and repeats",
+	"  stats [--repo <slug> | --all]               count notes, boot tokens, repeats and recall",
+	"  search <query words...> [--repo <slug>] [--all] [--status active|any] [--include-work] [--limit <n>] [--json]",
+	"  eval add --query <text> --expect <basename>   append one golden query",
+	"  eval list                                    list the golden queries",
 	"  note new <type> <basename> [--set key=value]... [--body-stdin]",
 	"  note set <basename> [--set key=value]... [--body-stdin]",
-	"  note status <basename> <open|closed|taken|dropped>",
+	"  note status <basename> <value>               change a finding, idea, decision or lesson status",
+	"  note supersede <old> <new>                  mark a decision or lesson replaced by another",
 	"  note rm <basename>",
 	"  log append --repo <slug|-> [--trace <id>] <text...>",
 	"  index rebuild",
@@ -68,8 +72,16 @@ const USAGE = [
 const DEFAULT_BOOT_BUDGET = 4000;
 const MODES = ["full", "meta", "none"];
 /** The status values `note status` accepts, by note type. */
-const STATUS_VALUES = { finding: ["open", "closed"], idea: ["open", "taken", "dropped"] };
-const STATUS_HELP = "status works on finding notes (open, closed) and idea notes (open, taken, dropped)";
+const STATUS_VALUES = {
+	finding: ["open", "closed"],
+	idea: ["open", "taken", "dropped"],
+	decision: ["active", "superseded", "stale"],
+	lesson: ["active", "superseded", "stale"],
+};
+const STATUS_HELP =
+	"status works on finding notes (open, closed), idea notes (open, taken, dropped) and decision and lesson notes (active, superseded, stale)";
+/** The note types `note supersede` links. */
+const KNOWLEDGE_TYPES = ["decision", "lesson"];
 const REPO_KEY_RE = /^[a-z0-9.-]+(?:\/[a-z0-9._-]+){2,}$/;
 const SET_KEY_RE = /^[A-Za-z0-9_-]+$/;
 const REPOS_FILE = "repos.json";
@@ -94,7 +106,12 @@ const FLAGS = {
 	"--body-stdin": { name: "bodyStdin" },
 	"--range": { name: "range" },
 	"--all": { name: "all" },
+	"--status": { name: "status", value: true },
+	"--include-work": { name: "includeWork" },
+	"--limit": { name: "limit", value: true },
 	"--probes": { name: "probes" },
+	"--query": { name: "query", value: true },
+	"--expect": { name: "expect", value: true },
 };
 
 /** The flag spelling for a parsed flag name, so an error can name it back. */
@@ -202,11 +219,26 @@ const COMMANDS = {
 	boot: { args: [0, 0], run: cmdBoot },
 	lint: { args: [0, 0], run: cmdLint },
 	stats: { args: [0, 0], run: cmdStats },
+	search: { args: [1, Infinity], flags: ["repo", "all", "status", "includeWork", "limit"], run: cmdSearch },
+	eval: {
+		subcommands: {
+			add: {
+				write: true,
+				target: (call) => rootFile(call.ctx.vaultPath, "eval"),
+				args: [0, 0],
+				flags: ["query", "expect"],
+				requiredFlags: ["query", "expect"],
+				run: cmdEvalAdd,
+			},
+			list: { args: [0, 0], flags: [], run: cmdEvalList },
+		},
+	},
 	note: {
 		subcommands: {
 			new: { write: true, target: noteTarget, args: [2, 2], run: cmdNoteNew },
 			set: { write: true, target: storedNoteTarget, args: [1, 1], run: cmdNoteSet },
 			status: { write: true, target: storedNoteTarget, args: [2, 2], run: cmdNoteStatus },
+			supersede: { write: true, target: storedNoteTarget, args: [2, 2], run: cmdNoteSupersede },
 			rm: { write: true, target: storedNoteTarget, args: [1, 1], run: cmdNoteRm },
 		},
 	},
@@ -611,23 +643,44 @@ function cmdLint(call) {
 	const aliases = modules.notes.readRepos(ctx.vaultPath).aliases;
 	const trackedFiles = trackedFilesProvider(call, aliases);
 	const findings = modules.git.lintVault(ctx.vaultPath, { range: flags.range === true, trackedFiles });
+	const levels = { error: "ERROR", warn: "WARN", info: "INFO" };
 	for (const finding of findings) {
-		const level = finding.severity === "error" ? "ERROR" : "INFO";
-		ctx.out(`${level} ${finding.code} ${finding.file ?? "-"} ${finding.message}`);
+		ctx.out(`${levels[finding.severity] ?? "INFO"} ${finding.code} ${finding.file ?? "-"} ${finding.message}`);
 	}
 	const errors = findings.filter((finding) => finding.severity === "error").length;
-	ctx.out(`lint: ${errors} errors, ${findings.length - errors} info`);
+	const warnings = findings.filter((finding) => finding.severity === "warn").length;
+	const info = findings.length - errors - warnings;
+	ctx.out(`lint: ${errors} errors, ${warnings} warnings, ${info} info`);
 	return errors > 0 ? 1 : 0;
 }
 
-function cmdStats(call) {
+async function cmdStats(call) {
 	const { ctx, flags, modules } = call;
 	const all = flags.all === true;
 	const aliases = modules.notes.readRepos(ctx.vaultPath).aliases;
 	const repo = flags.repo ?? (all ? undefined : modules.url.repoSlugFromCwd(ctx.cwd, aliases));
 	const stats = modules.notes.statsFor(ctx.vaultPath, all ? { all: true } : { repo });
+	const hasGolden = fs.existsSync(path.join(ctx.vaultPath, "eval", "golden.json"));
+	let searchRecall = null;
+	let recallLine;
+	if (hasGolden) {
+		const { findBinary, recall } = await import("./vault-search.mjs");
+		const binary = findBinary(ctx.env, import.meta.dirname);
+		if (!fs.existsSync(binary)) {
+			recallLine = "unavailable (vault-search not built)";
+		} else {
+			const result = recall(moduleContext(call));
+			if (result === null) {
+				recallLine = "unavailable (eval/golden.json unreadable)";
+			} else {
+				searchRecall = result;
+				const needsMore = result.entries < 10 ? " [needs 10+ entries]" : "";
+				recallLine = `${result.ratio} (${result.hits}/${result.entries})${needsMore}`;
+			}
+		}
+	}
 	if (flags.json === true) {
-		ctx.out(JSON.stringify(stats, null, 2));
+		ctx.out(JSON.stringify({ ...stats, searchRecall }, null, 2));
 		return 0;
 	}
 	ctx.out(`boot tokens: ${stats.bootTokens}`);
@@ -636,7 +689,28 @@ function cmdStats(call) {
 	ctx.out(`repeats: ${stats.repeats}`);
 	ctx.out(`total: ${stats.total}`);
 	ctx.out(`repeat rate: ${stats.repeatRate === null ? "-" : stats.repeatRate}`);
+	if (hasGolden) ctx.out(`search recall@5: ${recallLine}`);
 	return 0;
+}
+
+async function cmdSearch(call) {
+	const { ctx, args, flags, modules } = call;
+	const { searchCommand } = await import("./vault-search.mjs");
+	const aliases = modules.notes.readRepos(ctx.vaultPath).aliases;
+	const repo = flags.repo ?? modules.url.repoSlugFromCwd(ctx.cwd, aliases);
+	const limit = flags.limit === undefined ? undefined : Number(flags.limit);
+	return finishModule(
+		call,
+		searchCommand(moduleContext(call), {
+			query: args.join(" "),
+			repo,
+			all: flags.all === true,
+			status: flags.status ?? "active",
+			includeWork: flags.includeWork === true,
+			limit,
+			json: flags.json === true,
+		}),
+	);
 }
 
 function cmdNoteNew(call) {
@@ -709,6 +783,82 @@ function cmdNoteStatus(call) {
 	}
 	const props = { ...existing.props, status: value };
 	return saveNote(call, { type: existing.type, basename, props, body: existing.body }, "status");
+}
+
+function cmdNoteSupersede(call) {
+	const { ctx, args, modules } = call;
+	const [oldName, newName] = args;
+	const oldNote = modules.notes.readNote(ctx.vaultPath, oldName);
+	if (oldNote === undefined) {
+		ctx.err(`no note named ${oldName}`);
+		return 2;
+	}
+	const newNote = modules.notes.readNote(ctx.vaultPath, newName);
+	if (newNote === undefined) {
+		ctx.err(`no note named ${newName}`);
+		return 2;
+	}
+	if (oldName === newName) {
+		ctx.err("note supersede needs two different notes");
+		return 2;
+	}
+	if (!KNOWLEDGE_TYPES.includes(oldNote.type)) {
+		ctx.err(`note supersede works on decision and lesson notes, not ${oldNote.type} notes`);
+		return 2;
+	}
+	if (oldNote.type !== newNote.type) {
+		ctx.err(`both notes must be the same type: ${oldNote.type} and ${newNote.type}`);
+		return 2;
+	}
+	if (oldNote.props.status === "superseded") {
+		ctx.err(`${oldName} is already superseded`);
+		return 2;
+	}
+
+	const oldVersion = {
+		type: oldNote.type,
+		basename: oldName,
+		props: { ...oldNote.props, status: "superseded", superseded_by: newName },
+		body: oldNote.body,
+	};
+	const newVersion = {
+		type: newNote.type,
+		basename: newName,
+		props: { ...newNote.props, supersedes: oldName },
+		body: newNote.body,
+	};
+	const repos = modules.notes.readRepos(ctx.vaultPath);
+	for (const note of [oldVersion, newVersion]) {
+		const tracked = trackedFilesForNote(call, repos.aliases, note.props.repo);
+		const errors = [...modules.schema.validateNote(note), ...modules.privacy.checkNote(repos, note, tracked)];
+		if (errors.length > 0) return refuseNote(call, note, errors);
+	}
+
+	const oldTarget = modules.notes.notePath(ctx.vaultPath, oldVersion.type, oldName);
+	const newTarget = modules.notes.notePath(ctx.vaultPath, newVersion.type, newName);
+	const oldAllowed = writeTargetAllowed(ctx, oldTarget);
+	const newAllowed = writeTargetAllowed(ctx, newTarget);
+	if (!oldAllowed || !newAllowed) return 2;
+
+	const original = fs.readFileSync(oldTarget, "utf8");
+	try {
+		modules.notes.writeNote(ctx.vaultPath, oldVersion);
+	} catch (error) {
+		ctx.err(`vault: ${errorText(error)}`);
+		return 1;
+	}
+	try {
+		modules.notes.writeNote(ctx.vaultPath, newVersion);
+	} catch (error) {
+		fs.writeFileSync(oldTarget, original);
+		ctx.err(`vault: ${errorText(error)}`);
+		return 1;
+	}
+	ctx.out(oldTarget);
+	ctx.out(newTarget);
+	call.emit("vault.write", { type: oldVersion.type, id: oldName, op: "supersede" });
+	call.emit("vault.write", { type: newVersion.type, id: newName, op: "supersede" });
+	return 0;
 }
 
 function cmdNoteRm(call) {
@@ -857,11 +1007,23 @@ function moduleContext(call) {
 	return {
 		vault: ctx.vaultPath,
 		root: call.flags.root,
+		env: ctx.env,
+		scriptDir: import.meta.dirname,
 		modules: call.modules,
 		out: ctx.out,
 		err: ctx.err,
 		inside: (target) => insideVault(ctx.vaultPath, target),
 	};
+}
+
+async function cmdEvalAdd(call) {
+	const { evalAdd } = await import("./vault-eval.mjs");
+	return finishModule(call, evalAdd(moduleContext(call), { query: call.flags.query, expect: call.flags.expect }));
+}
+
+async function cmdEvalList(call) {
+	const { evalList } = await import("./vault-eval.mjs");
+	return finishModule(call, evalList(moduleContext(call)));
 }
 
 async function cmdWorkAdd(call) {

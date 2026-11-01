@@ -1,4 +1,4 @@
-Paste the block below into a project's `CLAUDE.md` (or `~/.claude/CLAUDE.md` for every project), and set the main session model to Sonnet 5.5.
+Paste the blocks below into a project's `AGENTS.md` (or `~/.claude/AGENTS.md` for every project), the tool-neutral instruction file every agent reads, and have `CLAUDE.md` import it for Claude Code with a single `@AGENTS.md` line. Set the main session model to Sonnet 5.5.
 
 ```markdown
 ## Delegation rules (dispatch-plan)
@@ -100,7 +100,7 @@ and Pi workers write all the code. Steps 1 to 8 are the whole flow for one reque
    gate.
 ```
 
-Paste the block below directly under the block above, in the same `CLAUDE.md` or `~/.claude/CLAUDE.md`.
+Paste the block below directly under the block above, in the same `AGENTS.md` or `~/.claude/AGENTS.md`.
 
 ```markdown
 ## Vault rules (agent-vault)
@@ -111,7 +111,12 @@ schema. You are the only role that writes it, and only through the CLI at
 
 1. **Session start.** Run `vault.mjs resolve`. If it succeeds, run `vault.mjs repo check`: exit
    `3` means this repo's mode is `none`. When both are fine, run `vault.mjs sync pull` then
-   `vault.mjs boot` and read the boot text before you plan, then the catch-up:
+   `vault.mjs boot` and read the boot text before you plan. After `boot`, when the `grilling`
+   skill starts, run
+   `node ~/.claude/skills/dispatch-plan/vault.mjs search "<keywords from the request>" --trace <T> --root <repo root>`
+   (once the trace id exists; before it exists, omit those two flags), and run it again before
+   drafting the plan with the terms of the spec's requirements; read the top 5 results each
+   time. A failed search is reported once and skipped; it never blocks work. Then the catch-up:
    `work pending --root <repo root>`, `work add --trace <T> --root <repo root>` for each
    `pending <T>` line it prints, then `restore --root <repo root>`. Otherwise skip every vault
    step for the whole request and say so once.
@@ -138,7 +143,9 @@ schema. You are the only role that writes it, and only through the CLI at
    An idea is written when the user states one: `note new idea idea-<slug(title)> --set
    status=open --set repo=<slug or -> --body-stdin`, and changed later with `note set` or `note
    status <basename> <open|taken|dropped>`. `.plans/ideas.md` is retired once its entries are
-   copied into `idea` notes; you do that once.
+   copied into `idea` notes; you do that once. A note that a later note replaces is marked with
+   `note supersede <old> <new>`, and a new search case is added with `eval add --query <text>
+   --expect <basename>`.
    After the run, in this fixed order, because the wrong order loses data: (1) `trace.mjs
    report --trace <T>`, so `trace.md` exists before the copy; (2) the `run` note and the
    `finding` notes with `note new`, because a later `note new run` would drop the `unmirrored`

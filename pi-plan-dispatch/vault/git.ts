@@ -10,13 +10,13 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Note, NoteType } from "./schema.ts";
-import { NOTE_TYPES, TYPE_FOLDER, parseNote, validateNote } from "./schema.ts";
+import { NOTE_TYPES, TYPE_FOLDER, isActiveNote, parseNote, validateNote } from "./schema.ts";
 import type { Repos } from "./privacy.ts";
 import { checkNote, leaksNoneRepo } from "./privacy.ts";
 import { readRepos, writeIndex } from "./notes.ts";
 
 export interface LintFinding {
-	severity: "error" | "info";
+	severity: "error" | "warn" | "info";
 	code: string;
 	message: string;
 	file?: string;
@@ -25,7 +25,11 @@ export interface LintFinding {
 export interface LintOptions {
 	range?: boolean;
 	trackedFiles?: (repo: string) => Set<string> | undefined;
+	today?: string;
 }
+
+/** Days after which an active decision or lesson nudges for re-verification. */
+export const STALE_UNVERIFIED_DAYS = 90;
 
 export interface SyncResult {
 	code: 0 | 1 | 2 | 5;
@@ -74,6 +78,7 @@ const MANAGED_ROOT_FILES: readonly string[] = [
 	"log.md",
 	"repos.json",
 	"harness.json",
+	"AGENTS.md",
 	"CLAUDE.md",
 	"README.md",
 	"bootstrap.sh",
@@ -104,6 +109,26 @@ function readDirNames(dir: string): string[] {
 
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+/** The local date as YYYY-MM-DD. */
+function todayString(): string {
+	const now = new Date();
+	const month = String(now.getMonth() + 1).padStart(2, "0");
+	const day = String(now.getDate()).padStart(2, "0");
+	return `${now.getFullYear()}-${month}-${day}`;
+}
+
+const DATE_ONLY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** Whole UTC days from `from` to `to`, both YYYY-MM-DD; undefined on a bad date. */
+function utcDaysBetween(from: string, to: string): number | undefined {
+	const start = DATE_ONLY_RE.exec(from);
+	const end = DATE_ONLY_RE.exec(to);
+	if (start === null || end === null) return undefined;
+	const startMs = Date.UTC(Number(start[1]), Number(start[2]) - 1, Number(start[3]));
+	const endMs = Date.UTC(Number(end[1]), Number(end[2]) - 1, Number(end[3]));
+	return Math.round((endMs - startMs) / 86_400_000);
 }
 
 /** Every file below the vault root, as slash-separated relative paths, `.git` skipped. */
@@ -316,11 +341,79 @@ function linkFindings(loaded: LoadedNote[], findings: LintFinding[]): LintFindin
 	return findings;
 }
 
+/** Active decisions and lessons whose verification date is more than 90 days old. */
+function staleUnverifiedFindings(loaded: LoadedNote[], opts: LintOptions): LintFinding[] {
+	const today = opts.today ?? todayString();
+	const findings: LintFinding[] = [];
+	for (const { file, note } of loaded) {
+		if (note.type !== "decision" && note.type !== "lesson") continue;
+		if (!isActiveNote(note)) continue;
+		const lastVerified = note.props.last_verified;
+		const updated = note.props.updated;
+		const since = typeof lastVerified === "string" ? lastVerified : typeof updated === "string" ? updated : undefined;
+		if (since === undefined) continue;
+		const days = utcDaysBetween(since, today);
+		if (days === undefined || days <= STALE_UNVERIFIED_DAYS) continue;
+		findings.push({
+			severity: "warn",
+			code: "stale-unverified",
+			message: `not verified for ${days} days (since ${since})`,
+			file,
+		});
+	}
+	return findings;
+}
+
+/** The `eval/golden.json` shape check and none-repo leak check, when the file exists. */
+function evalFindings(vault: string): LintFinding[] {
+	const file = "eval/golden.json";
+	const text = readText(path.join(vault, file));
+	if (text === undefined) return [];
+	const findings: LintFinding[] = [];
+	let valid = false;
+	try {
+		const parsed: unknown = JSON.parse(text);
+		valid =
+			Array.isArray(parsed) &&
+			parsed.every((entry: unknown) => {
+				if (entry === null || typeof entry !== "object") return false;
+				const item = entry as { query?: unknown; expect?: unknown };
+				return (
+					typeof item.query === "string" &&
+					item.query !== "" &&
+					typeof item.expect === "string" &&
+					item.expect !== ""
+				);
+			});
+	} catch {
+		valid = false;
+	}
+	if (!valid) {
+		findings.push({
+			severity: "error",
+			code: "eval-shape",
+			message: "must be a JSON array of {query, expect} strings",
+			file,
+		});
+	}
+	for (const needle of leaksNoneRepo(readRepos(vault), text)) {
+		findings.push({
+			severity: "error",
+			code: "none-repo-leak",
+			message: `names a repo that is not allowed: ${needle}`,
+			file,
+		});
+	}
+	return findings;
+}
+
 export function lintVault(vault: string, opts: LintOptions = {}): LintFinding[] {
 	const findings: LintFinding[] = secretFindings(vault);
 	findings.push(...workFindings(vault));
 	const loaded = loadNotes(vault, findings);
 	findings.push(...noteFindings(vault, loaded, opts));
+	findings.push(...staleUnverifiedFindings(loaded, opts));
+	findings.push(...evalFindings(vault));
 	findings.push(...logFindings(vault, readRepos(vault)));
 	if (opts.range === true) findings.push(...rangeSecretFindings(vault));
 	findings.push(...linkFindings(loaded, []));
@@ -334,6 +427,7 @@ export function lintVault(vault: string, opts: LintOptions = {}): LintFinding[] 
  */
 function isManaged(relative: string): boolean {
 	const file = relative.replace(/\\/g, "/");
+	if (file === "eval/golden.json") return true;
 	if (file.startsWith("templates/")) return true;
 	if (file.startsWith("work/")) return true;
 	if (file === "config/dispatch.json" || file === "config/.gitkeep") return true;

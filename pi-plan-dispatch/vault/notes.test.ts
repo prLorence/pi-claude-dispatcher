@@ -281,7 +281,10 @@ test("bootText starts with CLAUDE.md, then the project, the findings, the log ta
 		assert.ok(out.indexOf("=== finding f-blocker ===") < out.indexOf("=== log tail ==="));
 		assert.ok(out.indexOf("=== log tail ===") < out.indexOf("=== index ==="));
 		assert.ok(out.includes("=== log tail ===\nentry-1\nentry-2\n"));
-		assert.ok(out.trimEnd().endsWith("- [[project-web]]"), "the index ends the text");
+		assert.ok(
+			out.trimEnd().endsWith('more: node ~/.claude/skills/dispatch-plan/vault.mjs search "<query>"'),
+			"the search pointer ends the index",
+		);
 		assert.equal(out.includes("=== finding f-closed ==="), false, "a closed finding is absent");
 		assert.equal(out.includes("=== finding f-other ==="), false, "another repo's finding is absent");
 	});
@@ -698,5 +701,179 @@ test("statsFor reports 0 work files and 0 bytes when work/ is missing", () => {
 		const stats = statsFor(dir, { repo: REPO });
 		assert.equal(stats.workFiles, 0);
 		assert.equal(stats.workBytes, 0);
+	});
+});
+
+// 9. The compact boot index and the AGENTS.md instruction file.
+
+const indexOf = (dir: string, repo: string | undefined = REPO): string =>
+	sectionOf(bootText(dir, repo === undefined ? { budgetTokens: 1e9 } : { repo, budgetTokens: 1e9 }), "index") ?? "";
+
+const lineAfter = (index: string, heading: string): string => {
+	const lines = index.split("\n");
+	const at = lines.indexOf(heading);
+	return at < 0 ? "" : (lines[at + 1] ?? "");
+};
+
+const recentLines = (index: string): string[] => {
+	const lines = index.split("\n");
+	const at = lines.indexOf("## Recent");
+	if (at < 0) return [];
+	const out: string[] = [];
+	for (const line of lines.slice(at + 1)) {
+		if (!line.startsWith("- [[")) break;
+		out.push(line);
+	}
+	return out;
+};
+
+const putKnowledge = (
+	dir: string,
+	type: "decision" | "lesson",
+	basename: string,
+	props: Record<string, string | string[]> = {},
+	body = "Summary line.\n",
+): void => {
+	put(dir, noteOf(type, basename, { project: "web", repo: REPO, ...props }, body));
+};
+
+const putKind = (
+	dir: string,
+	type: NoteType,
+	basename: string,
+	props: Record<string, string | string[]> = {},
+	body = "Body.\n",
+): void => {
+	put(dir, noteOf(type, basename, props, body));
+};
+
+test("bootText index lists the active decisions and lessons of this repo and the global ones", () => {
+	withVault((dir) => {
+		putKnowledge(dir, "decision", "decision-web-cache", { status: "active" }, "Use the cache.\n");
+		putKnowledge(dir, "decision", "decision-g-global", { repo: "-" }, "Global rule.\n");
+		putKnowledge(dir, "lesson", "lesson-web-old", { status: "superseded" }, "Old lesson.\n");
+		putKnowledge(dir, "decision", "decision-web-stale", { status: "stale" }, "Stale.\n");
+		putKnowledge(dir, "decision", "decision-other-thing", { repo: OTHER_REPO }, "Other repo.\n");
+		const index = indexOf(dir);
+		assert.match(index, /^- \[\[decision-web-cache\]\] Use the cache\.$/m);
+		assert.match(index, /^- \[\[decision-g-global\]\] Global rule\.$/m);
+		assert.equal(index.includes("lesson-web-old"), false, "a superseded lesson is absent");
+		assert.equal(index.includes("decision-web-stale"), false, "a stale decision is absent");
+		assert.equal(index.includes("decision-other-thing"), false, "another repo's decision is absent");
+	});
+});
+
+test("bootText index counts the in-scope notes in schema type order and omits zero types", () => {
+	withVault((dir) => {
+		putKind(dir, "decision", "decision-a", { repo: REPO });
+		putKind(dir, "decision", "decision-b", { repo: REPO });
+		putFinding(dir, "f-one", REPO, "t-1", "2026-01-01", "fp-one", { status: "closed" });
+		putKind(dir, "plan", "p-other", { trace: "t-1", round: "1", repo: OTHER_REPO, status: "done" });
+		assert.equal(lineAfter(indexOf(dir), "## Counts"), "finding 1, decision 2");
+	});
+});
+
+test("bootText index shows 5 recent notes by updated then basename, without listed or retired notes", () => {
+	withVault((dir) => {
+		putKnowledge(dir, "decision", "decision-listed", { updated: "2026-08-01" }, "Listed above.\n");
+		putKind(dir, "plan", "p-1", { trace: "t-1", round: "1", repo: REPO, status: "done", updated: "2026-01-01" });
+		putKind(dir, "plan", "p-2", { trace: "t-1", round: "2", repo: REPO, status: "done", updated: "2026-01-02" });
+		putKind(dir, "plan", "p-3", { trace: "t-1", round: "3", repo: REPO, status: "done", updated: "2026-01-03" });
+		putKind(dir, "plan", "p-4", { trace: "t-1", round: "4", repo: REPO, status: "done", updated: "2026-01-04" });
+		putKind(dir, "plan", "p-5", { trace: "t-1", round: "5", repo: REPO, status: "done", updated: "2026-01-05" });
+		putKind(dir, "plan", "p-6", { trace: "t-1", round: "6", repo: REPO, status: "done", updated: "2026-01-06" });
+		putKind(dir, "run", "a-run", { trace: "t-1", repo: REPO, status: "done", gate: "pass", updated: "2026-01-07" });
+		putKind(dir, "run", "b-run", { trace: "t-1", repo: REPO, status: "done", gate: "pass", updated: "2026-01-07" });
+		putFinding(dir, "f-retired", REPO, "t-1", "2026-01-01", "fp-retired", { status: "closed", updated: "2026-09-01" });
+		const recent = recentLines(indexOf(dir));
+		assert.deepEqual(recent, [
+			"- [[a-run]] run 2026-01-07",
+			"- [[b-run]] run 2026-01-07",
+			"- [[p-6]] plan 2026-01-06",
+			"- [[p-5]] plan 2026-01-05",
+			"- [[p-4]] plan 2026-01-04",
+		]);
+		assert.equal(indexOf(dir).includes("decision-listed]] plan"), false, "a note listed above is not repeated");
+		assert.equal(indexOf(dir).includes("f-retired"), false, "a retired note is not recent");
+	});
+});
+
+test("bootText index cuts each summary to 80 characters", () => {
+	withVault((dir) => {
+		putKnowledge(dir, "lesson", "lesson-long", {}, `\n${"z".repeat(120)} tail\n`);
+		const line = indexOf(dir)
+			.split("\n")
+			.find((candidate) => candidate.startsWith("- [[lesson-long]]"));
+		assert.equal(line, `- [[lesson-long]] ${"z".repeat(80)}`);
+	});
+});
+
+test("bootText index ends with the search pointer", () => {
+	withVault((dir) => {
+		putKnowledge(dir, "decision", "decision-pointer");
+		assert.ok(
+			indexOf(dir).trimEnd().endsWith('more: node ~/.claude/skills/dispatch-plan/vault.mjs search "<query>"'),
+			indexOf(dir),
+		);
+	});
+});
+
+test("bootText index stays under 1000 tokens on a vault of 60 notes", () => {
+	withVault((dir) => {
+		for (let i = 0; i < 20; i++) {
+			const basename = `decision-${String(i).padStart(2, "0")}-${"a".repeat(38)}`;
+			putKnowledge(dir, i % 2 === 0 ? "decision" : "lesson", basename, {}, "Summary.\n");
+		}
+		for (let i = 0; i < 40; i++) {
+			putKind(dir, "plan", `p-${String(i).padStart(2, "0")}`, {
+				trace: `t-${i}`,
+				round: "1",
+				repo: REPO,
+				status: "done",
+				updated: `2026-02-${String((i % 28) + 1).padStart(2, "0")}`,
+			});
+		}
+		const index = indexOf(dir);
+		assert.ok(index.length > 0);
+		assert.ok(index.length / 4 < 1000, `the index is ${Math.ceil(index.length / 4)} tokens`);
+	});
+});
+
+test("bootText reads AGENTS.md before CLAUDE.md", () => {
+	withVault((dir) => {
+		fs.writeFileSync(path.join(dir, "AGENTS.md"), "# Agents\n\nRules here.\n", "utf8");
+		const out = bootText(dir);
+		assert.ok(out.startsWith("# Agents\n\nRules here.\n"), out.slice(0, 40));
+		assert.equal(out.includes("# Vault"), false);
+	});
+});
+
+test("bootText falls back to CLAUDE.md when the vault has no AGENTS.md", () => {
+	withVault((dir) => {
+		assert.ok(bootText(dir).startsWith("# Vault\n\nRules.\n"));
+	});
+});
+
+test("bootText uses an existing but empty AGENTS.md as it is", () => {
+	withVault((dir) => {
+		fs.writeFileSync(path.join(dir, "AGENTS.md"), "", "utf8");
+		const out = bootText(dir);
+		assert.equal(out.includes("# Vault"), false);
+		assert.ok(out.includes("=== index ===\n# Boot index\n"), out.slice(0, 60));
+	});
+});
+
+test("the over-budget line names AGENTS.md when that is the file read", () => {
+	withVault((dir) => {
+		const agents = `${"x".repeat(60)}\n`;
+		fs.writeFileSync(path.join(dir, "AGENTS.md"), agents, "utf8");
+		assert.equal(bootText(dir, { repo: REPO, budgetTokens: 2 }), `${agents}\n[over budget: AGENTS.md]\n`);
+	});
+});
+
+test("buildIndex still lists a superseded note", () => {
+	withVault((dir) => {
+		putKnowledge(dir, "decision", "decision-old", { status: "superseded" });
+		assert.match(buildIndex(dir), /- \[\[decision-old\]\]/);
 	});
 });

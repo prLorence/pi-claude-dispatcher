@@ -18,12 +18,12 @@ The implementation is `pi-plan-dispatch/vault/` (schema, privacy, notes, git, lo
 | Path | What it is |
 |---|---|
 | `plans/`, `runs/`, `findings/`, `decisions/`, `lessons/`, `projects/`, `codebases/`, `specs/`, `ideas/` | One folder per note type |
-| `work/`, `config/` | Not note folders: the copied run record per request, and the dispatcher config |
+| `work/`, `config/`, `eval/` | Not note folders: the copied run record per request, the dispatcher config, and the search evaluation cases |
 | `log.md` | Append-only log, one line per entry |
 | `index.md` | Generated list of every note; gitignored |
 | `repos.json` | Per-repo modes, plus host aliases |
 | `harness.json` | `schema`, `boot_budget_tokens`, `min_node`, `sync_push` |
-| `CLAUDE.md`, `README.md`, `bootstrap.sh` | Vault instructions and the new-machine entry point |
+| `AGENTS.md`, `CLAUDE.md`, `README.md`, `bootstrap.sh` | Vault instructions (`AGENTS.md` first, `CLAUDE.md` as the fallback and an `@AGENTS.md` import), the README and the new-machine entry point |
 | `templates/` | Note templates and Obsidian Bases views |
 | `.gitattributes` | `log.md merge=union` and `work/**/*.jsonl merge=union` |
 
@@ -45,7 +45,7 @@ Every note is a Markdown file with YAML frontmatter and a slug basename: lowerca
 | `spec` | `specs/` | `<slug(spec id)>-spec` | `trace`, `repo`, `status`, `file` |
 | `idea` | `ideas/` | `idea-<slug(title)>` | `status`, `repo` |
 
-A `plan` note also takes optional `file` (a plain `.md` file name), `audit` (`pass` or `fail`), `audit_round` (a whole number from 1) and `host`; a `spec` note takes optional `host`. Plan notes are written as drafts and updated at each milestone.
+A `plan` note also takes optional `file` (a plain `.md` file name), `audit` (`pass` or `fail`), `audit_round` (a whole number from 1) and `host`; a `spec` note takes optional `host`. Plan notes are written as drafts and updated at each milestone. A `decision` or `lesson` note takes an optional `status` (`active`, `superseded` or `stale`; absent means `active`), `last_verified` (a `YYYY-MM-DD` date) and `superseded_by` or `supersedes` (a note basename), the last two set by `note supersede`.
 
 A finding's 8 hex characters are the first 8 of the sha1 of its `fingerprint`; the CLI checks that they match. The vocabulary is fixed:
 
@@ -55,6 +55,7 @@ A finding's 8 hex characters are the first 8 of the sha1 of its `fingerprint`; t
 | run `status` | `done`, `failed` |
 | spec `status` | `draft`, `confirmed`, `done` |
 | idea `status` | `open`, `taken`, `dropped` |
+| decision or lesson `status` | `active`, `superseded`, `stale` |
 | plan `audit` | `pass`, `fail` |
 | plan `audit_round` | a whole number from 1 |
 | run `gate` | `pass`, `fail` |
@@ -86,11 +87,15 @@ node ~/.claude/skills/dispatch-plan/vault.mjs <command> [arguments] [flags]
 |---|---|---|
 | `resolve` | Prints the vault path, host and remote | |
 | `boot [--repo <slug>] [--budget <tokens>]` | Prints the text an agent boots with | |
-| `lint [--range]` | Checks the vault; exit 1 on any error | |
-| `stats [--repo <slug> \| --all]` | Note counts, boot tokens, finding repeat rate and the `work:` size line | |
+| `lint [--range]` | Checks the vault; exit 1 only on an error | |
+| `stats [--repo <slug> \| --all]` | Note counts, boot tokens, finding repeat rate, search recall@5 and the `work:` size line | |
+| `search <query words...> [--repo <slug>] [--all] [--status active\|any] [--include-work] [--limit <n>] [--json]` | Ranks notes with BM25 and prints the top hits | |
+| `eval add --query <text> --expect <basename>` | Appends one case to `eval/golden.json` | yes |
+| `eval list` | Lists the cases in `eval/golden.json` | |
 | `note new <type> <basename> [--set k=v]... [--body-stdin]` | Creates a note | yes |
 | `note set <basename> [--set k=v]... [--body-stdin]` | Merges properties, or replaces the body | yes |
-| `note status <basename> <open\|closed\|taken\|dropped>` | Sets a finding's status (open, closed) or an idea's (open, taken, dropped) | yes |
+| `note status <basename> <open\|closed\|taken\|dropped\|active\|superseded\|stale>` | Sets a finding's status (open, closed), an idea's (open, taken, dropped) or a decision or lesson's (active, superseded, stale) | yes |
+| `note supersede <old> <new>` | Marks a decision or lesson replaced by another | yes |
 | `note rm <basename>` | Removes a note | yes |
 | `log append --repo <slug\|-> [--trace <id>] <text...>` | Appends one log line | yes |
 | `index rebuild` | Rewrites `index.md` | yes |
@@ -122,7 +127,9 @@ Exit codes:
 | 6 | Partial: `work add` copied the rest but some files were unmirrored |
 | 64 | Usage error: unknown command, unknown flag, or a wrong argument count |
 
-`boot` prints `CLAUDE.md` first, then the project note, the repo's open findings, three sections (`=== unfinished requests ===`, one line per `spec` note of the repo with status `draft` or `confirmed` as `<spec> | plan <basename> <status> audit <verdict> round <n> | host <host>`, or `no plan yet`; `=== open ideas ===`, the basenames of the open ideas of the repo and the general ones; `=== recent runs ===`, the last 3 runs as `<basename> | <gate> | <updated>`), with an empty section left out, the last 20 log lines and the generated index, all inside the token budget (`harness.json` `boot_budget_tokens`, default 4000, about 4 characters per token). `CLAUDE.md` is outside the budget; the rest is dropped from the end and the text ends with `[truncated: <n> items]`. `stats` reports the boot size, so the budget can be seen before it is hit.
+`boot` prints `AGENTS.md` first (or `CLAUDE.md` when the vault has no `AGENTS.md`), then the project note, the repo's open findings, three sections (`=== unfinished requests ===`, one line per `spec` note of the repo with status `draft` or `confirmed` as `<spec> | plan <basename> <status> audit <verdict> round <n> | host <host>`, or `no plan yet`; `=== open ideas ===`, the basenames of the open ideas of the repo and the general ones; `=== recent runs ===`, the last 3 runs as `<basename> | <gate> | <updated>`), with an empty section left out, the last 20 log lines and the compact boot index, all inside the token budget (`harness.json` `boot_budget_tokens`, default 4000, about 4 characters per token). The instruction file is outside the budget; the rest is dropped from the end and the text ends with `[truncated: <n> items]`. `stats` reports the boot size, so the budget can be seen before it is hit.
+
+The `=== index ===` section is compact, in this order: `# Boot index`; `## Decisions and lessons`, one `- [[<basename>]] <summary>` line per active decision or lesson in scope, where the summary is the first non-empty body line cut to 80 characters; `## Counts`, one `<type> <n>, ...` line over all in-scope notes; `## Recent`, the 5 most recently updated active in-scope notes not already listed above, as `- [[<basename>]] <type> <updated>`; and `more: node ~/.claude/skills/dispatch-plan/vault.mjs search "<query>"`. In scope means no repo given, or the note's `repo` equals it or is `-`, or a `project` note whose `repos` list contains it. The generated `index.md` still lists every note.
 
 Write commands take a lock file in the vault's `.git/` (`agent-vault.lock`) so two writers never interleave; a busy lock is exit 4. The lock's wait time can be raised with `AGENT_VAULT_LOCK_WAIT_MS`.
 
@@ -167,6 +174,62 @@ One case to know: when a trace's report has a `vault.denied` row, `trace.md` nam
 `config pull --root <repo root> [--force]` writes `.plans/config.json` from `config/dispatch.json` when the local file is missing and prints `config pull: pulled`. Without `--force` an existing local file is kept (`config pull: kept the local file (use --force to replace it)`); with it the file is replaced. No `config/dispatch.json` in the vault, or no `.plans` folder, is exit 1.
 
 `vault setup` runs the pull for the repo it is started in, only when that repo has a `.plans` folder, and never replaces a local file. `doctor` prints the optional check `dispatch config`, which fails when the two files differ.
+
+## Search
+
+`search` ranks notes with BM25 and returns the top matches, so a new request starts from what the vault already knows. It is read-only.
+
+```
+node ~/.claude/skills/dispatch-plan/vault.mjs search "<query>" [--repo <slug>] [--all] [--status active|any] [--include-work] [--limit <n>] [--json]
+```
+
+- The default scope is the notes of the current repo plus the global notes (`repo: -`); `--all` searches every repo and needs no `--repo`.
+- Without `--status any` the retired notes (`closed`, `superseded`, `stale`, `dropped`) are skipped.
+- `--include-work` also searches the run record under `work/`, for the extensions `.md`, `.json`, `.jsonl` and `.txt`.
+- `--limit` defaults to 5; `--json` prints an array of hits.
+- Text output is one block per hit: `<basename> | <type> | <repo> | <status> | <score with 3 decimals>`, then up to two snippet lines indented by two spaces.
+- The ranking is BM25 with k1 1.2 and b 0.75 over weighted term frequency (3 x title, 3 x fingerprint, 1 x body), the title being the basename plus the first body line. Documents that score 0 are dropped and ties sort by path.
+- Files are read with at most 4 goroutines, one file at a time, keeping only the query-term counts and each document's weighted length; only the top hits are read again for snippets, so the result does not depend on the order the workers finish. Files over 256 KiB are skipped.
+
+The binary is the Go program in `dispatch-plan/vault-search/` (standard library only, no cgo), built into `dispatch-plan/bin/vault-search`:
+
+```bash
+go build -o dispatch-plan/bin/vault-search ./dispatch-plan/vault-search
+```
+
+`vault.mjs search` runs `$VAULT_SEARCH_BIN` when it is set, otherwise the `bin/vault-search` next to it. A missing binary exits 1 with `vault-search not found at <path>. Fix: go build -o dispatch-plan/bin/vault-search ./dispatch-plan/vault-search`; a binary that fails or prints unparsable JSON exits 1 with its stderr and the same hint. An empty query, a bad `--status` or a non-positive `--limit` exits 2, and no hits exits 0.
+
+With `--trace <T> --root <repo root>` the command appends a `vault.search` event with `query_len`, `results`, `all`, `status`, `include_work` and `limit`, plus `query` only in a `full` repo.
+
+The program has no persistent index: every search reads the notes. `--index` is reserved and prints `vault-search: --index is not built yet` to stderr with exit 2. On a new machine `bootstrap.sh` builds the binary, `vault setup` installs it next to the skill, and `vault doctor` reports it as an optional check.
+
+The benchmark in `dispatch-plan/vault-search/bench/` gates two passes: p95 under 50 ms at 1,000 notes, and peak RSS under 100 MB at 10,000 notes. At 10,000 notes a p95 above 250 ms is reported as `index recommended`, which is a report and not a failure.
+
+## Knowledge notes and eval
+
+A `decision` or `lesson` note is knowledge that outlives a request, so it has a small lifecycle:
+
+- `status` is `active` (also when absent), `superseded` or `stale`. `boot` lists the active ones and `search` returns them by default.
+- `note supersede <old> <new>` marks the old note `superseded` with `superseded_by: <new>` and adds `supersedes: <old>` to the new one. Both notes must exist and have the same type, `decision` or `lesson`; a missing note, a different or other type, the same note twice, or an already superseded old note exits 2 and writes nothing.
+- `last_verified` (`YYYY-MM-DD`) is the date the note was last checked. `lint` warns `stale-unverified` when an active decision or lesson is more than 90 days old, measured from `last_verified` and otherwise from `updated`.
+
+The search evaluation is `eval/golden.json`, a JSON array of `{"query": "...", "expect": "<note basename>"}`. Its shape is checked by `lint` as `eval-shape`:
+
+```json
+[
+	{"query": "boot token budget", "expect": "decision-agent-vault-boot-budget"},
+	{"query": "vault lock wait", "expect": "lesson-agent-vault-lock-wait"}
+]
+```
+
+`eval add --query <text> --expect <basename>` appends one case; the expected note must exist, the query must be one line and must not name a `none` repo, and an identical pair is refused. `eval list` prints `<index> | <expect> | <query>`, with ` (missing)` on an entry whose note is gone, or `no entries`. `stats` then reports `search recall@5: <ratio> (<hits>/<entries>)`: the binary runs each query with `--all --limit 5` and an entry counts when its `expect` is among the five basenames. Below 10 entries the line adds ` [needs 10+ entries]`, because a ratio over a handful of cases is noise.
+
+## Measures
+
+- **Boot tokens.** `stats` reports the whole boot size against `boot_budget_tokens` (default 4000) without gating it. The `=== index ===` section is the only part with a target: at most 600 tokens on the real vault, about 431 with the compact format.
+- **Repeat rate.** `stats` reports the share of findings in the last 10 traces whose fingerprint was already seen in an earlier trace. It is the guardrail against the same finding coming back; a repeat should become a fix plan or a lesson, not another retry.
+- **Recall at 5.** With `eval/golden.json` in place, `stats` reports the recall@5 over the golden queries, and below 10 entries it says the number is not yet meaningful.
+- **Latency and memory.** The benchmark gates p95 under 50 ms at 1,000 notes and peak RSS under 100 MB at 10,000 notes; a 10,000-note p95 above 250 ms prints `index recommended` and does not fail the run.
 
 ## Milestones
 
@@ -214,7 +277,7 @@ For a `meta` or `none` repo the specs and plans stay local.
 `sync push`:
 
 1. Runs `lint --range`, which also scans the commits since `origin/<branch>`. Any error stops the push with exit 1 and nothing is committed.
-2. Stages only managed files: the root files the template ships (`log.md`, `repos.json`, `harness.json`, `CLAUDE.md`, `README.md`, `bootstrap.sh`, `.gitattributes`, `.gitignore`), every `.md` and `.gitkeep` in a note folder, every file under `work/` at any depth, `config/dispatch.json` and `config/.gitkeep`, and everything in `templates/`. Other changed paths are printed as `unmanaged change: <file>` and left alone.
+2. Stages only managed files: the root files the template ships (`log.md`, `repos.json`, `harness.json`, `AGENTS.md`, `CLAUDE.md`, `README.md`, `bootstrap.sh`, `.gitattributes`, `.gitignore`), every `.md` and `.gitkeep` in a note folder, every file under `work/` at any depth, `config/dispatch.json` and `config/.gitkeep`, and everything in `templates/`. Other changed paths are printed as `unmanaged change: <file>` and left alone.
 3. Commits as `vault: <summary|update> [trace <id>]`, using `agent-vault <agent-vault@localhost>` when git has no user email.
 4. Pulls, then pushes; when the branch has no upstream it pushes with `-u origin HEAD`. A non-fast-forward rejection is retried once after another pull, then exit 5.
 
@@ -226,9 +289,9 @@ Whether the orchestrator pushes at the end of a request is the `sync_push` key i
 
 1. Install Node 24 or newer and git.
 2. Clone the vault repo next to the harness, so the vault's `bootstrap.sh` sits at `<parent>/agent-vault`.
-3. Run `./bootstrap.sh` from the vault. It reads `min_node` and `harness_repo` from `harness.json`, clones the harness into the sibling `pi-plan-dispatch-phase1` when that is missing, and runs `vault setup` (`vault.mjs setup --path <vault>`).
-4. `vault setup` writes `~/.config/agent-vault/config.json` (`path`, `remote`, `host`), creates the `specs/`, `ideas/`, `work/` and `config/` folders and the `work/**/*.jsonl merge=union` line in `.gitattributes` when they are missing, installs the skill files into `~/.claude/skills/dispatch-plan/` and the agents into `~/.claude/agents/`, runs `config pull` in the repo it started in when that repo has a `.plans` folder (which only writes a missing `.plans/config.json`), rebuilds `index.md`, then runs `doctor`. A file that was changed locally or never recorded is kept and reported as `kept (modified)`; `--force` replaces it.
-5. `vault doctor` prints `ok` or `fail` per check with the exact fix command: Node version, git, a vault git repo the CLI's schema supports, a reachable `origin`, an upstream branch, installed files that match the harness, `pi`, the extension registered in `~/.pi/agent/settings.json`, `opencode-go` credentials, and at least one repo in `repos.json`. Graphify, the Obsidian skills plugin, `note types` (a note type the installed CLI does not know) and `dispatch config` (the local `.plans/config.json` against the vault copy) are optional checks.
+3. Run `./bootstrap.sh` from the vault. It reads `min_node` and `harness_repo` from `harness.json`, clones the harness into the sibling `pi-plan-dispatch-phase1` when that is missing, builds `dispatch-plan/bin/vault-search` when Go is installed (otherwise it warns that search will be unavailable), and runs `vault setup` (`vault.mjs setup --path <vault>`).
+4. `vault setup` writes `~/.config/agent-vault/config.json` (`path`, `remote`, `host`), creates the `specs/`, `ideas/`, `work/` and `config/` folders and the `work/**/*.jsonl merge=union` line in `.gitattributes` when they are missing, installs the skill files into `~/.claude/skills/dispatch-plan/`, the agents into `~/.claude/agents/` and the built `vault-search` binary into `~/.claude/skills/dispatch-plan/bin/` when it exists, runs `config pull` in the repo it started in when that repo has a `.plans` folder (which only writes a missing `.plans/config.json`), rebuilds `index.md`, then runs `doctor`. A file that was changed locally or never recorded is kept and reported as `kept (modified)`; `--force` replaces it.
+5. `vault doctor` prints `ok` or `fail` per check with the exact fix command: Node version, git, a vault git repo the CLI's schema supports, a reachable `origin`, an upstream branch, installed files that match the harness, `pi`, the extension registered in `~/.pi/agent/settings.json`, `opencode-go` credentials, and at least one repo in `repos.json`. Graphify, the Obsidian skills plugin, `note types` (a note type the installed CLI does not know), `dispatch config` (the local `.plans/config.json` against the vault copy) and `vault-search` (the binary is missing or does not print its version) are optional checks.
 
 All machines update the harness together: the vault schema stays 1, but an older CLI cannot read a vault written by this version. `doctor` warns when the vault holds a note type the installed CLI does not know.
 
@@ -250,7 +313,7 @@ Graphify (`Graphify-Labs/graphify`, PyPI `graphifyy`, CLI `graphify`) explores a
 
 The allowlist is only as good as the text that goes in. Do not put the slug or the `owner/name` of a `none` repo into a note, a log line or a commit summary. The CLI rejects such a write (`note`, `log append`, `sync push --summary`) and `lint` blocks the push.
 
-`lint` findings:
+`lint` prints one line per finding at `ERROR`, `WARN` or `INFO` and ends with `lint: <e> errors, <w> warnings, <i> info`; only errors exit 1. The codes:
 
 | Severity | Code | Meaning |
 |---|---|---|
@@ -260,6 +323,8 @@ The allowlist is only as good as the text that goes in. Do not put the slug or t
 | error | `absolute-path` | A note body or a property contains an absolute path; `spec` and `plan` bodies are exempt (D9) |
 | error | (schema or privacy) | Invalid frontmatter, a missing property, or a note a `none` repo does not allow |
 | error | `none-slug-in-log` | A log line names a `none` repo |
+| error | `eval-shape` | `eval/golden.json` is not a JSON array of `{query, expect}` strings |
+| warn | `stale-unverified` | An active decision or lesson not verified for 90 days, measured from `last_verified` and otherwise from `updated` |
 | info | `dangling-link` | A wikilink points at a note that does not exist |
 | info | `orphan` | No other note links to this one |
 
@@ -279,6 +344,7 @@ With both `--root <repo>` and `--trace <T>` the CLI appends to the same `.plans/
 | `vault.work` | `work add` | `op`, `trace`, `files`, `unmirrored` |
 | `vault.restore` | `restore` | `restored`, `skipped` |
 | `vault.config` | `config push` or `config pull` | `op`, `result` |
+| `vault.search` | `search` | `query_len`, `results`, `all`, `status`, `include_work`, `limit`, and `query` only in a `full` repo |
 
 `trace.mjs report` renders one line per event, for example `vault.write` as `new finding <basename>`.
 

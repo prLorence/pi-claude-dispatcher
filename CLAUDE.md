@@ -122,7 +122,12 @@ schema. You are the only role that writes it, and only through the CLI at
 
 1. **Session start.** Run `vault.mjs resolve`. If it succeeds, run `vault.mjs repo check`: exit
    `3` means this repo's mode is `none`. When both are fine, run `vault.mjs sync pull` then
-   `vault.mjs boot` and read the boot text before you plan, then the catch-up:
+   `vault.mjs boot` and read the boot text before you plan. After `boot`, when the `grilling`
+   skill starts, run
+   `node ~/.claude/skills/dispatch-plan/vault.mjs search "<keywords from the request>" --trace <T> --root <repo root>`
+   (once the trace id exists; before it exists, omit those two flags), and run it again before
+   drafting the plan with the terms of the spec's requirements; read the top 5 results each
+   time. A failed search is reported once and skipped; it never blocks work. Then the catch-up:
    `work pending --root <repo root>`, `work add --trace <T> --root <repo root>` for each
    `pending <T>` line it prints, then `restore --root <repo root>`. Otherwise skip every vault
    step for the whole request and say so once.
@@ -149,7 +154,9 @@ schema. You are the only role that writes it, and only through the CLI at
    An idea is written when the user states one: `note new idea idea-<slug(title)> --set
    status=open --set repo=<slug or -> --body-stdin`, and changed later with `note set` or `note
    status <basename> <open|taken|dropped>`. `.plans/ideas.md` is retired once its entries are
-   copied into `idea` notes; you do that once.
+   copied into `idea` notes; you do that once. A note that a later note replaces is marked with
+   `note supersede <old> <new>`, and a new search case is added with `eval add --query <text>
+   --expect <basename>`.
    After the run, in this fixed order, because the wrong order loses data: (1) `trace.mjs
    report --trace <T>`, so `trace.md` exists before the copy; (2) the `run` note and the
    `finding` notes with `note new`, because a later `note new run` would drop the `unmirrored`
@@ -236,6 +243,9 @@ Claude models, Sonnet and Opus included, never write code, tests, scripts, confi
 | `dispatch-plan/vault-config.mjs`       | `config push` and `config pull`: the canonical copy of `.plans/config.json` as `config/dispatch.json`                                                                                                          |
 | `dispatch-plan/vault-admin.mjs`        | Vault setup side without a vault: `init`, `setup` (config, skill and agent install, index), `doctor` (machine and vault checks)                                                                                |
 | `dispatch-plan/vault-events.mjs`       | The `vault.*` trace events the CLI appends to `.plans/traces/<trace>.jsonl`                                                                                                                                    |
+| `dispatch-plan/vault-search.mjs`       | `search` and the recall line of `stats`: finds the binary, runs it with `--json`, checks its output and appends the `vault.search` event                                                                      |
+| `dispatch-plan/vault-eval.mjs`         | `eval add` and `eval list`: writes `eval/golden.json` and lists its entries                                                                                                                                   |
+| `dispatch-plan/vault-search/`          | The Go search program, read-only, built into `dispatch-plan/bin/vault-search`                                                                                                                                 |
 | `vault-template/`                      | Seed for the vault repo: note folders (`specs/`, `ideas/` and the rest), the `work/` and `config/` folders, `log.md`, `repos.json`, `harness.json`, `bootstrap.sh`, `templates/`, `.gitattributes`             |
 | `monitor/`                             | Read-only plan monitor: Bun server plus React 19 client, task rows with implementer and reviewer lanes and a live session transcript; `bun run start` from `monitor/`, or build it with its Dockerfile         |
 | `dispatch-plan/agents/plan-auditor.md` | `plan-auditor` subagent: read-only plan review checklist, verdict format, `plan.audit` event                                                                                                                   |
@@ -302,7 +312,7 @@ One trace is one user request across all rounds. Plans link through frontmatter:
   - real cost reporting
   - a real worker run with the worker isolation
   - the new vault commands (`work add`, `work pending`, `restore`, `config push`, `config pull`) against the real vault
-- **Suggested next step:** refresh the installed copies (`mkdir -p ~/.claude/skills/dispatch-plan && cp dispatch-plan/SKILL.md dispatch-plan/ORCHESTRATOR.md dispatch-plan/trace.mjs dispatch-plan/preflight.mjs dispatch-plan/config-init.mjs dispatch-plan/vault.mjs dispatch-plan/vault-work.mjs dispatch-plan/vault-restore.mjs dispatch-plan/vault-config.mjs dispatch-plan/decide.mjs dispatch-plan/decide-core.mjs dispatch-plan/decide-backend.mjs dispatch-plan/decide-stats.mjs ~/.claude/skills/dispatch-plan/` and `mkdir -p ~/.claude/agents && cp dispatch-plan/agents/plan-auditor.md ~/.claude/agents/`; anyone who installed an earlier version also runs `rm -f ~/.claude/agents/planner.md ~/.claude/agents/auditor.md`; `node dispatch-plan/vault.mjs setup --force` writes every file of `dispatch-plan/` and the agents for you), paste the block from `dispatch-plan/ORCHESTRATOR.md` into `CLAUDE.md`, install the extension, and log Pi into OpenCode Go. Run a tiny plan with `/plans dry on`, then one small real task with `/plans dry off`.
+- **Suggested next step:** refresh the installed copies (`mkdir -p ~/.claude/skills/dispatch-plan && cp dispatch-plan/SKILL.md dispatch-plan/ORCHESTRATOR.md dispatch-plan/trace.mjs dispatch-plan/preflight.mjs dispatch-plan/config-init.mjs dispatch-plan/vault.mjs dispatch-plan/vault-work.mjs dispatch-plan/vault-restore.mjs dispatch-plan/vault-config.mjs dispatch-plan/decide.mjs dispatch-plan/decide-core.mjs dispatch-plan/decide-backend.mjs dispatch-plan/decide-stats.mjs dispatch-plan/vault-search.mjs dispatch-plan/vault-eval.mjs ~/.claude/skills/dispatch-plan/` and `mkdir -p ~/.claude/agents && cp dispatch-plan/agents/plan-auditor.md ~/.claude/agents/`; anyone who installed an earlier version also runs `rm -f ~/.claude/agents/planner.md ~/.claude/agents/auditor.md`; `node dispatch-plan/vault.mjs setup --force` writes every file of `dispatch-plan/` and the agents for you), run `go build -o dispatch-plan/bin/vault-search ./dispatch-plan/vault-search` and `mkdir -p ~/.claude/skills/dispatch-plan/bin && cp dispatch-plan/bin/vault-search ~/.claude/skills/dispatch-plan/bin/`, paste the block from `dispatch-plan/ORCHESTRATOR.md` into `AGENTS.md` with `CLAUDE.md` importing it, install the extension, and log Pi into OpenCode Go. Run a tiny plan with `/plans dry on`, then one small real task with `/plans dry off`.
 
 ## Open questions
 

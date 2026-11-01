@@ -62,6 +62,7 @@ export const VOCAB: {
 	planStatus: string[];
 	specStatus: string[];
 	ideaStatus: string[];
+	knowledgeStatus: string[];
 	audit: string[];
 	gate: string[];
 	findingStatus: string[];
@@ -72,12 +73,16 @@ export const VOCAB: {
 	planStatus: ["draft", "ready", "done", "failed"],
 	specStatus: ["draft", "confirmed", "done"],
 	ideaStatus: ["open", "taken", "dropped"],
+	knowledgeStatus: ["active", "superseded", "stale"],
 	audit: ["pass", "fail"],
 	gate: ["pass", "fail"],
 	findingStatus: ["open", "closed"],
 	source: ["plan-audit", "auditor", "pair", "security", "gate"],
 	severity: ["blocker", "major", "minor", "error", "warn", "info"],
 };
+
+/** Statuses that retire a note from search and the boot index. */
+export const RETIRED_STATUSES: readonly string[] = ["closed", "superseded", "stale", "dropped"];
 
 export interface Note {
 	type: NoteType;
@@ -149,6 +154,7 @@ export function validateNote(note: Note): string[] {
 
 	errors.push(...basenameErrors(noteType, note.basename, props));
 	errors.push(...vocabErrors(noteType, props));
+	errors.push(...knowledgePropsErrors(props));
 	errors.push(...repoErrors(noteType, props));
 	return errors;
 }
@@ -200,6 +206,7 @@ function vocabErrors(type: NoteType, props: Record<string, string | string[]>): 
 	if (type === "run") check("status", VOCAB.planRunStatus);
 	if (type === "spec") check("status", VOCAB.specStatus);
 	if (type === "idea") check("status", VOCAB.ideaStatus);
+	if (type === "decision" || type === "lesson") check("status", VOCAB.knowledgeStatus);
 	if (type === "run") check("gate", VOCAB.gate);
 	if (type === "finding") {
 		check("status", VOCAB.findingStatus);
@@ -219,6 +226,31 @@ function vocabErrors(type: NoteType, props: Record<string, string | string[]>): 
 		}
 	}
 	return errors;
+}
+
+/** The optional knowledge properties every note type may carry. */
+function knowledgePropsErrors(props: Record<string, string | string[]>): string[] {
+	const errors: string[] = [];
+	const lastVerified = props.last_verified;
+	if (lastVerified !== undefined) {
+		if (typeof lastVerified !== "string" || !DATE_RE.test(lastVerified)) {
+			errors.push("last_verified must be YYYY-MM-DD");
+		}
+	}
+	for (const key of ["superseded_by", "supersedes"]) {
+		const value = props[key];
+		if (value === undefined) continue;
+		if (typeof value !== "string" || !BASENAME_RE.test(value)) {
+			errors.push(`${key} must be a note basename`);
+		}
+	}
+	return errors;
+}
+
+/** A note is active unless its status is one of the retired statuses. */
+export function isActiveNote(note: Note): boolean {
+	const status = note.props?.status;
+	return typeof status !== "string" || !RETIRED_STATUSES.includes(status);
 }
 
 function repoErrors(type: NoteType, props: Record<string, string | string[]>): string[] {

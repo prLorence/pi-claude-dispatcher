@@ -350,7 +350,36 @@ function installTargets(harnessRoot, home) {
 	for (const name of filesIn(path.join(harnessRoot, "dispatch-plan", "agents"))) {
 		targets.push({ src: path.join(harnessRoot, "dispatch-plan", "agents", name), dest: path.join(agents, name) });
 	}
+	const searchBin = path.join(harnessRoot, "dispatch-plan", "bin", "vault-search");
+	if (fs.existsSync(searchBin)) {
+		targets.push({ src: searchBin, dest: path.join(skills, "bin", "vault-search") });
+	}
 	return targets;
+}
+
+/** The installed search binary, and the fix line every missing-binary message ends with. */
+function installedSearchBinary(home) {
+	return path.join(home, ".claude", "skills", "dispatch-plan", "bin", "vault-search");
+}
+
+const SEARCH_BUILD_FIX = "Fix: go build -o dispatch-plan/bin/vault-search ./dispatch-plan/vault-search";
+
+/** Report the installed binary's version when setup copied it, or warn once when it is missing. */
+function reportSearchBinary(ctx, harnessRoot, home) {
+	const source = path.join(harnessRoot, "dispatch-plan", "bin", "vault-search");
+	if (!fs.existsSync(source)) {
+		ctx.err(`warning: vault-search is not built (search is optional). ${SEARCH_BUILD_FIX}`);
+		return;
+	}
+	const dest = installedSearchBinary(home);
+	const version = runCommand(ctx, dest, ["--version"]);
+	if (version.ok) {
+		ctx.out(firstLine(version.stdout) || "vault-search (unknown version)");
+		return;
+	}
+	ctx.err(
+		`warning: vault-search at ${dest} failed --version: ${firstLine(version.stderr) || `exit ${version.status}`}. ${SEARCH_BUILD_FIX}`,
+	);
 }
 
 /** True when the file was written; false when a locally modified copy was kept. */
@@ -406,6 +435,7 @@ export async function runSetup(args = {}, ctx) {
 		ctx.out(written ? `installed: ${dest}` : `kept (modified): ${dest}`);
 	}
 	writeJson(recordFile, sortedObject(record));
+	reportSearchBinary(ctx, harnessRoot, ctx.home);
 
 	try {
 		modules.writeIndex(vault);
@@ -493,6 +523,18 @@ export async function runDoctor(args = {}, ctx) {
 			? "the harness repo was not found. Fix: set PI_PLAN_DISPATCH_HARNESS to the harness repo"
 			: `${stale.length} file(s) differ from the harness copy: ${stale.slice(0, 3).map(({ dest }) => path.basename(dest)).join(", ")}. Fix: node dispatch-plan/vault.mjs setup --path ${vault}`,
 	);
+
+	const searchBin = installedSearchBinary(home);
+	if (!fs.existsSync(searchBin)) {
+		optional(false, "vault-search", `vault-search is not built (search is optional). ${SEARCH_BUILD_FIX}`);
+	} else {
+		const searchVersion = runCommand(ctx, searchBin, ["--version"]);
+		optional(
+			searchVersion.ok,
+			"vault-search",
+			`vault-search at ${searchBin} failed --version: ${firstLine(searchVersion.stderr) || `exit ${searchVersion.status}`}. ${SEARCH_BUILD_FIX}`,
+		);
+	}
 
 	const pi = runCommand(ctx, "pi", ["--version"]);
 	required(pi.ok, "pi", `${pi.missing ? "pi is not installed" : "pi --version failed"}. Fix: install the Pi coding agent (@earendil-works/pi-coding-agent)`);

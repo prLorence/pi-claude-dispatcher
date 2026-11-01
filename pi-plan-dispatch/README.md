@@ -28,25 +28,30 @@ pi install ./pi-plan-dispatch                        # as a package
 cp -r pi-plan-dispatch ~/.pi/agent/extensions/       # or as a global extension
 
 # 3. The Claude Code skill, orchestrator rules, trace, preflight, config and vault CLIs
-mkdir -p ~/.claude/skills/dispatch-plan && cp dispatch-plan/SKILL.md dispatch-plan/ORCHESTRATOR.md dispatch-plan/trace.mjs dispatch-plan/preflight.mjs dispatch-plan/config-init.mjs dispatch-plan/vault.mjs dispatch-plan/vault-admin.mjs dispatch-plan/vault-events.mjs ~/.claude/skills/dispatch-plan/
+mkdir -p ~/.claude/skills/dispatch-plan && cp dispatch-plan/SKILL.md dispatch-plan/ORCHESTRATOR.md dispatch-plan/trace.mjs dispatch-plan/preflight.mjs dispatch-plan/config-init.mjs dispatch-plan/vault.mjs dispatch-plan/vault-admin.mjs dispatch-plan/vault-events.mjs dispatch-plan/vault-search.mjs dispatch-plan/vault-eval.mjs ~/.claude/skills/dispatch-plan/
 
 # 4. The plan-auditor subagent, and removal of the superseded agents
 mkdir -p ~/.claude/agents && cp dispatch-plan/agents/plan-auditor.md ~/.claude/agents/
 rm -f ~/.claude/agents/planner.md ~/.claude/agents/auditor.md
 
 # 5. The orchestrator rules
-# paste the block from dispatch-plan/ORCHESTRATOR.md into CLAUDE.md or ~/.claude/CLAUDE.md
+# paste the block from dispatch-plan/ORCHESTRATOR.md into AGENTS.md or ~/.claude/AGENTS.md
+# and let CLAUDE.md import it with `@AGENTS.md`
 
 # 6. The agent vault, once: create it (`vault init`), then wire this machine to it (`vault setup`)
 node dispatch-plan/vault.mjs init            # first machine only
 node dispatch-plan/vault.mjs setup --path <vault>
+
+# 7. The search binary, needed by `vault search` and the recall line of `stats`
+go build -o dispatch-plan/bin/vault-search ./dispatch-plan/vault-search
+mkdir -p ~/.claude/skills/dispatch-plan/bin && cp dispatch-plan/bin/vault-search ~/.claude/skills/dispatch-plan/bin/
 ```
 
 Add `.plans/` to your `.gitignore`.
 
 Reload or restart Pi after updating the extension: a running Pi keeps the old code in memory.
 
-The install copies the CLIs to `~/.claude/skills/dispatch-plan/`, and the orchestrator and the `plan-auditor` call them there: `trace.mjs` for events, waits and reports, `preflight.mjs` for the plan check. Refresh the installed copies after pulling changes; a missing module means a stale install.
+The install copies the CLIs to `~/.claude/skills/dispatch-plan/`, and the orchestrator and the `plan-auditor` call them there: `trace.mjs` for events, waits and reports, `preflight.mjs` for the plan check. Refresh the installed copies after pulling changes; a missing module means a stale install. The vault's instruction file is `AGENTS.md`; `CLAUDE.md` is the shim that imports it with `@AGENTS.md`. `vault search` ranks the notes with BM25 and is documented, with the eval cases and the measures, in [docs/vault.md](../docs/vault.md).
 
 ## Use
 

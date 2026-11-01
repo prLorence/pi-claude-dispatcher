@@ -124,6 +124,39 @@ function makeFakeHarness(parent, name) {
 	return root;
 }
 
+/** A fake harness with the files setup installs, and an optional search binary. */
+function makeInstallHarness(parent, { binary = false } = {}) {
+	const root = makeFakeHarness(parent, "install-harness");
+	const dispatchPlan = path.join(root, "dispatch-plan");
+	fs.writeFileSync(path.join(dispatchPlan, "ORCHESTRATOR.md"), "# orchestrator\n");
+	fs.writeFileSync(path.join(dispatchPlan, "vault.mjs"), "// cli\n");
+	fs.mkdirSync(path.join(dispatchPlan, "agents"), { recursive: true });
+	fs.writeFileSync(path.join(dispatchPlan, "agents", "plan-auditor.md"), "# auditor\n");
+	if (binary) {
+		writeExecutable(
+			path.join(dispatchPlan, "bin", "vault-search"),
+			"#!/usr/bin/env node\nconsole.log(\"vault-search 0.1.0\");\n",
+		);
+	}
+	return root;
+}
+
+async function prepareSearchMachine(dir, { binary = false } = {}) {
+	const home = dir();
+	const env = envFor(home);
+	const vault = makeVault(dir(), { env });
+	const harness = makeInstallHarness(dir(), { binary });
+	const setup = makeCtx({ home, env, vaultPath: vault, harnessRoot: harness });
+	assert.equal(await runSetup({ path: vault }, setup.ctx), 0, setup.text() + setup.errText());
+	return {
+		home,
+		env,
+		vault,
+		harness,
+		bin: path.join(home, ".claude", "skills", "dispatch-plan", "bin", "vault-search"),
+	};
+}
+
 test("findHarnessRoot takes the first candidate that holds the skill, the dispatcher and the template", () =>
 	inTemps(async (dir) => {
 		const home = dir();
@@ -253,12 +286,13 @@ test("init fails when the template folder is missing", () =>
 		assert.match(errText(), /vault-template is missing/);
 	}));
 
-test("setup writes the config, installs the files without tests or archive, and builds the index", () =>
+test("setup writes the config, installs the harness files, and builds the index", () =>
 	inTemps(async (dir) => {
 		const home = dir();
 		const env = envFor(home);
 		const vault = makeVault(dir(), { env });
-		const { ctx, text, errText } = makeCtx({ home, env, vaultPath: vault });
+		const harness = makeInstallHarness(dir(), { binary: true });
+		const { ctx, text, errText } = makeCtx({ home, env, vaultPath: vault, harnessRoot: harness });
 
 		assert.equal(await runSetup({ path: vault }, ctx), 0, text() + errText());
 
@@ -269,23 +303,64 @@ test("setup writes the config, installs the files without tests or archive, and 
 		assert.equal("remote" in config, false);
 
 		const skills = path.join(home, ".claude", "skills", "dispatch-plan");
-		const want = fs
-			.readdirSync(path.join(repoRoot, "dispatch-plan"), { withFileTypes: true })
-			.filter((entry) => entry.isFile() && !entry.name.includes(".test."))
-			.map((entry) => entry.name)
-			.sort();
-		assert.deepEqual(fs.readdirSync(skills).sort(), want);
+		const want = ["ORCHESTRATOR.md", "SKILL.md", "vault.mjs"];
+		assert.deepEqual(fs.readdirSync(skills).sort(), [...want, "bin"].sort());
 		assert.equal(fs.existsSync(path.join(skills, "archive")), false);
 		assert.ok(fs.existsSync(path.join(home, ".claude", "agents", "plan-auditor.md")));
 
+		const installedBin = path.join(skills, "bin", "vault-search");
+		assert.deepEqual(fs.readFileSync(installedBin), fs.readFileSync(path.join(harness, "dispatch-plan", "bin", "vault-search")));
+		assert.notEqual(fs.statSync(installedBin).mode & 0o111, 0, "the executable bit survives the copy");
+		assert.match(text(), /^vault-search 0\.1\.0$/m);
+
 		const record = JSON.parse(fs.readFileSync(path.join(home, ".config", "agent-vault", "installed.json"), "utf8"));
-		assert.equal(Object.keys(record).length, want.length + 1);
-		assert.equal(record[path.join(skills, "SKILL.md")], hashFile(path.join(repoRoot, "dispatch-plan", "SKILL.md")));
+		assert.equal(Object.keys(record).length, want.length + 2);
+		assert.equal(record[path.join(skills, "SKILL.md")], hashFile(path.join(harness, "dispatch-plan", "SKILL.md")));
 
 		assert.ok(fs.existsSync(path.join(vault, "index.md")));
 		assert.equal(fs.existsSync(path.join(home, ".pi", "agent", "settings.json")), false);
 		assert.match(text(), /ok {3}node/);
 	}));
+
+test("setup warns once and still succeeds when the search binary is not built", () =>
+	inTemps(async (dir) => {
+		const home = dir();
+		const env = envFor(home);
+		const vault = makeVault(dir(), { env });
+		const harness = makeInstallHarness(dir());
+		const { ctx, text, errText } = makeCtx({ home, env, vaultPath: vault, harnessRoot: harness });
+
+		assert.equal(await runSetup({ path: vault }, ctx), 0, text() + errText());
+		assert.match(
+			errText(),
+			/warning: vault-search is not built \(search is optional\)\. Fix: go build -o dispatch-plan\/bin\/vault-search \.\/dispatch-plan\/vault-search/,
+		);
+		assert.equal(fs.existsSync(path.join(home, ".claude", "skills", "dispatch-plan", "bin", "vault-search")), false);
+		assert.doesNotMatch(text(), /^vault-search /m);
+	}));
+
+test("doctor reports the search binary as present, missing and failing", () =>
+	inTemps(async (dir) => {
+		const present = await prepareSearchMachine(dir, { binary: true });
+		const presentRun = makeCtx({ home: present.home, env: present.env, vaultPath: present.vault, harnessRoot: present.harness });
+		await runDoctor({}, presentRun.ctx);
+		assert.match(presentRun.text(), /^optional ok vault-search$/m);
+
+		fs.rmSync(present.bin, { force: true });
+		const missingRun = makeCtx({ home: present.home, env: present.env, vaultPath: present.vault, harnessRoot: present.harness });
+		await runDoctor({}, missingRun.ctx);
+		assert.match(
+			missingRun.text(),
+			/^optional fail vault-search: vault-search is not built \(search is optional\)\. Fix: go build -o dispatch-plan\/bin\/vault-search \.\/dispatch-plan\/vault-search$/m,
+		);
+
+		const failing = await prepareSearchMachine(dir, { binary: true });
+		writeExecutable(failing.bin, "#!/usr/bin/env node\nconsole.error(\"boom\");\nprocess.exit(1);\n");
+		const failingRun = makeCtx({ home: failing.home, env: failing.env, vaultPath: failing.vault, harnessRoot: failing.harness });
+		await runDoctor({}, failingRun.ctx);
+		assert.match(failingRun.text(), /^optional fail vault-search: .* failed --version: boom\. Fix: go build -o dispatch-plan\/bin\/vault-search/m);
+	}));
+
 
 test("setup keeps a locally modified install, reports it, and replaces it with force", () =>
 	inTemps(async (dir) => {

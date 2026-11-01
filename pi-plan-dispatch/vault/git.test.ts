@@ -6,6 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
 import { lintVault, scanSecrets, syncPull, syncPush } from "./git.ts";
+import { fingerprintHash } from "./schema.ts";
 
 // syncPull and syncPush inherit process.env, so the identity and the isolated
 // git config are set here, once, before any git call.
@@ -804,5 +805,127 @@ test("a push that stays rejected returns code 5 and keeps the commit", async () 
 		assert.equal(result.code, 5);
 		assert.equal(result.message, "push rejected (non-fast-forward)");
 		assert.equal(gitRun(vault, ["log", "-1", "--format=%s"]).trim(), "vault: rejected");
+	});
+});
+
+function writeKnowledge(
+	vault: string,
+	type: "decision" | "lesson",
+	basename: string,
+	props: Record<string, string>,
+	body = "A note.\n",
+): void {
+	const folder = type === "decision" ? "decisions" : "lessons";
+	fs.writeFileSync(
+		path.join(vault, folder, `${basename}.md`),
+		noteText(type, { project: "demo", repo: REPO, ...props }, body),
+	);
+}
+
+test("stale-unverified warns after 91 days and not at exactly 90", async () => {
+	await withTemp((root) => {
+		const vault = path.join(root, "vault");
+		initVault(vault);
+		writeKnowledge(vault, "decision", "decision-stale-old", { updated: "2026-01-01" });
+		writeKnowledge(vault, "decision", "decision-stale-edge", { updated: "2026-01-02" });
+		const stale = lintVault(vault, { today: "2026-04-02" }).filter((finding) => finding.code === "stale-unverified");
+		assert.equal(stale.length, 1);
+		assert.equal(stale[0].severity, "warn");
+		assert.equal(stale[0].file, "decisions/decision-stale-old.md");
+		assert.equal(stale[0].message, "not verified for 91 days (since 2026-01-01)");
+	});
+});
+
+test("a newer last_verified wins over updated for stale-unverified", async () => {
+	await withTemp((root) => {
+		const vault = path.join(root, "vault");
+		initVault(vault);
+		writeKnowledge(vault, "lesson", "lesson-stale-checked", {
+			updated: "2026-01-01",
+			last_verified: "2026-03-01",
+		});
+		const stale = lintVault(vault, { today: "2026-04-02" }).filter((finding) => finding.code === "stale-unverified");
+		assert.deepEqual(stale, []);
+	});
+});
+
+test("a superseded decision and a finding never warn as stale", async () => {
+	await withTemp((root) => {
+		const vault = path.join(root, "vault");
+		initVault(vault);
+		writeKnowledge(vault, "decision", "decision-stale-retired", { updated: "2020-01-01", status: "superseded" });
+		const fingerprint = `${REPO}:-:stale finding`;
+		fs.writeFileSync(
+			path.join(vault, "findings", `finding-stale-f-${fingerprintHash(fingerprint)}.md`),
+			noteText(
+				"finding",
+				{
+					trace: "trace-1",
+					repo: REPO,
+					severity: "major",
+					fingerprint,
+					source: "pair",
+					status: "open",
+					updated: "2020-01-01",
+				},
+				"An old finding.\n",
+			),
+		);
+		const stale = lintVault(vault, { today: "2026-04-02" }).filter((finding) => finding.code === "stale-unverified");
+		assert.deepEqual(stale, []);
+	});
+});
+
+test("a stale warning does not make syncPush refuse", async () => {
+	await withTemp((root) => {
+		const remote = makeRemote(root);
+		const vault = path.join(root, "vault");
+		initVault(vault);
+		publish(vault, remote);
+		writeKnowledge(vault, "decision", "decision-stale-push", { updated: "2020-01-01" });
+		const result = syncPush(vault, { summary: "stale warn" });
+		assert.equal(result.code, 0);
+		const pushed = gitRun(remote, ["ls-tree", "--name-only", "-r", "refs/heads/main"]).split("\n");
+		assert.ok(pushed.includes("decisions/decision-stale-push.md"));
+	});
+});
+
+test("syncPush stages eval/golden.json and AGENTS.md, and a golden set lints clean", async () => {
+	await withTemp((root) => {
+		const remote = makeRemote(root);
+		const vault = path.join(root, "vault");
+		initVault(vault);
+		publish(vault, remote);
+		fs.mkdirSync(path.join(vault, "eval"), { recursive: true });
+		fs.writeFileSync(
+			path.join(vault, "eval", "golden.json"),
+			`${JSON.stringify([{ query: "how do we sync", expect: "decision-demo-one" }])}\n`,
+		);
+		fs.writeFileSync(path.join(vault, "AGENTS.md"), "# Vault rules\n");
+		const findings = lintVault(vault, { today: "2026-04-02" }).filter(
+			(finding) => finding.file === "eval/golden.json" || finding.file === "AGENTS.md",
+		);
+		assert.deepEqual(findings, []);
+		const result = syncPush(vault, { summary: "golden" });
+		assert.equal(result.code, 0);
+		assert.deepEqual(result.unmanaged, []);
+		const pushed = gitRun(remote, ["ls-tree", "--name-only", "-r", "refs/heads/main"]).split("\n");
+		assert.ok(pushed.includes("eval/golden.json"));
+		assert.ok(pushed.includes("AGENTS.md"));
+	});
+});
+
+test("a malformed golden set is an eval-shape error", async () => {
+	await withTemp((root) => {
+		const vault = path.join(root, "vault");
+		initVault(vault);
+		fs.mkdirSync(path.join(vault, "eval"), { recursive: true });
+		fs.writeFileSync(path.join(vault, "eval", "golden.json"), `${JSON.stringify([{ query: "x" }])}\n`);
+		const findings = lintVault(vault, { today: "2026-04-02" }).filter(
+			(finding) => finding.file === "eval/golden.json",
+		);
+		assert.equal(findings.length, 1);
+		assert.equal(findings[0].severity, "error");
+		assert.equal(findings[0].code, "eval-shape");
 	});
 });
