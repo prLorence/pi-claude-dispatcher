@@ -1,0 +1,70 @@
+{
+  "repos": [
+    {
+      "name": "eta",
+      "active": true,
+      "plan": {
+        "id": "20261023-0950-retry-r1",
+        "trace": "20261023-0950-retry-r1",
+        "round": 1,
+        "state": "running",
+        "gate": null,
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "again",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0950-retry-r1.again.a1",
+                  "label": "a1",
+                  "state": "failed",
+                  "model": "opencode-go/beam-free",
+                  "thinking": "high",
+                  "startedAt": "2026-10-23T09:50:00.000Z",
+                  "elapsedS": 80,
+                  "tokens": 1540,
+                  "cost": 0.0125,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": true,
+                  "review": null
+                },
+                {
+                  "id": "20261023-0950-retry-r1.again.a2",
+                  "label": "a2",
+                  "state": "done",
+                  "model": "opencode-go/beam-free",
+                  "thinking": "max",
+                  "startedAt": "2026-10-23T09:52:00.000Z",
+                  "elapsedS": 130,
+                  "tokens": 1540,
+                  "cost": 0.0125,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": true,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:50:00.000Z",
+      "lastActivity": "2026-10-23T09:54:00.000Z"
+    }
+  ],
+  "message": null,
+  "now": "2026-10-23T10:05:00.000Z"
+}

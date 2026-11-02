@@ -1,0 +1,98 @@
+{
+  "repos": [
+    {
+      "name": "delta",
+      "active": false,
+      "plan": {
+        "id": "20261023-0920-skip-r1",
+        "trace": "20261023-0920-skip-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 2,
+        "tasks": [
+          {
+            "id": "first",
+            "role": "implement",
+            "pair": "review",
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0920-skip-r1.first.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": "opencode-go/beam-free",
+                  "thinking": "high",
+                  "startedAt": "2026-10-23T09:20:00.000Z",
+                  "elapsedS": 130,
+                  "tokens": 1540,
+                  "cost": 0.0125,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": true,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0920-skip-r1.first.review1.a1",
+                  "label": "r1",
+                  "state": "done",
+                  "model": "beam-free",
+                  "thinking": null,
+                  "startedAt": "2026-10-23T09:23:00.000Z",
+                  "elapsedS": 20,
+                  "tokens": 1540,
+                  "cost": 0.0125,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": true,
+                  "review": {
+                    "verdict": "approve",
+                    "findings": 0,
+                    "failed": false,
+                    "text": "approved"
+                  }
+                }
+              ]
+            },
+            "decider": null
+          },
+          {
+            "id": "later",
+            "role": "implement",
+            "pair": "review",
+            "dependsOn": [
+              "first"
+            ],
+            "waitsFor": [],
+            "skipped": true,
+            "implementer": {
+              "state": "waiting",
+              "attempts": []
+            },
+            "reviewer": {
+              "state": "waiting",
+              "attempts": []
+            },
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:20:00.000Z",
+      "lastActivity": "2026-10-23T09:24:00.000Z"
+    }
+  ],
+  "message": null,
+  "now": "2026-10-23T10:05:00.000Z"
+}

@@ -1,0 +1,117 @@
+{
+  "repos": [
+    {
+      "name": "zeta",
+      "active": false,
+      "plan": {
+        "id": "20261023-0940-decider-r1",
+        "trace": "20261023-0940-decider-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 2,
+        "total": 2,
+        "tasks": [
+          {
+            "id": "audited",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0940-decider-r1.audited.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": "opencode-go/beam-free",
+                  "thinking": "high",
+                  "startedAt": "2026-10-23T09:40:30.000Z",
+                  "elapsedS": 100,
+                  "tokens": 1540,
+                  "cost": 0.0125,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": true,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": {
+              "suggested": "high",
+              "probabilities": {
+                "low": 0.1,
+                "high": 0.8,
+                "max": 0.1
+              },
+              "confidence": 0.8,
+              "complexity": 3,
+              "ran": "high"
+            }
+          },
+          {
+            "id": "plain",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0940-decider-r1.plain.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": "opencode-go/beam-free",
+                  "thinking": "low",
+                  "startedAt": "2026-10-23T09:43:00.000Z",
+                  "elapsedS": 70,
+                  "tokens": 1540,
+                  "cost": 0.0125,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": true,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": {
+          "proposal": "approve",
+          "aggregate": 0.25,
+          "verdict": "pass",
+          "auditRound": 2,
+          "findings": [
+            {
+              "id": "f1",
+              "severity": "major",
+              "p": 0.3
+            },
+            {
+              "id": "f2",
+              "severity": "minor",
+              "p": 0.1
+            },
+            {
+              "id": "f3",
+              "severity": "info",
+              "p": 0
+            }
+          ]
+        }
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:40:00.000Z",
+      "lastActivity": "2026-10-23T09:46:00.000Z"
+    }
+  ],
+  "message": null,
+  "now": "2026-10-23T10:05:00.000Z"
+}

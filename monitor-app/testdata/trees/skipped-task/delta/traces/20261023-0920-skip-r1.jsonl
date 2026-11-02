@@ -1,0 +1,4 @@
+{"ts":"2026-10-23T09:20:00.000Z","plan":"20261023-0920-skip-r1","kind":"task.start","actor":"worker","round":1,"task":"first","attempt":1,"data":{"session_id":"20261023-0920-skip-r1.first.a1","model":"opencode-go/beam-free","thinking":"high"},"v":1,"trace":"20261023-0920-skip-r1"}
+{"ts":"2026-10-23T09:22:00.000Z","plan":"20261023-0920-skip-r1","kind":"task.end","actor":"worker","round":1,"task":"first","attempt":1,"data":{"state":"done","ok":true},"v":1,"trace":"20261023-0920-skip-r1"}
+{"ts":"2026-10-23T09:23:00.000Z","plan":"20261023-0920-skip-r1","kind":"task.review","actor":"worker","round":1,"task":"first","attempt":1,"data":{"round":1,"session_id":"20261023-0920-skip-r1.first.review1.a1","verdict":"approve","findings":0,"ok":true},"v":1,"trace":"20261023-0920-skip-r1"}
+{"ts":"2026-10-23T09:24:00.000Z","plan":"20261023-0920-skip-r1","kind":"plan.end","actor":"worker","round":1,"data":{"gate_pass":true,"done":1,"total":2},"v":1,"trace":"20261023-0920-skip-r1"}

@@ -1,0 +1,5 @@
+{"ts":"2026-10-23T09:10:00.000Z","plan":"20261023-0910-gate-r1","kind":"task.start","actor":"worker","round":1,"task":"one","attempt":1,"data":{"session_id":"20261023-0910-gate-r1.one.a1","model":"opencode-go/beam-free","thinking":"high"},"v":1,"trace":"20261023-0910-gate-r1"}
+{"ts":"2026-10-23T09:12:00.000Z","plan":"20261023-0910-gate-r1","kind":"task.end","actor":"worker","round":1,"task":"one","attempt":1,"data":{"state":"failed","ok":false},"v":1,"trace":"20261023-0910-gate-r1"}
+{"ts":"2026-10-23T09:13:00.000Z","plan":"20261023-0910-gate-r1","kind":"task.start","actor":"worker","round":1,"task":"two","attempt":1,"data":{"session_id":"20261023-0910-gate-r1.two.a1","model":"opencode-go/beam-free","thinking":"high"},"v":1,"trace":"20261023-0910-gate-r1"}
+{"ts":"2026-10-23T09:15:00.000Z","plan":"20261023-0910-gate-r1","kind":"task.end","actor":"worker","round":1,"task":"two","attempt":1,"data":{"state":"retry","ok":false},"v":1,"trace":"20261023-0910-gate-r1"}
+{"ts":"2026-10-23T09:16:00.000Z","plan":"20261023-0910-gate-r1","kind":"plan.end","actor":"worker","round":1,"data":{"gate_pass":false,"done":0,"total":2},"v":1,"trace":"20261023-0910-gate-r1"}

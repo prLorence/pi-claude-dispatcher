@@ -1,0 +1,1182 @@
+{
+  "repos": [
+    {
+      "name": "repo-01",
+      "active": false,
+      "plan": {
+        "id": "20261023-0905-over-cap-r1",
+        "trace": "20261023-0905-over-cap-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0905-over-cap-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": "low",
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:05:00.000Z",
+      "lastActivity": "2026-10-23T09:07:00.000Z"
+    },
+    {
+      "name": "repo-02",
+      "active": false,
+      "plan": {
+        "id": "20261023-0905-over-cap-r1",
+        "trace": "20261023-0905-over-cap-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0905-over-cap-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": "low",
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:05:00.000Z",
+      "lastActivity": "2026-10-23T09:07:00.000Z"
+    },
+    {
+      "name": "repo-03",
+      "active": false,
+      "plan": {
+        "id": "20261023-0905-over-cap-r1",
+        "trace": "20261023-0905-over-cap-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0905-over-cap-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": "low",
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:05:00.000Z",
+      "lastActivity": "2026-10-23T09:07:00.000Z"
+    },
+    {
+      "name": "repo-04",
+      "active": false,
+      "plan": {
+        "id": "20261023-0905-over-cap-r1",
+        "trace": "20261023-0905-over-cap-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0905-over-cap-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": "low",
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:05:00.000Z",
+      "lastActivity": "2026-10-23T09:07:00.000Z"
+    },
+    {
+      "name": "repo-05",
+      "active": false,
+      "plan": {
+        "id": "20261023-0905-over-cap-r1",
+        "trace": "20261023-0905-over-cap-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0905-over-cap-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": "low",
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:05:00.000Z",
+      "lastActivity": "2026-10-23T09:07:00.000Z"
+    },
+    {
+      "name": "repo-06",
+      "active": false,
+      "plan": {
+        "id": "20261023-0905-over-cap-r1",
+        "trace": "20261023-0905-over-cap-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0905-over-cap-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": "low",
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:05:00.000Z",
+      "lastActivity": "2026-10-23T09:07:00.000Z"
+    },
+    {
+      "name": "repo-07",
+      "active": false,
+      "plan": {
+        "id": "20261023-0905-over-cap-r1",
+        "trace": "20261023-0905-over-cap-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0905-over-cap-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": "low",
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:05:00.000Z",
+      "lastActivity": "2026-10-23T09:07:00.000Z"
+    },
+    {
+      "name": "repo-08",
+      "active": false,
+      "plan": {
+        "id": "20261023-0905-over-cap-r1",
+        "trace": "20261023-0905-over-cap-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0905-over-cap-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": "low",
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:05:00.000Z",
+      "lastActivity": "2026-10-23T09:07:00.000Z"
+    },
+    {
+      "name": "repo-09",
+      "active": false,
+      "plan": {
+        "id": "20261023-0905-over-cap-r1",
+        "trace": "20261023-0905-over-cap-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0905-over-cap-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": "low",
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:05:00.000Z",
+      "lastActivity": "2026-10-23T09:07:00.000Z"
+    },
+    {
+      "name": "repo-10",
+      "active": false,
+      "plan": {
+        "id": "20261023-0905-over-cap-r1",
+        "trace": "20261023-0905-over-cap-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0905-over-cap-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": "low",
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:05:00.000Z",
+      "lastActivity": "2026-10-23T09:07:00.000Z"
+    },
+    {
+      "name": "repo-11",
+      "active": false,
+      "plan": {
+        "id": "20261023-0905-over-cap-r1",
+        "trace": "20261023-0905-over-cap-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0905-over-cap-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": "low",
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:05:00.000Z",
+      "lastActivity": "2026-10-23T09:07:00.000Z"
+    },
+    {
+      "name": "repo-12",
+      "active": false,
+      "plan": {
+        "id": "20261023-0905-over-cap-r1",
+        "trace": "20261023-0905-over-cap-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0905-over-cap-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": "low",
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:05:00.000Z",
+      "lastActivity": "2026-10-23T09:07:00.000Z"
+    },
+    {
+      "name": "repo-13",
+      "active": false,
+      "plan": {
+        "id": "20261023-0905-over-cap-r1",
+        "trace": "20261023-0905-over-cap-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0905-over-cap-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": "low",
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:05:00.000Z",
+      "lastActivity": "2026-10-23T09:07:00.000Z"
+    },
+    {
+      "name": "repo-14",
+      "active": false,
+      "plan": {
+        "id": "20261023-0905-over-cap-r1",
+        "trace": "20261023-0905-over-cap-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0905-over-cap-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": "low",
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:05:00.000Z",
+      "lastActivity": "2026-10-23T09:07:00.000Z"
+    },
+    {
+      "name": "repo-15",
+      "active": false,
+      "plan": {
+        "id": "20261023-0905-over-cap-r1",
+        "trace": "20261023-0905-over-cap-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0905-over-cap-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": "low",
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:05:00.000Z",
+      "lastActivity": "2026-10-23T09:07:00.000Z"
+    },
+    {
+      "name": "repo-16",
+      "active": false,
+      "plan": {
+        "id": "20261023-0905-over-cap-r1",
+        "trace": "20261023-0905-over-cap-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0905-over-cap-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": "low",
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:05:00.000Z",
+      "lastActivity": "2026-10-23T09:07:00.000Z"
+    },
+    {
+      "name": "repo-17",
+      "active": false,
+      "plan": {
+        "id": "20261023-0905-over-cap-r1",
+        "trace": "20261023-0905-over-cap-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0905-over-cap-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": "low",
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:05:00.000Z",
+      "lastActivity": "2026-10-23T09:07:00.000Z"
+    },
+    {
+      "name": "repo-18",
+      "active": false,
+      "plan": {
+        "id": "20261023-0905-over-cap-r1",
+        "trace": "20261023-0905-over-cap-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0905-over-cap-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": "low",
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:05:00.000Z",
+      "lastActivity": "2026-10-23T09:07:00.000Z"
+    },
+    {
+      "name": "repo-19",
+      "active": false,
+      "plan": {
+        "id": "20261023-0905-over-cap-r1",
+        "trace": "20261023-0905-over-cap-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0905-over-cap-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": "low",
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:05:00.000Z",
+      "lastActivity": "2026-10-23T09:07:00.000Z"
+    },
+    {
+      "name": "repo-20",
+      "active": false,
+      "plan": {
+        "id": "20261023-0905-over-cap-r1",
+        "trace": "20261023-0905-over-cap-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0905-over-cap-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": "low",
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:05:00.000Z",
+      "lastActivity": "2026-10-23T09:07:00.000Z"
+    },
+    {
+      "name": "repo-21",
+      "active": false,
+      "plan": {
+        "id": "20261023-0905-over-cap-r1",
+        "trace": "20261023-0905-over-cap-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0905-over-cap-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": "low",
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:05:00.000Z",
+      "lastActivity": "2026-10-23T09:07:00.000Z"
+    },
+    {
+      "name": "repo-22",
+      "active": false,
+      "plan": {
+        "id": "20261023-0905-over-cap-r1",
+        "trace": "20261023-0905-over-cap-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0905-over-cap-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": "low",
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:05:00.000Z",
+      "lastActivity": "2026-10-23T09:07:00.000Z"
+    },
+    {
+      "name": "repo-23",
+      "active": false,
+      "plan": {
+        "id": "20261023-0905-over-cap-r1",
+        "trace": "20261023-0905-over-cap-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0905-over-cap-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": "low",
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:05:00.000Z",
+      "lastActivity": "2026-10-23T09:07:00.000Z"
+    },
+    {
+      "name": "repo-24",
+      "active": false,
+      "plan": {
+        "id": "20261023-0905-over-cap-r1",
+        "trace": "20261023-0905-over-cap-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0905-over-cap-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": "low",
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:05:00.000Z",
+      "lastActivity": "2026-10-23T09:07:00.000Z"
+    }
+  ],
+  "message": "2 more repos ignored (limit 24)",
+  "now": "2026-10-23T10:05:00.000Z"
+}

@@ -1,0 +1,38 @@
+{
+  "id": "20261023-0940-decider-r1.audited.a1",
+  "live": false,
+  "ended": true,
+  "entries": [
+    {
+      "line": 2,
+      "ts": "2026-10-23T09:40:30.000Z",
+      "kind": "note",
+      "text": "model: beam-free",
+      "collapsed": false,
+      "truncated": false,
+      "tool": null,
+      "isError": false
+    },
+    {
+      "line": 3,
+      "ts": "2026-10-23T09:40:30.000Z",
+      "kind": "user",
+      "text": "start the task",
+      "collapsed": true,
+      "truncated": false,
+      "tool": null,
+      "isError": false
+    },
+    {
+      "line": 4,
+      "ts": "2026-10-23T09:42:10.000Z",
+      "kind": "assistant",
+      "text": "audited work is done",
+      "collapsed": false,
+      "truncated": false,
+      "tool": null,
+      "isError": false
+    }
+  ],
+  "next": 4
+}

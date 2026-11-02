@@ -1,0 +1,4 @@
+{"type":"session","version":3,"id":"20261023-0940-decider-r1.audited.a1"}
+{"type":"model_change","timestamp":"2026-10-23T09:40:30.000Z","provider":"opencode-go","modelId":"beam-free"}
+{"type":"message","timestamp":"2026-10-23T09:40:30.000Z","message":{"role":"user","content":[{"type":"text","text":"start the task"}]}}
+{"type":"message","timestamp":"2026-10-23T09:42:10.000Z","message":{"role":"assistant","content":[{"type":"text","text":"audited work is done"}],"stopReason":"stop","usage":{"input":1200,"output":340,"cost":{"total":0.0125}}}}

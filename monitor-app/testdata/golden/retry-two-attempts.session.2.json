@@ -1,0 +1,38 @@
+{
+  "id": "20261023-0950-retry-r1.again.a2",
+  "live": false,
+  "ended": true,
+  "entries": [
+    {
+      "line": 2,
+      "ts": "2026-10-23T09:52:00.000Z",
+      "kind": "note",
+      "text": "model: beam-free",
+      "collapsed": false,
+      "truncated": false,
+      "tool": null,
+      "isError": false
+    },
+    {
+      "line": 3,
+      "ts": "2026-10-23T09:52:00.000Z",
+      "kind": "user",
+      "text": "start the task",
+      "collapsed": true,
+      "truncated": false,
+      "tool": null,
+      "isError": false
+    },
+    {
+      "line": 4,
+      "ts": "2026-10-23T09:54:10.000Z",
+      "kind": "assistant",
+      "text": "second try worked",
+      "collapsed": false,
+      "truncated": false,
+      "tool": null,
+      "isError": false
+    }
+  ],
+  "next": 4
+}

@@ -1,0 +1,51 @@
+{
+  "id": "20261023-0930-stall-r1.slow.a1",
+  "live": false,
+  "ended": false,
+  "entries": [
+    {
+      "line": 2,
+      "ts": "2026-10-23T09:30:00.000Z",
+      "kind": "note",
+      "text": "model: beam-free",
+      "collapsed": false,
+      "truncated": false,
+      "tool": null,
+      "isError": false
+    },
+    {
+      "line": 3,
+      "ts": "2026-10-23T09:30:00.000Z",
+      "kind": "user",
+      "text": "start the task",
+      "collapsed": true,
+      "truncated": false,
+      "tool": null,
+      "isError": false
+    },
+    {
+      "line": 4,
+      "ts": "2026-10-23T09:30:40.000Z",
+      "kind": "assistant",
+      "text": "working on it",
+      "collapsed": false,
+      "truncated": false,
+      "tool": null,
+      "isError": false
+    },
+    {
+      "line": 4,
+      "ts": "2026-10-23T09:30:40.000Z",
+      "kind": "tool_call",
+      "text": "edit {\"path\":\"lanes.ts\"}",
+      "collapsed": false,
+      "truncated": false,
+      "tool": {
+        "name": "edit",
+        "args": "{\"path\":\"lanes.ts\"}"
+      },
+      "isError": false
+    }
+  ],
+  "next": 4
+}

@@ -1,0 +1,8 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "pi-monitor",
+  "outputfilename": "pi-monitor",
+  "frontend:dir": "frontend",
+  "frontend:install": "bun install",
+  "frontend:build": "bun run build"
+}

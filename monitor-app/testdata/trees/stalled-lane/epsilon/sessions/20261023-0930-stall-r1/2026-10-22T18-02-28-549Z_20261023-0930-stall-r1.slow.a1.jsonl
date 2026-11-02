@@ -1,0 +1,4 @@
+{"type":"session","version":3,"id":"20261023-0930-stall-r1.slow.a1"}
+{"type":"model_change","timestamp":"2026-10-23T09:30:00.000Z","provider":"opencode-go","modelId":"beam-free"}
+{"type":"message","timestamp":"2026-10-23T09:30:00.000Z","message":{"role":"user","content":[{"type":"text","text":"start the task"}]}}
+{"type":"message","timestamp":"2026-10-23T09:30:40.000Z","message":{"role":"assistant","content":[{"type":"text","text":"working on it"},{"type":"toolCall","id":"call-1","name":"edit","arguments":{"path":"lanes.ts"}}],"stopReason":"toolUse","usage":{"input":800,"output":120,"cost":{"total":0.004}}}}

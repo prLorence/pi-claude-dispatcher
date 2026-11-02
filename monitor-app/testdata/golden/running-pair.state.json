@@ -1,0 +1,163 @@
+{
+  "repos": [
+    {
+      "name": "alpha",
+      "active": true,
+      "plan": {
+        "id": "20261023-0958-pair-r1",
+        "trace": "20261023-0958-pair-r1",
+        "round": 1,
+        "state": "running",
+        "gate": null,
+        "done": 1,
+        "total": 3,
+        "tasks": [
+          {
+            "id": "one",
+            "role": "implement",
+            "pair": "review",
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0958-pair-r1.one.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": "opencode-go/beam-free",
+                  "thinking": "high",
+                  "startedAt": "2026-10-23T09:00:00.000Z",
+                  "elapsedS": 150,
+                  "tokens": 1540,
+                  "cost": 0.0125,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": true,
+                  "review": null
+                },
+                {
+                  "id": "20261023-0958-pair-r1.one.a2",
+                  "label": "a2",
+                  "state": "done",
+                  "model": "opencode-go/beam-free",
+                  "thinking": "high",
+                  "startedAt": "2026-10-23T09:04:00.000Z",
+                  "elapsedS": 80,
+                  "tokens": 1540,
+                  "cost": 0.0125,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": true,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0958-pair-r1.one.review1.a1",
+                  "label": "r1",
+                  "state": "done",
+                  "model": "opencode-go/beam-free",
+                  "thinking": "high",
+                  "startedAt": "2026-10-23T09:03:00.000Z",
+                  "elapsedS": 40,
+                  "tokens": 1540,
+                  "cost": 0.0125,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": true,
+                  "review": {
+                    "verdict": "changes",
+                    "findings": 2,
+                    "failed": false,
+                    "text": "two findings, please fix"
+                  }
+                },
+                {
+                  "id": "20261023-0958-pair-r1.one.review2.a1",
+                  "label": "r2",
+                  "state": "done",
+                  "model": "beam-free",
+                  "thinking": null,
+                  "startedAt": "2026-10-23T09:06:00.000Z",
+                  "elapsedS": 30,
+                  "tokens": 1540,
+                  "cost": 0.0125,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": true,
+                  "review": {
+                    "verdict": "approve",
+                    "findings": 0,
+                    "failed": false,
+                    "text": "approved"
+                  }
+                }
+              ]
+            },
+            "decider": null
+          },
+          {
+            "id": "two",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "live",
+              "attempts": [
+                {
+                  "id": "20261023-0958-pair-r1.two.a1",
+                  "label": "a1",
+                  "state": "live",
+                  "model": "opencode-go/beam-free",
+                  "thinking": "low",
+                  "startedAt": "2026-10-23T09:01:00.000Z",
+                  "elapsedS": 40,
+                  "tokens": 920,
+                  "cost": 0.004,
+                  "lastTool": "edit lanes.ts",
+                  "error": null,
+                  "hasSession": true,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          },
+          {
+            "id": "three",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [
+              "one",
+              "two"
+            ],
+            "waitsFor": [
+              "two"
+            ],
+            "skipped": false,
+            "implementer": {
+              "state": "waiting",
+              "attempts": []
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:00:00.000Z",
+      "lastActivity": "2026-10-23T09:06:00.000Z"
+    }
+  ],
+  "message": null,
+  "now": "2026-10-23T10:05:00.000Z"
+}

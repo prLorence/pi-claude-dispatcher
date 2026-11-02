@@ -1,0 +1,1 @@
+{"ts":"2026-10-23T09:00:00.000Z","plan":"20261023-0900-sealed-r1","kind":"task.start","actor":"worker","round":1,"task":"hidden","attempt":1,"data":{"session_id":"20261023-0900-sealed-r1.hidden.a1","model":"opencode-go/beam-free","thinking":"high"},"v":1,"trace":"20261023-0900-sealed-r1"}

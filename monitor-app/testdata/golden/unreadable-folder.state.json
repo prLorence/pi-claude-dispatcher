@@ -1,0 +1,14 @@
+{
+  "repos": [
+    {
+      "name": "sealed",
+      "active": false,
+      "plan": null,
+      "message": "No plan has run yet",
+      "startedAt": null,
+      "lastActivity": null
+    }
+  ],
+  "message": null,
+  "now": "2026-10-23T10:05:00.000Z"
+}

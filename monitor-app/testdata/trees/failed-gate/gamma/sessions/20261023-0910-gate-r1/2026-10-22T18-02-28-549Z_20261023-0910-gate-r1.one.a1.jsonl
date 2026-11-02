@@ -1,0 +1,4 @@
+{"type":"session","version":3,"id":"20261023-0910-gate-r1.one.a1"}
+{"type":"model_change","timestamp":"2026-10-23T09:10:00.000Z","provider":"opencode-go","modelId":"beam-free"}
+{"type":"message","timestamp":"2026-10-23T09:10:00.000Z","message":{"role":"user","content":[{"type":"text","text":"start the task"}]}}
+{"type":"message","timestamp":"2026-10-23T09:12:20.000Z","message":{"role":"assistant","content":[{"type":"text","text":"gave up"}],"stopReason":"error","errorMessage":"provider dropped the stream","usage":{"input":500,"output":40,"cost":{"total":0.002}}}}

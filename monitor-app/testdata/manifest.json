@@ -1,0 +1,688 @@
+{
+  "nowMs": 1792749900000,
+  "cases": [
+    {
+      "name": "running-pair",
+      "message": null,
+      "repos": [
+        {
+          "name": "alpha",
+          "dir": "trees/running-pair/alpha"
+        }
+      ],
+      "dirs": [
+        "trees/running-pair",
+        "trees/running-pair/alpha",
+        "trees/running-pair/alpha/done",
+        "trees/running-pair/alpha/inbox",
+        "trees/running-pair/alpha/running",
+        "trees/running-pair/alpha/sessions",
+        "trees/running-pair/alpha/sessions/20261023-0958-pair-r1",
+        "trees/running-pair/alpha/traces"
+      ],
+      "modes": {},
+      "state": "golden/running-pair.state.json",
+      "sessions": [
+        {
+          "repo": "alpha",
+          "plan": "20261023-0958-pair-r1",
+          "id": "20261023-0958-pair-r1.two.a1",
+          "after": 0,
+          "golden": "golden/running-pair.session.1.json"
+        },
+        {
+          "repo": "alpha",
+          "plan": "20261023-0958-pair-r1",
+          "id": "20261023-0958-pair-r1.one.review1.a1",
+          "after": 0,
+          "golden": "golden/running-pair.session.2.json"
+        },
+        {
+          "repo": "alpha",
+          "plan": "20261023-0958-pair-r1",
+          "id": "20261023-0958-pair-r1.one.a1",
+          "after": 1,
+          "golden": "golden/running-pair.session.3.json"
+        }
+      ]
+    },
+    {
+      "name": "finished-pass",
+      "message": null,
+      "repos": [
+        {
+          "name": "beta",
+          "dir": "trees/finished-pass/beta"
+        }
+      ],
+      "dirs": [
+        "trees/finished-pass",
+        "trees/finished-pass/beta",
+        "trees/finished-pass/beta/done",
+        "trees/finished-pass/beta/done/20261023-0900-pass-r1",
+        "trees/finished-pass/beta/inbox",
+        "trees/finished-pass/beta/running",
+        "trees/finished-pass/beta/sessions",
+        "trees/finished-pass/beta/sessions/20261023-0900-pass-r1",
+        "trees/finished-pass/beta/traces"
+      ],
+      "modes": {},
+      "state": "golden/finished-pass.state.json",
+      "sessions": [
+        {
+          "repo": "beta",
+          "plan": "20261023-0900-pass-r1",
+          "id": "20261023-0900-pass-r1.build.a1",
+          "after": 0,
+          "golden": "golden/finished-pass.session.1.json"
+        }
+      ]
+    },
+    {
+      "name": "failed-gate",
+      "message": null,
+      "repos": [
+        {
+          "name": "gamma",
+          "dir": "trees/failed-gate/gamma"
+        }
+      ],
+      "dirs": [
+        "trees/failed-gate",
+        "trees/failed-gate/gamma",
+        "trees/failed-gate/gamma/done",
+        "trees/failed-gate/gamma/done/20261023-0910-gate-r1",
+        "trees/failed-gate/gamma/inbox",
+        "trees/failed-gate/gamma/running",
+        "trees/failed-gate/gamma/sessions",
+        "trees/failed-gate/gamma/sessions/20261023-0910-gate-r1",
+        "trees/failed-gate/gamma/traces"
+      ],
+      "modes": {},
+      "state": "golden/failed-gate.state.json",
+      "sessions": [
+        {
+          "repo": "gamma",
+          "plan": "20261023-0910-gate-r1",
+          "id": "20261023-0910-gate-r1.one.a1",
+          "after": 0,
+          "golden": "golden/failed-gate.session.1.json"
+        }
+      ]
+    },
+    {
+      "name": "skipped-task",
+      "message": null,
+      "repos": [
+        {
+          "name": "delta",
+          "dir": "trees/skipped-task/delta"
+        }
+      ],
+      "dirs": [
+        "trees/skipped-task",
+        "trees/skipped-task/delta",
+        "trees/skipped-task/delta/done",
+        "trees/skipped-task/delta/done/20261023-0920-skip-r1",
+        "trees/skipped-task/delta/inbox",
+        "trees/skipped-task/delta/running",
+        "trees/skipped-task/delta/sessions",
+        "trees/skipped-task/delta/sessions/20261023-0920-skip-r1",
+        "trees/skipped-task/delta/traces"
+      ],
+      "modes": {},
+      "state": "golden/skipped-task.state.json",
+      "sessions": [
+        {
+          "repo": "delta",
+          "plan": "20261023-0920-skip-r1",
+          "id": "20261023-0920-skip-r1.first.a1",
+          "after": 0,
+          "golden": "golden/skipped-task.session.1.json"
+        }
+      ]
+    },
+    {
+      "name": "stalled-lane",
+      "message": null,
+      "repos": [
+        {
+          "name": "epsilon",
+          "dir": "trees/stalled-lane/epsilon"
+        }
+      ],
+      "dirs": [
+        "trees/stalled-lane",
+        "trees/stalled-lane/epsilon",
+        "trees/stalled-lane/epsilon/done",
+        "trees/stalled-lane/epsilon/inbox",
+        "trees/stalled-lane/epsilon/running",
+        "trees/stalled-lane/epsilon/sessions",
+        "trees/stalled-lane/epsilon/sessions/20261023-0930-stall-r1",
+        "trees/stalled-lane/epsilon/traces"
+      ],
+      "modes": {},
+      "state": "golden/stalled-lane.state.json",
+      "sessions": [
+        {
+          "repo": "epsilon",
+          "plan": "20261023-0930-stall-r1",
+          "id": "20261023-0930-stall-r1.slow.a1",
+          "after": 0,
+          "golden": "golden/stalled-lane.session.1.json"
+        }
+      ]
+    },
+    {
+      "name": "decider-effort-audit",
+      "message": null,
+      "repos": [
+        {
+          "name": "zeta",
+          "dir": "trees/decider-effort-audit/zeta"
+        }
+      ],
+      "dirs": [
+        "trees/decider-effort-audit",
+        "trees/decider-effort-audit/zeta",
+        "trees/decider-effort-audit/zeta/done",
+        "trees/decider-effort-audit/zeta/done/20261023-0940-decider-r1",
+        "trees/decider-effort-audit/zeta/inbox",
+        "trees/decider-effort-audit/zeta/running",
+        "trees/decider-effort-audit/zeta/sessions",
+        "trees/decider-effort-audit/zeta/sessions/20261023-0940-decider-r1",
+        "trees/decider-effort-audit/zeta/traces"
+      ],
+      "modes": {},
+      "state": "golden/decider-effort-audit.state.json",
+      "sessions": [
+        {
+          "repo": "zeta",
+          "plan": "20261023-0940-decider-r1",
+          "id": "20261023-0940-decider-r1.audited.a1",
+          "after": 0,
+          "golden": "golden/decider-effort-audit.session.1.json"
+        }
+      ]
+    },
+    {
+      "name": "retry-two-attempts",
+      "message": null,
+      "repos": [
+        {
+          "name": "eta",
+          "dir": "trees/retry-two-attempts/eta"
+        }
+      ],
+      "dirs": [
+        "trees/retry-two-attempts",
+        "trees/retry-two-attempts/eta",
+        "trees/retry-two-attempts/eta/done",
+        "trees/retry-two-attempts/eta/inbox",
+        "trees/retry-two-attempts/eta/running",
+        "trees/retry-two-attempts/eta/sessions",
+        "trees/retry-two-attempts/eta/sessions/20261023-0950-retry-r1",
+        "trees/retry-two-attempts/eta/traces"
+      ],
+      "modes": {},
+      "state": "golden/retry-two-attempts.state.json",
+      "sessions": [
+        {
+          "repo": "eta",
+          "plan": "20261023-0950-retry-r1",
+          "id": "20261023-0950-retry-r1.again.a1",
+          "after": 0,
+          "golden": "golden/retry-two-attempts.session.1.json"
+        },
+        {
+          "repo": "eta",
+          "plan": "20261023-0950-retry-r1",
+          "id": "20261023-0950-retry-r1.again.a2",
+          "after": 0,
+          "golden": "golden/retry-two-attempts.session.2.json"
+        }
+      ]
+    },
+    {
+      "name": "idle-and-active",
+      "message": null,
+      "repos": [
+        {
+          "name": "idle-new",
+          "dir": "trees/idle-and-active/idle-new"
+        },
+        {
+          "name": "active-old",
+          "dir": "trees/idle-and-active/active-old"
+        },
+        {
+          "name": "idle-old",
+          "dir": "trees/idle-and-active/idle-old"
+        },
+        {
+          "name": "active-new",
+          "dir": "trees/idle-and-active/active-new"
+        }
+      ],
+      "dirs": [
+        "trees/idle-and-active",
+        "trees/idle-and-active/active-new",
+        "trees/idle-and-active/active-new/done",
+        "trees/idle-and-active/active-new/inbox",
+        "trees/idle-and-active/active-new/running",
+        "trees/idle-and-active/active-new/sessions",
+        "trees/idle-and-active/active-new/traces",
+        "trees/idle-and-active/active-old",
+        "trees/idle-and-active/active-old/done",
+        "trees/idle-and-active/active-old/inbox",
+        "trees/idle-and-active/active-old/running",
+        "trees/idle-and-active/active-old/sessions",
+        "trees/idle-and-active/active-old/traces",
+        "trees/idle-and-active/idle-new",
+        "trees/idle-and-active/idle-new/done",
+        "trees/idle-and-active/idle-new/done/20261023-0945-idle-new-r1",
+        "trees/idle-and-active/idle-new/inbox",
+        "trees/idle-and-active/idle-new/running",
+        "trees/idle-and-active/idle-new/sessions",
+        "trees/idle-and-active/idle-new/sessions/20261023-0945-idle-new-r1",
+        "trees/idle-and-active/idle-new/traces",
+        "trees/idle-and-active/idle-old",
+        "trees/idle-and-active/idle-old/done",
+        "trees/idle-and-active/idle-old/done/20261023-0840-idle-old-r1",
+        "trees/idle-and-active/idle-old/inbox",
+        "trees/idle-and-active/idle-old/running",
+        "trees/idle-and-active/idle-old/sessions",
+        "trees/idle-and-active/idle-old/traces"
+      ],
+      "modes": {},
+      "state": "golden/idle-and-active.state.json",
+      "sessions": [
+        {
+          "repo": "idle-new",
+          "plan": "20261023-0945-idle-new-r1",
+          "id": "20261023-0945-idle-new-r1.note",
+          "after": 0,
+          "golden": "golden/idle-and-active.session.1.json"
+        }
+      ]
+    },
+    {
+      "name": "missing-folder",
+      "message": null,
+      "repos": [
+        {
+          "name": "gone",
+          "dir": "trees/missing-folder/absent"
+        }
+      ],
+      "dirs": [
+        "trees/missing-folder"
+      ],
+      "modes": {},
+      "state": "golden/missing-folder.state.json",
+      "sessions": []
+    },
+    {
+      "name": "unreadable-folder",
+      "message": null,
+      "repos": [
+        {
+          "name": "sealed",
+          "dir": "trees/unreadable-folder/sealed"
+        }
+      ],
+      "dirs": [
+        "trees/unreadable-folder",
+        "trees/unreadable-folder/sealed",
+        "trees/unreadable-folder/sealed/done",
+        "trees/unreadable-folder/sealed/inbox",
+        "trees/unreadable-folder/sealed/running",
+        "trees/unreadable-folder/sealed/sessions",
+        "trees/unreadable-folder/sealed/sessions/20261023-0900-sealed-r1",
+        "trees/unreadable-folder/sealed/traces"
+      ],
+      "modes": {
+        "trees/unreadable-folder/sealed": 0
+      },
+      "state": "golden/unreadable-folder.state.json",
+      "sessions": []
+    },
+    {
+      "name": "over-cap",
+      "message": "2 more repos ignored (limit 24)",
+      "repos": [
+        {
+          "name": "repo-01",
+          "dir": "trees/over-cap/plans"
+        },
+        {
+          "name": "repo-02",
+          "dir": "trees/over-cap/plans"
+        },
+        {
+          "name": "repo-03",
+          "dir": "trees/over-cap/plans"
+        },
+        {
+          "name": "repo-04",
+          "dir": "trees/over-cap/plans"
+        },
+        {
+          "name": "repo-05",
+          "dir": "trees/over-cap/plans"
+        },
+        {
+          "name": "repo-06",
+          "dir": "trees/over-cap/plans"
+        },
+        {
+          "name": "repo-07",
+          "dir": "trees/over-cap/plans"
+        },
+        {
+          "name": "repo-08",
+          "dir": "trees/over-cap/plans"
+        },
+        {
+          "name": "repo-09",
+          "dir": "trees/over-cap/plans"
+        },
+        {
+          "name": "repo-10",
+          "dir": "trees/over-cap/plans"
+        },
+        {
+          "name": "repo-11",
+          "dir": "trees/over-cap/plans"
+        },
+        {
+          "name": "repo-12",
+          "dir": "trees/over-cap/plans"
+        },
+        {
+          "name": "repo-13",
+          "dir": "trees/over-cap/plans"
+        },
+        {
+          "name": "repo-14",
+          "dir": "trees/over-cap/plans"
+        },
+        {
+          "name": "repo-15",
+          "dir": "trees/over-cap/plans"
+        },
+        {
+          "name": "repo-16",
+          "dir": "trees/over-cap/plans"
+        },
+        {
+          "name": "repo-17",
+          "dir": "trees/over-cap/plans"
+        },
+        {
+          "name": "repo-18",
+          "dir": "trees/over-cap/plans"
+        },
+        {
+          "name": "repo-19",
+          "dir": "trees/over-cap/plans"
+        },
+        {
+          "name": "repo-20",
+          "dir": "trees/over-cap/plans"
+        },
+        {
+          "name": "repo-21",
+          "dir": "trees/over-cap/plans"
+        },
+        {
+          "name": "repo-22",
+          "dir": "trees/over-cap/plans"
+        },
+        {
+          "name": "repo-23",
+          "dir": "trees/over-cap/plans"
+        },
+        {
+          "name": "repo-24",
+          "dir": "trees/over-cap/plans"
+        }
+      ],
+      "dirs": [
+        "trees/over-cap",
+        "trees/over-cap/plans",
+        "trees/over-cap/plans/done",
+        "trees/over-cap/plans/done/20261023-0905-over-cap-r1",
+        "trees/over-cap/plans/inbox",
+        "trees/over-cap/plans/running",
+        "trees/over-cap/plans/sessions",
+        "trees/over-cap/plans/sessions/20261023-0905-over-cap-r1",
+        "trees/over-cap/plans/traces"
+      ],
+      "modes": {},
+      "state": "golden/over-cap.state.json",
+      "sessions": [
+        {
+          "repo": "repo-01",
+          "plan": "20261023-0905-over-cap-r1",
+          "id": "20261023-0905-over-cap-r1.extra",
+          "after": 0,
+          "golden": "golden/over-cap.session.1.json"
+        }
+      ]
+    },
+    {
+      "name": "transcript-edge",
+      "message": null,
+      "repos": [
+        {
+          "name": "theta",
+          "dir": "trees/transcript-edge/theta"
+        }
+      ],
+      "dirs": [
+        "trees/transcript-edge",
+        "trees/transcript-edge/theta",
+        "trees/transcript-edge/theta/done",
+        "trees/transcript-edge/theta/done/20261023-1000-edge-r1",
+        "trees/transcript-edge/theta/inbox",
+        "trees/transcript-edge/theta/running",
+        "trees/transcript-edge/theta/sessions",
+        "trees/transcript-edge/theta/sessions/20261023-1000-edge-r1",
+        "trees/transcript-edge/theta/traces"
+      ],
+      "modes": {},
+      "state": "golden/transcript-edge.state.json",
+      "sessions": [
+        {
+          "repo": "theta",
+          "plan": "20261023-1000-edge-r1",
+          "id": "20261023-1000-edge-r1.edge.a1",
+          "after": 0,
+          "golden": "golden/transcript-edge.session.1.json"
+        },
+        {
+          "repo": "theta",
+          "plan": "20261023-1000-edge-r1",
+          "id": "20261023-1000-edge-r1.edge.a1",
+          "after": 3,
+          "golden": "golden/transcript-edge.session.2.json"
+        },
+        {
+          "repo": "theta",
+          "plan": "20261023-1000-edge-r1",
+          "id": "20261023-1000-edge-r1.edge.a1",
+          "after": 9,
+          "golden": "golden/transcript-edge.session.3.json"
+        }
+      ]
+    }
+  ],
+  "mtimes": {
+    "trees": 1792742700000,
+    "trees/decider-effort-audit": 1792742639000,
+    "trees/decider-effort-audit/zeta": 1792742578000,
+    "trees/decider-effort-audit/zeta/done": 1792742517000,
+    "trees/decider-effort-audit/zeta/done/20261023-0940-decider-r1": 1792742456000,
+    "trees/decider-effort-audit/zeta/done/20261023-0940-decider-r1/plan.md": 1792742395000,
+    "trees/decider-effort-audit/zeta/inbox": 1792742334000,
+    "trees/decider-effort-audit/zeta/running": 1792742273000,
+    "trees/decider-effort-audit/zeta/sessions": 1792742212000,
+    "trees/decider-effort-audit/zeta/sessions/20261023-0940-decider-r1": 1792742151000,
+    "trees/decider-effort-audit/zeta/sessions/20261023-0940-decider-r1/2026-10-22T18-02-28-549Z_20261023-0940-decider-r1.audited.a1.jsonl": 1792749827000,
+    "trees/decider-effort-audit/zeta/sessions/20261023-0940-decider-r1/2026-10-22T18-02-28-549Z_20261023-0940-decider-r1.plain.a1.jsonl": 1792749824000,
+    "trees/decider-effort-audit/zeta/traces": 1792742090000,
+    "trees/decider-effort-audit/zeta/traces/20261023-0940-decider-r1.jsonl": 1792742029000,
+    "trees/failed-gate": 1792741968000,
+    "trees/failed-gate/gamma": 1792741907000,
+    "trees/failed-gate/gamma/done": 1792741846000,
+    "trees/failed-gate/gamma/done/20261023-0910-gate-r1": 1792741785000,
+    "trees/failed-gate/gamma/done/20261023-0910-gate-r1/plan.md": 1792741724000,
+    "trees/failed-gate/gamma/inbox": 1792741663000,
+    "trees/failed-gate/gamma/running": 1792741602000,
+    "trees/failed-gate/gamma/sessions": 1792741541000,
+    "trees/failed-gate/gamma/sessions/20261023-0910-gate-r1": 1792741480000,
+    "trees/failed-gate/gamma/sessions/20261023-0910-gate-r1/2026-10-22T18-02-28-549Z_20261023-0910-gate-r1.one.a1.jsonl": 1792749839000,
+    "trees/failed-gate/gamma/sessions/20261023-0910-gate-r1/2026-10-22T18-02-28-549Z_20261023-0910-gate-r1.two.a1.jsonl": 1792749836000,
+    "trees/failed-gate/gamma/traces": 1792741419000,
+    "trees/failed-gate/gamma/traces/20261023-0910-gate-r1.jsonl": 1792741358000,
+    "trees/finished-pass": 1792741297000,
+    "trees/finished-pass/beta": 1792741236000,
+    "trees/finished-pass/beta/done": 1792741175000,
+    "trees/finished-pass/beta/done/20261023-0900-pass-r1": 1792741114000,
+    "trees/finished-pass/beta/done/20261023-0900-pass-r1/plan.md": 1792741053000,
+    "trees/finished-pass/beta/inbox": 1792740992000,
+    "trees/finished-pass/beta/running": 1792740931000,
+    "trees/finished-pass/beta/sessions": 1792740870000,
+    "trees/finished-pass/beta/sessions/20261023-0900-pass-r1": 1792740809000,
+    "trees/finished-pass/beta/sessions/20261023-0900-pass-r1/2026-10-22T18-02-28-549Z_20261023-0900-pass-r1.build.a1.jsonl": 1792749848000,
+    "trees/finished-pass/beta/sessions/20261023-0900-pass-r1/2026-10-22T18-02-28-549Z_20261023-0900-pass-r1.build.review1.a1.jsonl": 1792749845000,
+    "trees/finished-pass/beta/sessions/20261023-0900-pass-r1/2026-10-22T18-02-28-549Z_20261023-0900-pass-r1.lint.a1.jsonl": 1792749842000,
+    "trees/finished-pass/beta/traces": 1792740748000,
+    "trees/finished-pass/beta/traces/20261023-0900-pass-r1.jsonl": 1792740687000,
+    "trees/idle-and-active": 1792740626000,
+    "trees/idle-and-active/active-new": 1792740565000,
+    "trees/idle-and-active/active-new/done": 1792740504000,
+    "trees/idle-and-active/active-new/inbox": 1792740443000,
+    "trees/idle-and-active/active-new/running": 1792740382000,
+    "trees/idle-and-active/active-new/running/20261023-0930-active-new-r1.md": 1792740321000,
+    "trees/idle-and-active/active-new/sessions": 1792740260000,
+    "trees/idle-and-active/active-new/traces": 1792740199000,
+    "trees/idle-and-active/active-new/traces/20261023-0930-active-new-r1.jsonl": 1792740138000,
+    "trees/idle-and-active/active-old": 1792740077000,
+    "trees/idle-and-active/active-old/done": 1792740016000,
+    "trees/idle-and-active/active-old/inbox": 1792739955000,
+    "trees/idle-and-active/active-old/running": 1792739894000,
+    "trees/idle-and-active/active-old/running/20261023-0850-active-old-r1.md": 1792739833000,
+    "trees/idle-and-active/active-old/sessions": 1792739772000,
+    "trees/idle-and-active/active-old/traces": 1792739711000,
+    "trees/idle-and-active/active-old/traces/20261023-0850-active-old-r1.jsonl": 1792739650000,
+    "trees/idle-and-active/idle-new": 1792739589000,
+    "trees/idle-and-active/idle-new/done": 1792739528000,
+    "trees/idle-and-active/idle-new/done/20261023-0945-idle-new-r1": 1792739467000,
+    "trees/idle-and-active/idle-new/done/20261023-0945-idle-new-r1/plan.md": 1792739406000,
+    "trees/idle-and-active/idle-new/inbox": 1792739345000,
+    "trees/idle-and-active/idle-new/running": 1792739284000,
+    "trees/idle-and-active/idle-new/sessions": 1792739223000,
+    "trees/idle-and-active/idle-new/sessions/20261023-0945-idle-new-r1": 1792739162000,
+    "trees/idle-and-active/idle-new/sessions/20261023-0945-idle-new-r1/2026-10-22T18-02-28-549Z_20261023-0945-idle-new-r1.note.jsonl": 1792749815000,
+    "trees/idle-and-active/idle-new/traces": 1792739101000,
+    "trees/idle-and-active/idle-new/traces/20261023-0945-idle-new-r1.jsonl": 1792739040000,
+    "trees/idle-and-active/idle-old": 1792738979000,
+    "trees/idle-and-active/idle-old/done": 1792738918000,
+    "trees/idle-and-active/idle-old/done/20261023-0840-idle-old-r1": 1792738857000,
+    "trees/idle-and-active/idle-old/done/20261023-0840-idle-old-r1/plan.md": 1792738796000,
+    "trees/idle-and-active/idle-old/inbox": 1792738735000,
+    "trees/idle-and-active/idle-old/running": 1792738674000,
+    "trees/idle-and-active/idle-old/sessions": 1792738613000,
+    "trees/idle-and-active/idle-old/traces": 1792738552000,
+    "trees/idle-and-active/idle-old/traces/20261023-0840-idle-old-r1.jsonl": 1792738491000,
+    "trees/missing-folder": 1792738430000,
+    "trees/over-cap": 1792738369000,
+    "trees/over-cap/plans": 1792738308000,
+    "trees/over-cap/plans/done": 1792738247000,
+    "trees/over-cap/plans/done/20261023-0905-over-cap-r1": 1792738186000,
+    "trees/over-cap/plans/done/20261023-0905-over-cap-r1/plan.md": 1792738125000,
+    "trees/over-cap/plans/inbox": 1792738064000,
+    "trees/over-cap/plans/running": 1792738003000,
+    "trees/over-cap/plans/sessions": 1792737942000,
+    "trees/over-cap/plans/sessions/20261023-0905-over-cap-r1": 1792737881000,
+    "trees/over-cap/plans/sessions/20261023-0905-over-cap-r1/2026-10-22T18-02-28-549Z_20261023-0905-over-cap-r1.extra.jsonl": 1792749809000,
+    "trees/over-cap/plans/traces": 1792737820000,
+    "trees/over-cap/plans/traces/20261023-0905-over-cap-r1.jsonl": 1792737759000,
+    "trees/retry-two-attempts": 1792737698000,
+    "trees/retry-two-attempts/eta": 1792737637000,
+    "trees/retry-two-attempts/eta/done": 1792737576000,
+    "trees/retry-two-attempts/eta/inbox": 1792737515000,
+    "trees/retry-two-attempts/eta/running": 1792737454000,
+    "trees/retry-two-attempts/eta/running/20261023-0950-retry-r1.md": 1792737393000,
+    "trees/retry-two-attempts/eta/sessions": 1792737332000,
+    "trees/retry-two-attempts/eta/sessions/20261023-0950-retry-r1": 1792737271000,
+    "trees/retry-two-attempts/eta/sessions/20261023-0950-retry-r1/2026-10-22T18-02-28-549Z_20261023-0950-retry-r1.again.a1.jsonl": 1792749821000,
+    "trees/retry-two-attempts/eta/sessions/20261023-0950-retry-r1/2026-10-22T18-02-28-549Z_20261023-0950-retry-r1.again.a2.jsonl": 1792749818000,
+    "trees/retry-two-attempts/eta/traces": 1792737210000,
+    "trees/retry-two-attempts/eta/traces/20261023-0950-retry-r1.jsonl": 1792737149000,
+    "trees/running-pair": 1792737088000,
+    "trees/running-pair/alpha": 1792737027000,
+    "trees/running-pair/alpha/done": 1792736966000,
+    "trees/running-pair/alpha/inbox": 1792736905000,
+    "trees/running-pair/alpha/running": 1792736844000,
+    "trees/running-pair/alpha/running/20261023-0958-pair-r1.md": 1792736783000,
+    "trees/running-pair/alpha/sessions": 1792736722000,
+    "trees/running-pair/alpha/sessions/20261023-0958-pair-r1": 1792736661000,
+    "trees/running-pair/alpha/sessions/20261023-0958-pair-r1/2026-10-22T18-02-28-549Z_20261023-0958-pair-r1.one.a1.jsonl": 1792749860000,
+    "trees/running-pair/alpha/sessions/20261023-0958-pair-r1/2026-10-22T18-02-28-549Z_20261023-0958-pair-r1.one.a2.jsonl": 1792749857000,
+    "trees/running-pair/alpha/sessions/20261023-0958-pair-r1/2026-10-22T18-02-28-549Z_20261023-0958-pair-r1.one.review1.a1.jsonl": 1792749854000,
+    "trees/running-pair/alpha/sessions/20261023-0958-pair-r1/2026-10-22T18-02-28-549Z_20261023-0958-pair-r1.one.review2.a1.jsonl": 1792749851000,
+    "trees/running-pair/alpha/sessions/20261023-0958-pair-r1/2026-10-22T18-02-28-549Z_20261023-0958-pair-r1.two.a1.jsonl": 1792749895000,
+    "trees/running-pair/alpha/traces": 1792736600000,
+    "trees/running-pair/alpha/traces/20261023-0958-pair-r1.jsonl": 1792736539000,
+    "trees/skipped-task": 1792736478000,
+    "trees/skipped-task/delta": 1792736417000,
+    "trees/skipped-task/delta/done": 1792736356000,
+    "trees/skipped-task/delta/done/20261023-0920-skip-r1": 1792736295000,
+    "trees/skipped-task/delta/done/20261023-0920-skip-r1/plan.md": 1792736234000,
+    "trees/skipped-task/delta/inbox": 1792736173000,
+    "trees/skipped-task/delta/running": 1792736112000,
+    "trees/skipped-task/delta/sessions": 1792736051000,
+    "trees/skipped-task/delta/sessions/20261023-0920-skip-r1": 1792735990000,
+    "trees/skipped-task/delta/sessions/20261023-0920-skip-r1/2026-10-22T18-02-28-549Z_20261023-0920-skip-r1.first.a1.jsonl": 1792749833000,
+    "trees/skipped-task/delta/sessions/20261023-0920-skip-r1/2026-10-22T18-02-28-549Z_20261023-0920-skip-r1.first.review1.a1.jsonl": 1792749830000,
+    "trees/skipped-task/delta/traces": 1792735929000,
+    "trees/skipped-task/delta/traces/20261023-0920-skip-r1.jsonl": 1792735868000,
+    "trees/stalled-lane": 1792735807000,
+    "trees/stalled-lane/epsilon": 1792735746000,
+    "trees/stalled-lane/epsilon/done": 1792735685000,
+    "trees/stalled-lane/epsilon/inbox": 1792735624000,
+    "trees/stalled-lane/epsilon/running": 1792735563000,
+    "trees/stalled-lane/epsilon/running/20261023-0930-stall-r1.md": 1792735502000,
+    "trees/stalled-lane/epsilon/sessions": 1792735441000,
+    "trees/stalled-lane/epsilon/sessions/20261023-0930-stall-r1": 1792735380000,
+    "trees/stalled-lane/epsilon/sessions/20261023-0930-stall-r1/2026-10-22T18-02-28-549Z_20261023-0930-stall-r1.slow.a1.jsonl": 1792749780000,
+    "trees/stalled-lane/epsilon/traces": 1792735319000,
+    "trees/stalled-lane/epsilon/traces/20261023-0930-stall-r1.jsonl": 1792735258000,
+    "trees/transcript-edge": 1792735197000,
+    "trees/transcript-edge/theta": 1792735136000,
+    "trees/transcript-edge/theta/done": 1792735075000,
+    "trees/transcript-edge/theta/done/20261023-1000-edge-r1": 1792735014000,
+    "trees/transcript-edge/theta/done/20261023-1000-edge-r1/plan.md": 1792734953000,
+    "trees/transcript-edge/theta/inbox": 1792734892000,
+    "trees/transcript-edge/theta/running": 1792734831000,
+    "trees/transcript-edge/theta/sessions": 1792734770000,
+    "trees/transcript-edge/theta/sessions/20261023-1000-edge-r1": 1792734709000,
+    "trees/transcript-edge/theta/sessions/20261023-1000-edge-r1/2026-10-22T18-02-28-549Z_20261023-1000-edge-r1.edge.a1.jsonl": 1792749806000,
+    "trees/transcript-edge/theta/traces": 1792734648000,
+    "trees/transcript-edge/theta/traces/20261023-1000-edge-r1.jsonl": 1792734587000,
+    "trees/unreadable-folder": 1792734526000,
+    "trees/unreadable-folder/sealed": 1792734465000,
+    "trees/unreadable-folder/sealed/done": 1792734404000,
+    "trees/unreadable-folder/sealed/inbox": 1792734343000,
+    "trees/unreadable-folder/sealed/running": 1792734282000,
+    "trees/unreadable-folder/sealed/running/20261023-0900-sealed-r1.md": 1792734221000,
+    "trees/unreadable-folder/sealed/sessions": 1792734160000,
+    "trees/unreadable-folder/sealed/sessions/20261023-0900-sealed-r1": 1792734099000,
+    "trees/unreadable-folder/sealed/sessions/20261023-0900-sealed-r1/2026-10-22T18-02-28-549Z_20261023-0900-sealed-r1.hidden.a1.jsonl": 1792749812000,
+    "trees/unreadable-folder/sealed/traces": 1792734038000,
+    "trees/unreadable-folder/sealed/traces/20261023-0900-sealed-r1.jsonl": 1792733977000
+  }
+}

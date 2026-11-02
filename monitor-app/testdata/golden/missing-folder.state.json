@@ -1,0 +1,14 @@
+{
+  "repos": [
+    {
+      "name": "gone",
+      "active": false,
+      "plan": null,
+      "message": "No plans folder found",
+      "startedAt": null,
+      "lastActivity": null
+    }
+  ],
+  "message": null,
+  "now": "2026-10-23T10:05:00.000Z"
+}

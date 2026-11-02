@@ -1,0 +1,202 @@
+{
+  "repos": [
+    {
+      "name": "active-new",
+      "active": true,
+      "plan": {
+        "id": "20261023-0930-active-new-r1",
+        "trace": "20261023-0930-active-new-r1",
+        "round": 1,
+        "state": "running",
+        "gate": null,
+        "done": 0,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "live",
+              "attempts": [
+                {
+                  "id": "20261023-0930-active-new-r1.task.a1",
+                  "label": "a1",
+                  "state": "live",
+                  "model": null,
+                  "thinking": null,
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:30:00.000Z",
+      "lastActivity": "2026-10-23T09:30:00.000Z"
+    },
+    {
+      "name": "active-old",
+      "active": true,
+      "plan": {
+        "id": "20261023-0850-active-old-r1",
+        "trace": "20261023-0850-active-old-r1",
+        "round": 1,
+        "state": "running",
+        "gate": null,
+        "done": 0,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "live",
+              "attempts": [
+                {
+                  "id": "20261023-0850-active-old-r1.task.a1",
+                  "label": "a1",
+                  "state": "live",
+                  "model": null,
+                  "thinking": null,
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T08:50:00.000Z",
+      "lastActivity": "2026-10-23T08:50:00.000Z"
+    },
+    {
+      "name": "idle-new",
+      "active": false,
+      "plan": {
+        "id": "20261023-0945-idle-new-r1",
+        "trace": "20261023-0945-idle-new-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0945-idle-new-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": null,
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:40:00.000Z",
+      "lastActivity": "2026-10-23T09:45:00.000Z"
+    },
+    {
+      "name": "idle-old",
+      "active": false,
+      "plan": {
+        "id": "20261023-0840-idle-old-r1",
+        "trace": "20261023-0840-idle-old-r1",
+        "round": 1,
+        "state": "done",
+        "gate": null,
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "task",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-0840-idle-old-r1.task.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": null,
+                  "thinking": null,
+                  "startedAt": null,
+                  "elapsedS": null,
+                  "tokens": null,
+                  "cost": null,
+                  "lastTool": null,
+                  "error": null,
+                  "hasSession": false,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T09:20:00.000Z",
+      "lastActivity": "2026-10-23T09:21:00.000Z"
+    }
+  ],
+  "message": null,
+  "now": "2026-10-23T10:05:00.000Z"
+}

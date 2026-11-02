@@ -1,0 +1,2 @@
+{"ts":"2026-10-23T09:20:00.000Z","plan":"20261023-0840-idle-old-r1","kind":"task.start","actor":"worker","round":1,"task":"task","attempt":1,"v":1,"trace":"20261023-0840-idle-old-r1"}
+{"ts":"2026-10-23T09:21:00.000Z","plan":"20261023-0840-idle-old-r1","kind":"task.end","actor":"worker","round":1,"task":"task","attempt":1,"data":{"state":"done","ok":true},"v":1,"trace":"20261023-0840-idle-old-r1"}

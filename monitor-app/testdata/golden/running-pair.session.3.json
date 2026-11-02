@@ -1,0 +1,38 @@
+{
+  "id": "20261023-0958-pair-r1.one.a1",
+  "live": false,
+  "ended": true,
+  "entries": [
+    {
+      "line": 2,
+      "ts": "2026-10-23T09:00:00.000Z",
+      "kind": "note",
+      "text": "model: beam-free",
+      "collapsed": false,
+      "truncated": false,
+      "tool": null,
+      "isError": false
+    },
+    {
+      "line": 3,
+      "ts": "2026-10-23T09:00:00.000Z",
+      "kind": "user",
+      "text": "start the task",
+      "collapsed": true,
+      "truncated": false,
+      "tool": null,
+      "isError": false
+    },
+    {
+      "line": 4,
+      "ts": "2026-10-23T09:02:30.000Z",
+      "kind": "assistant",
+      "text": "first pass done",
+      "collapsed": false,
+      "truncated": false,
+      "tool": null,
+      "isError": false
+    }
+  ],
+  "next": 4
+}

@@ -1,0 +1,55 @@
+{
+  "repos": [
+    {
+      "name": "theta",
+      "active": false,
+      "plan": {
+        "id": "20261023-1000-edge-r1",
+        "trace": "20261023-1000-edge-r1",
+        "round": 1,
+        "state": "done",
+        "gate": "pass",
+        "done": 1,
+        "total": 1,
+        "tasks": [
+          {
+            "id": "edge",
+            "role": "implement",
+            "pair": null,
+            "dependsOn": [],
+            "waitsFor": [],
+            "skipped": false,
+            "implementer": {
+              "state": "done",
+              "attempts": [
+                {
+                  "id": "20261023-1000-edge-r1.edge.a1",
+                  "label": "a1",
+                  "state": "done",
+                  "model": "kimi-k2",
+                  "thinking": "high",
+                  "startedAt": "2026-10-23T10:00:00.000Z",
+                  "elapsedS": 40,
+                  "tokens": 690,
+                  "cost": 0.006,
+                  "lastTool": "bash echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                  "error": null,
+                  "hasSession": true,
+                  "review": null
+                }
+              ]
+            },
+            "reviewer": null,
+            "decider": null
+          }
+        ],
+        "audit": null
+      },
+      "message": null,
+      "startedAt": "2026-10-23T10:00:00.000Z",
+      "lastActivity": "2026-10-23T10:03:00.000Z"
+    }
+  ],
+  "message": null,
+  "now": "2026-10-23T10:05:00.000Z"
+}
