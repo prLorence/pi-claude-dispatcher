@@ -17,7 +17,7 @@ const STATUS_VALUES = ["active", "any"];
 const EVAL_FILE = path.join("eval", "golden.json");
 const BIN_DIR = "bin";
 const BIN_NAME = "vault-search";
-const BUILD_HINT = "Fix: go build -o dispatch-plan/bin/vault-search ./dispatch-plan/vault-search";
+const BUILD_HINT = "Fix: go build -C dispatch-plan/vault-search -o ../bin/vault-search .";
 
 function errorText(error) {
 	return String(error?.message ?? error);

@@ -333,7 +333,7 @@ test("setup warns once and still succeeds when the search binary is not built", 
 		assert.equal(await runSetup({ path: vault }, ctx), 0, text() + errText());
 		assert.match(
 			errText(),
-			/warning: vault-search is not built \(search is optional\)\. Fix: go build -o dispatch-plan\/bin\/vault-search \.\/dispatch-plan\/vault-search/,
+			/warning: vault-search is not built \(search is optional\)\. Fix: go build -C dispatch-plan\/vault-search -o \.\.\/bin\/vault-search/,
 		);
 		assert.equal(fs.existsSync(path.join(home, ".claude", "skills", "dispatch-plan", "bin", "vault-search")), false);
 		assert.doesNotMatch(text(), /^vault-search /m);
@@ -351,14 +351,14 @@ test("doctor reports the search binary as present, missing and failing", () =>
 		await runDoctor({}, missingRun.ctx);
 		assert.match(
 			missingRun.text(),
-			/^optional fail vault-search: vault-search is not built \(search is optional\)\. Fix: go build -o dispatch-plan\/bin\/vault-search \.\/dispatch-plan\/vault-search$/m,
+			/^optional fail vault-search: vault-search is not built \(search is optional\)\. Fix: go build -C dispatch-plan\/vault-search -o \.\.\/bin\/vault-search \.$/m,
 		);
 
 		const failing = await prepareSearchMachine(dir, { binary: true });
 		writeExecutable(failing.bin, "#!/usr/bin/env node\nconsole.error(\"boom\");\nprocess.exit(1);\n");
 		const failingRun = makeCtx({ home: failing.home, env: failing.env, vaultPath: failing.vault, harnessRoot: failing.harness });
 		await runDoctor({}, failingRun.ctx);
-		assert.match(failingRun.text(), /^optional fail vault-search: .* failed --version: boom\. Fix: go build -o dispatch-plan\/bin\/vault-search/m);
+		assert.match(failingRun.text(), /^optional fail vault-search: .* failed --version: boom\. Fix: go build -C dispatch-plan\/vault-search -o \.\.\/bin\/vault-search/m);
 	}));
 
 

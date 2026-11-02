@@ -194,10 +194,10 @@ node ~/.claude/skills/dispatch-plan/vault.mjs search "<query>" [--repo <slug>] [
 The binary is the Go program in `dispatch-plan/vault-search/` (standard library only, no cgo), built into `dispatch-plan/bin/vault-search`:
 
 ```bash
-go build -o dispatch-plan/bin/vault-search ./dispatch-plan/vault-search
+go build -C dispatch-plan/vault-search -o ../bin/vault-search .
 ```
 
-`vault.mjs search` runs `$VAULT_SEARCH_BIN` when it is set, otherwise the `bin/vault-search` next to it. A missing binary exits 1 with `vault-search not found at <path>. Fix: go build -o dispatch-plan/bin/vault-search ./dispatch-plan/vault-search`; a binary that fails or prints unparsable JSON exits 1 with its stderr and the same hint. An empty query, a bad `--status` or a non-positive `--limit` exits 2, and no hits exits 0.
+`vault.mjs search` runs `$VAULT_SEARCH_BIN` when it is set, otherwise the `bin/vault-search` next to it. A missing binary exits 1 with `vault-search not found at <path>. Fix: go build -C dispatch-plan/vault-search -o ../bin/vault-search .`; a binary that fails or prints unparsable JSON exits 1 with its stderr and the same hint. An empty query, a bad `--status` or a non-positive `--limit` exits 2, and no hits exits 0.
 
 With `--trace <T> --root <repo root>` the command appends a `vault.search` event with `query_len`, `results`, `all`, `status`, `include_work` and `limit`, plus `query` only in a `full` repo.
 

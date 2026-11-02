@@ -8,7 +8,7 @@ import test from "node:test";
 
 const cli = path.join(import.meta.dirname, "vault.mjs");
 const dispatcher = path.resolve(import.meta.dirname, "..", "pi-plan-dispatch");
-const BUILD_HINT = "Fix: go build -o dispatch-plan/bin/vault-search ./dispatch-plan/vault-search";
+const BUILD_HINT = "Fix: go build -C dispatch-plan/vault-search -o ../bin/vault-search .";
 
 const FAKE_BIN = `#!/usr/bin/env node
 import * as fs from "node:fs";
@@ -454,3 +454,31 @@ test(
 		assert.equal(stats.status, 0, stats.stderr);
 	}),
 );
+
+test("the documented build command builds the real vault-search binary", (t) => {
+	const probe = spawnSync("go", ["version"], { encoding: "utf8" });
+	if (probe.error || probe.status !== 0) {
+		t.skip("go is not on the PATH, so the real vault-search build cannot run here");
+		return;
+	}
+	const repoRoot = path.resolve(import.meta.dirname, "..");
+	const temp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "vault-search-build-")));
+	try {
+		const binary = path.join(temp, "vault-search");
+		const build = spawnSync(
+			"go",
+			["build", "-C", "dispatch-plan/vault-search", "-o", binary, "."],
+			{ cwd: repoRoot, env: process.env, encoding: "utf8", timeout: 120_000 },
+		);
+		assert.equal(build.status, 0, `${build.stdout ?? ""}\n${build.stderr ?? ""}`);
+		assert.equal(fs.existsSync(binary), true);
+
+		const version = spawnSync(binary, ["--version"], { encoding: "utf8", timeout: 30_000 });
+		assert.equal(version.status, 0, version.stderr);
+		assert.match(version.stdout, /^vault-search /);
+
+		assert.ok(BUILD_HINT.includes("go build -C dispatch-plan/vault-search -o ../bin/vault-search ."), BUILD_HINT);
+	} finally {
+		fs.rmSync(temp, { recursive: true, force: true });
+	}
+});

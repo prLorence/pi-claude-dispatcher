@@ -43,7 +43,7 @@ node dispatch-plan/vault.mjs init            # first machine only
 node dispatch-plan/vault.mjs setup --path <vault>
 
 # 7. The search binary, needed by `vault search` and the recall line of `stats`
-go build -o dispatch-plan/bin/vault-search ./dispatch-plan/vault-search
+go build -C dispatch-plan/vault-search -o ../bin/vault-search .
 mkdir -p ~/.claude/skills/dispatch-plan/bin && cp dispatch-plan/bin/vault-search ~/.claude/skills/dispatch-plan/bin/
 ```
 

@@ -362,7 +362,7 @@ function installedSearchBinary(home) {
 	return path.join(home, ".claude", "skills", "dispatch-plan", "bin", "vault-search");
 }
 
-const SEARCH_BUILD_FIX = "Fix: go build -o dispatch-plan/bin/vault-search ./dispatch-plan/vault-search";
+const SEARCH_BUILD_FIX = "Fix: go build -C dispatch-plan/vault-search -o ../bin/vault-search .";
 
 /** Report the installed binary's version when setup copied it, or warn once when it is missing. */
 function reportSearchBinary(ctx, harnessRoot, home) {

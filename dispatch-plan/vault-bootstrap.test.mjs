@@ -48,7 +48,7 @@ function fakeGo(parent, exitCode = 0) {
 	const bin = path.join(parent, `fake-go-${exitCode}`);
 	fs.mkdirSync(bin, { recursive: true });
 	const script = path.join(bin, "go");
-	fs.writeFileSync(script, `#!/bin/sh\necho "fake go build $*"\n${exitCode === 0 ? "" : `exit ${exitCode}\n`}`);
+	fs.writeFileSync(script, `#!/bin/sh\necho "fake go $*"\n${exitCode === 0 ? "" : `exit ${exitCode}\n`}`);
 	fs.chmodSync(script, 0o755);
 	return bin;
 }
@@ -175,6 +175,7 @@ test("bootstrap builds vault-search when go is on the PATH", () =>
 		const output = `${result.stdout}\n${result.stderr}`;
 		assert.equal(result.status, 0, output);
 		assert.match(result.stdout, /fake go build/);
+		assert.ok(result.stdout.includes("fake go build -C dispatch-plan/vault-search -o ../bin/vault-search ."), result.stdout);
 		assert.doesNotMatch(output, /bootstrap: warning: could not build vault-search/);
 	}));
 

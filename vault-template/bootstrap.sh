@@ -31,7 +31,7 @@ fi
 
 # Search is optional: a missing or broken Go build only warns.
 if command -v go >/dev/null 2>&1; then
-	if ! (cd "$harness" && go build -o dispatch-plan/bin/vault-search ./dispatch-plan/vault-search); then
+	if ! (cd "$harness" && go build -C dispatch-plan/vault-search -o ../bin/vault-search .); then
 		echo "bootstrap: warning: could not build vault-search, so search will be unavailable" >&2
 	fi
 else
