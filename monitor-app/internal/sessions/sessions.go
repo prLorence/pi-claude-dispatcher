@@ -8,6 +8,7 @@
 package sessions
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -30,6 +31,14 @@ const (
 )
 
 const truncationNote = "… [truncated]"
+
+// Agent session files are streamed, never loaded whole: a session header line
+// is at most headerMaxBytes and any other line over agentLineMaxBytes is
+// skipped.
+const (
+	headerMaxBytes    = 1 << 20
+	agentLineMaxBytes = 8 << 20
+)
 
 var pathKeys = []string{"path", "file_path", "filePath", "file"}
 
@@ -199,7 +208,208 @@ func entry(line int, ts *string, kind model.EntryKind, text string) model.Entry 
 	}
 }
 
-func messageEntries(value obj, line int, ts *string) []model.Entry {
+// toolCallInfo is what the block builder needs to know about a tool call that
+// may be on either side of the paging line: its name and the path its
+// arguments name.
+type toolCallInfo struct {
+	name string
+	path *string
+}
+
+// collectToolCalls indexes every tool call of the complete lines by its id,
+// including the calls at or before after, so a result is still matched with a
+// call that was already shown.
+func collectToolCalls(lines []string) map[string]toolCallInfo {
+	calls := make(map[string]toolCallInfo)
+	for _, raw := range lines {
+		value, ok := parseObject(raw)
+		if !ok {
+			continue
+		}
+		if kind, _ := stringField(value, "type"); kind != "message" {
+			continue
+		}
+		msg, ok := asObject(value["message"])
+		if !ok {
+			continue
+		}
+		if role, _ := stringField(msg, "role"); role != "assistant" {
+			continue
+		}
+		parts, ok := asArray(msg["content"])
+		if !ok {
+			continue
+		}
+		for _, part := range parts {
+			typed, ok := asObject(part)
+			if !ok {
+				continue
+			}
+			if kind, _ := stringField(typed, "type"); kind != "toolCall" {
+				continue
+			}
+			id, ok := stringField(typed, "id")
+			if !ok || id == "" {
+				continue
+			}
+			name, _ := stringField(typed, "name")
+			info := toolCallInfo{name: name}
+			if args, ok := asObject(typed["arguments"]); ok {
+				info.path = firstPath(args)
+			}
+			calls[id] = info
+		}
+	}
+	return calls
+}
+
+// editPathMarkers are the leading markers an omp edit input puts in front of
+// the line that names the edited file.
+var editPathMarkers = []string{"*** ", "--- ", "+++ ", "@@ "}
+
+// editInputPath returns the path named by the first non-empty line of an omp
+// edit input, or nil when that line does not name one.
+func editInputPath(input string) *string {
+	for _, line := range strings.Split(input, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		rest := line
+		marked := false
+		for _, marker := range editPathMarkers {
+			if strings.HasPrefix(rest, marker) {
+				rest = rest[len(marker):]
+				marked = true
+				break
+			}
+		}
+		if !marked || strings.ContainsRune(rest, ' ') || !fileSuffix(rest) {
+			return nil
+		}
+		return &rest
+	}
+	return nil
+}
+
+// fileSuffix reports whether path ends in a dot and 1 to 8 letters or digits.
+func fileSuffix(path string) bool {
+	dot := strings.LastIndexByte(path, '.')
+	if dot <= 0 || dot == len(path)-1 {
+		return false
+	}
+	ext := path[dot+1:]
+	if len(ext) > 8 {
+		return false
+	}
+	for _, r := range ext {
+		letter := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
+		digit := r >= '0' && r <= '9'
+		if !letter && !digit {
+			return false
+		}
+	}
+	return true
+}
+
+// prefixedLines splits text into lines and prefixes each one, so a block
+// shows old lines with - and new lines with +.
+func prefixedLines(text, prefix string) []string {
+	if text == "" {
+		return nil
+	}
+	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+	for index := range lines {
+		lines[index] = prefix + lines[index]
+	}
+	return lines
+}
+
+// editDiffText builds the diff text of a Pi edit call: every old line
+// prefixed -, every new line prefixed +, and one @@ line between edits.
+func editDiffText(edits []json.RawMessage) string {
+	lines := make([]string, 0, len(edits))
+	first := true
+	for _, raw := range edits {
+		edit, ok := asObject(raw)
+		if !ok {
+			continue
+		}
+		if !first {
+			lines = append(lines, "@@")
+		}
+		first = false
+		oldText, _ := stringField(edit, "oldText")
+		newText, _ := stringField(edit, "newText")
+		lines = append(lines, prefixedLines(oldText, "-")...)
+		lines = append(lines, prefixedLines(newText, "+")...)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// editCode builds the diff block of an edit call: a Pi call carries an edits
+// array, an omp call a single input string.
+func editCode(args obj) *model.CodeBlock {
+	if edits, ok := asArray(args["edits"]); ok {
+		text, _ := capText(editDiffText(edits), ToolArgsCap)
+		return &model.CodeBlock{Kind: "diff", Path: firstPath(args), Text: text}
+	}
+	if input, ok := stringField(args, "input"); ok {
+		text, _ := capText(input, ToolArgsCap)
+		return &model.CodeBlock{Kind: "diff", Path: editInputPath(input), Text: text}
+	}
+	return nil
+}
+
+// callCode builds the block a tool call shows, or nil when the tool has none.
+// Only the call side tools are built here; a read result is built from its
+// call by resultCode.
+func callCode(name string, rawArgs json.RawMessage) *model.CodeBlock {
+	args, ok := asObject(rawArgs)
+	if !ok {
+		return nil
+	}
+	switch name {
+	case "edit":
+		return editCode(args)
+	case "write":
+		content, ok := stringField(args, "content")
+		if !ok {
+			return nil
+		}
+		text, _ := capText(content, ToolArgsCap)
+		return &model.CodeBlock{Kind: "file", Path: firstPath(args), Text: text}
+	case "bash":
+		command, ok := stringField(args, "command")
+		if !ok {
+			return nil
+		}
+		text, _ := capText(command, ToolArgsCap)
+		return &model.CodeBlock{Kind: "command", Path: nil, Text: text}
+	default:
+		return nil
+	}
+}
+
+// resultCode builds the file block a successful read result shows from the
+// path of its call. An error result, a result whose call is missing and a
+// call that names no path give nil.
+func resultCode(msg obj, isError bool, calls map[string]toolCallInfo) *model.CodeBlock {
+	if isError {
+		return nil
+	}
+	id, ok := stringField(msg, "toolCallId")
+	if !ok {
+		return nil
+	}
+	call, ok := calls[id]
+	if !ok || call.name != "read" || call.path == nil {
+		return nil
+	}
+	text, _ := capText(textParts(msg["content"]), ToolResultCap)
+	return &model.CodeBlock{Kind: "file", Path: call.path, Text: text}
+}
+
+func messageEntries(value obj, line int, ts *string, calls map[string]toolCallInfo) []model.Entry {
 	rawMessage, ok := value["message"]
 	if !ok {
 		return []model.Entry{}
@@ -259,6 +469,7 @@ func messageEntries(value obj, line int, ts *string) []model.Entry {
 				toolCall := entry(line, ts, "tool_call", name+" "+args)
 				toolCall.Tool = &model.EntryTool{Name: name, Args: args}
 				toolCall.Text, toolCall.Truncated = capText(toolCall.Text, ToolArgsCap)
+				toolCall.Code = callCode(name, typed["arguments"])
 				entries = append(entries, toolCall)
 			}
 		}
@@ -273,13 +484,28 @@ func messageEntries(value obj, line int, ts *string) []model.Entry {
 		if raw, ok := msg["isError"]; ok {
 			result.IsError = string(bytes.TrimSpace(raw)) == "true"
 		}
+		result.Code = resultCode(msg, result.IsError, calls)
 		return []model.Entry{result}
+	}
+
+	// omp sends developer instructions and file mentions as their own message
+	// roles; they carry no usage, so they are shown as collapsed notes.
+	if role == "developer" {
+		note := entry(line, ts, "note", "developer message")
+		note.Collapsed = true
+		return []model.Entry{note}
+	}
+
+	if role == "fileMention" {
+		note := entry(line, ts, "note", "file mention")
+		note.Collapsed = true
+		return []model.Entry{note}
 	}
 
 	return []model.Entry{}
 }
 
-func lineEntries(value obj, line int) []model.Entry {
+func lineEntries(value obj, line int, calls map[string]toolCallInfo) []model.Entry {
 	ts := timestampOf(value)
 	kind, _ := stringField(value, "type")
 
@@ -293,7 +519,7 @@ func lineEntries(value obj, line int) []model.Entry {
 		level, _ := stringField(value, "thinkingLevel")
 		return []model.Entry{entry(line, ts, "note", "thinking: "+level)}
 	case "message":
-		return messageEntries(value, line, ts)
+		return messageEntries(value, line, ts, calls)
 	default:
 		return []model.Entry{}
 	}
@@ -303,9 +529,11 @@ func lineEntries(value obj, line int) []model.Entry {
 // number after and returns the entries plus the line number the next call
 // should start after.
 func ParseSessionLines(text string, after int) ([]model.Entry, int) {
+	lines := completeLines(text)
+	calls := collectToolCalls(lines)
 	entries := make([]model.Entry, 0)
 	next := after
-	for index, raw := range completeLines(text) {
+	for index, raw := range lines {
 		line := index + 1
 		if line <= after {
 			continue
@@ -315,7 +543,7 @@ func ParseSessionLines(text string, after int) ([]model.Entry, int) {
 		if !ok {
 			continue
 		}
-		entries = append(entries, lineEntries(value, line)...)
+		entries = append(entries, lineEntries(value, line, calls)...)
 	}
 	return entries, next
 }
@@ -588,6 +816,176 @@ func numberField(value obj, key string) (float64, bool) {
 	return number, true
 }
 
+// SessionHeader is the first line of an agent session file: its id, working
+// folder and title. Missing keys are empty strings.
+type SessionHeader struct {
+	ID    string
+	Cwd   string
+	Title string
+}
+
+// AgentInfo is the summary of an agent session that the Agents list shows: the
+// header, the latest model and the first user prompt, already cut to 80 UTF-16
+// units. Title falls back to FirstPrompt when the header has no title.
+type AgentInfo struct {
+	SessionHeader
+	Model       *string
+	FirstPrompt string
+}
+
+// readBoundedLine reads the next line (the newline and an optional carriage
+// return are stripped) without keeping more than limit bytes of it. It returns
+// ok false with a nil error when the line was longer than limit and has been
+// dropped, and io.EOF when there are no more bytes. A final line without a
+// newline still counts as a line.
+func readBoundedLine(reader *bufio.Reader, limit int) (string, bool, error) {
+	var buffer []byte
+	tooLong := false
+	for {
+		chunk, err := reader.ReadSlice('\n')
+		if !tooLong {
+			if len(buffer)+len(chunk) > limit+1 {
+				tooLong = true
+				buffer = nil
+			} else {
+				buffer = append(buffer, chunk...)
+			}
+		}
+		switch err {
+		case nil:
+			if tooLong {
+				return "", false, nil
+			}
+			line := string(buffer)
+			line = strings.TrimSuffix(line, "\n")
+			line = strings.TrimSuffix(line, "\r")
+			return line, true, nil
+		case bufio.ErrBufferFull:
+			continue
+		case io.EOF:
+			if tooLong {
+				return "", false, nil
+			}
+			if len(buffer) == 0 {
+				return "", false, io.EOF
+			}
+			return strings.TrimSuffix(string(buffer), "\r"), true, nil
+		default:
+			return "", false, err
+		}
+	}
+}
+
+// ReadSessionHeader reads the first line of a session file and returns its
+// header when that line is a `session` object. It never reads past the first
+// line, so invalid JSON after a valid header does not matter. A missing or
+// empty file, a first line that is not a `session` object, or a first line
+// over 1 MB gives false.
+func ReadSessionHeader(file string) (SessionHeader, bool) {
+	var header SessionHeader
+	handle, err := os.Open(file)
+	if err != nil {
+		return header, false
+	}
+	defer handle.Close()
+
+	line, ok, err := readBoundedLine(bufio.NewReaderSize(handle, 64*1024), headerMaxBytes)
+	if err != nil || !ok {
+		return header, false
+	}
+	value, ok := parseObject(line)
+	if !ok {
+		return header, false
+	}
+	if kind, _ := stringField(value, "type"); kind != "session" {
+		return header, false
+	}
+	header.ID, _ = stringField(value, "id")
+	header.Cwd, _ = stringField(value, "cwd")
+	header.Title, _ = stringField(value, "title")
+	return header, true
+}
+
+// ReadAgentInfo reads the header of a session file and, streaming the rest of
+// it one bounded line at a time, its latest model (a `model_change` modelId,
+// else the latest assistant message model) and its first user prompt. It is
+// only meant to be called for files that are already listed, and it never
+// loads the whole file at once.
+func ReadAgentInfo(file string) (AgentInfo, bool) {
+	var info AgentInfo
+	header, ok := ReadSessionHeader(file)
+	if !ok {
+		return info, false
+	}
+	info.SessionHeader = header
+
+	handle, err := os.Open(file)
+	if err != nil {
+		return info, false
+	}
+	defer handle.Close()
+	reader := bufio.NewReaderSize(handle, 64*1024)
+
+	// Drop the header line, which the call above already read.
+	if _, ok, err := readBoundedLine(reader, headerMaxBytes); err != nil || !ok {
+		return info, true
+	}
+
+	var lastModelChange *string
+	var lastAssistantModel *string
+	for {
+		line, ok, err := readBoundedLine(reader, agentLineMaxBytes)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			break
+		}
+		if !ok {
+			continue
+		}
+		value, ok := parseObject(line)
+		if !ok {
+			continue
+		}
+		kind, _ := stringField(value, "type")
+		switch kind {
+		case "model_change":
+			if modelID, ok := stringField(value, "modelId"); ok {
+				lastModelChange = &modelID
+			}
+		case "message":
+			msg, ok := asObject(value["message"])
+			if !ok {
+				continue
+			}
+			role, _ := stringField(msg, "role")
+			switch role {
+			case "assistant":
+				if modelID, ok := stringField(msg, "model"); ok {
+					lastAssistantModel = &modelID
+				}
+			case "user":
+				if info.FirstPrompt == "" {
+					if text := textParts(msg["content"]); text != "" {
+						info.FirstPrompt = cutUnits(text, 80)
+					}
+				}
+			}
+		}
+	}
+
+	if lastModelChange != nil {
+		info.Model = lastModelChange
+	} else {
+		info.Model = lastAssistantModel
+	}
+	if info.Title == "" {
+		info.Title = info.FirstPrompt
+	}
+	return info, true
+}
+
 // SummarizeSession summarises one session file. An empty file name is the
 // TypeScript null: a session that has no file.
 func SummarizeSession(file string) SessionSummary {
@@ -615,6 +1013,7 @@ func SummarizeSession(file string) SessionSummary {
 
 	var lastAssistant obj
 	var lastMessageRole *string
+	var lastAssistantModel *string
 	var tokens *float64
 	var cost *float64
 
@@ -662,6 +1061,9 @@ func SummarizeSession(file string) SessionSummary {
 		}
 
 		lastAssistant = msg
+		if modelID, ok := stringField(msg, "model"); ok {
+			lastAssistantModel = &modelID
+		}
 		messageTokens, messageCost := usageNumbers(msg)
 		if messageTokens != nil {
 			total := *messageTokens
@@ -709,6 +1111,9 @@ func SummarizeSession(file string) SessionSummary {
 		*summary.StopReason != "toolUse"
 	summary.Tokens = tokens
 	summary.Cost = cost
+	if summary.Model == nil {
+		summary.Model = lastAssistantModel
+	}
 	if summary.StopReason != nil && *summary.StopReason == "error" && lastAssistant != nil {
 		if errorMessage, ok := stringField(lastAssistant, "errorMessage"); ok {
 			summary.Error = &errorMessage

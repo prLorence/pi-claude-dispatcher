@@ -1,0 +1,217 @@
+/* Code blocks and diff rows. The app's style.css defines the base colours; the
+   token colours below are local to code so both themes keep readable contrast. */
+
+.code-view {
+  margin-top: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--panel);
+  --code-add-bg: #e6f4ea;
+  --code-add-fg: #14532d;
+  --code-del-bg: #fdecea;
+  --code-del-fg: #7f1d1d;
+  --code-hl-comment: #6a737d;
+  --code-hl-keyword: #a626a4;
+  --code-hl-string: #22863a;
+  --code-hl-number: #b76b01;
+  --code-hl-title: #1c5fb0;
+  --code-hl-attr: #6f42c1;
+  --code-hl-builtin: #b76b01;
+  --code-hl-type: #0550ae;
+  --code-hl-meta: #6a737d;
+  --code-hl-tag: #22863a;
+  --code-hl-regexp: #22863a;
+  --code-hl-addition-bg: #e6f4ea;
+  --code-hl-addition-fg: #14532d;
+  --code-hl-deletion-bg: #fdecea;
+  --code-hl-deletion-fg: #7f1d1d;
+}
+
+.code-head {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.code-body {
+  margin: 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.code-more {
+  border-top: 1px solid var(--line);
+}
+
+.code-more summary {
+  padding: 4px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.diff-body {
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.diff-row {
+  display: flex;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.diff-sign {
+  flex: none;
+  width: 1.5em;
+  text-align: center;
+  color: var(--muted);
+  user-select: none;
+}
+
+.diff-code {
+  flex: 1;
+}
+
+.diff-added {
+  background: var(--code-add-bg);
+  color: var(--code-add-fg);
+}
+
+.diff-removed {
+  background: var(--code-del-bg);
+  color: var(--code-del-fg);
+}
+
+.diff-separator {
+  padding: 0 8px;
+  color: var(--muted);
+  background: var(--bg);
+}
+
+/* highlight.js token colours, light theme */
+
+.hljs-comment,
+.hljs-quote {
+  color: var(--code-hl-comment);
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-doctag,
+.hljs-formula {
+  color: var(--code-hl-keyword);
+}
+
+.hljs-string,
+.hljs-char.escape_,
+.hljs-template-tag,
+.hljs-template-variable {
+  color: var(--code-hl-string);
+}
+
+.hljs-number,
+.hljs-literal,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link {
+  color: var(--code-hl-number);
+}
+
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.function_,
+.hljs-section,
+.hljs-selector-id {
+  color: var(--code-hl-title);
+}
+
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-property,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-pseudo {
+  color: var(--code-hl-attr);
+}
+
+.hljs-built_in,
+.hljs-params,
+.hljs-subst {
+  color: var(--code-hl-builtin);
+}
+
+.hljs-type,
+.hljs-class .hljs-title,
+.hljs-function .hljs-title {
+  color: var(--code-hl-type);
+}
+
+.hljs-meta,
+.hljs-meta .hljs-keyword,
+.hljs-meta .hljs-string {
+  color: var(--code-hl-meta);
+}
+
+.hljs-tag,
+.hljs-name,
+.hljs-regexp {
+  color: var(--code-hl-tag);
+}
+
+.hljs-addition {
+  background: var(--code-hl-addition-bg);
+  color: var(--code-hl-addition-fg);
+}
+
+.hljs-deletion {
+  background: var(--code-hl-deletion-bg);
+  color: var(--code-hl-deletion-fg);
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 600;
+}
+
+@media (prefers-color-scheme: dark) {
+  .code-view {
+    --code-add-bg: #14301d;
+    --code-add-fg: #b7f0c4;
+    --code-del-bg: #3a1b1b;
+    --code-del-fg: #ffc4bc;
+    --code-hl-comment: #9aa5b1;
+    --code-hl-keyword: #d7a6f0;
+    --code-hl-string: #9ee493;
+    --code-hl-number: #f0b26b;
+    --code-hl-title: #8cc4ff;
+    --code-hl-attr: #c4a7f5;
+    --code-hl-builtin: #f0b26b;
+    --code-hl-type: #8cc4ff;
+    --code-hl-meta: #9aa5b1;
+    --code-hl-tag: #9ee493;
+    --code-hl-regexp: #9ee493;
+    --code-hl-addition-bg: #14301d;
+    --code-hl-addition-fg: #b7f0c4;
+    --code-hl-deletion-bg: #3a1b1b;
+    --code-hl-deletion-fg: #ffc4bc;
+  }
+}

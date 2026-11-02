@@ -282,6 +282,32 @@ func applyModes(t *testing.T, root string, modes map[string]int) {
 	}
 }
 
+// stripEntryCode removes the code key from every entry of the transcript
+// entries in value, and only there: the frozen golden transcripts were written
+// before the parser set code blocks, so a bash call now carries one. A code
+// key at the page level or inside a tool object is left alone.
+func stripEntryCode(value any) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if key == "entries" {
+				if list, ok := child.([]any); ok {
+					for _, item := range list {
+						if entry, ok := item.(map[string]any); ok {
+							delete(entry, "code")
+						}
+					}
+				}
+			}
+			stripEntryCode(child)
+		}
+	case []any:
+		for _, child := range typed {
+			stripEntryCode(child)
+		}
+	}
+}
+
 // compareGolden encodes got as JSON, decodes it and the golden file into any
 // values and compares them with reflect.DeepEqual. On a difference it reports
 // the case, the file and the path of the first differing field.
@@ -297,6 +323,7 @@ func compareGolden(t *testing.T, caseName, label, goldenRel string, got any) {
 	if err := json.Unmarshal(encoded, &gotValue); err != nil {
 		t.Fatalf("case %s: decode encoded %s: %v", caseName, label, err)
 	}
+	stripEntryCode(gotValue)
 	if reflect.DeepEqual(gotValue, want) {
 		return
 	}
@@ -439,5 +466,49 @@ func TestComparisonDetectsDifference(t *testing.T) {
 	}
 	if gotAt != "mutated" || wantAt != "alpha" {
 		t.Fatalf("difference values = %v, %v, want mutated, alpha", gotAt, wantAt)
+	}
+}
+
+// TestParityStripsOnlyEntryCode proves the code removal before the golden
+// comparison is limited to the entries of a transcript: a code key at the page
+// level or inside a tool object is left alone.
+func TestParityStripsOnlyEntryCode(t *testing.T) {
+	value := map[string]any{
+		"id":   "t1",
+		"code": "kept at the page level",
+		"entries": []any{
+			map[string]any{
+				"kind": "tool_call",
+				"code": map[string]any{"kind": "command", "path": nil, "text": "ls"},
+				"tool": map[string]any{"name": "bash", "args": "{}", "code": "kept inside tool"},
+			},
+			map[string]any{
+				"kind": "tool_result",
+				"code": map[string]any{"kind": "file", "path": "a.ts", "text": "body"},
+			},
+		},
+	}
+
+	stripEntryCode(value)
+
+	if value["code"] != "kept at the page level" {
+		t.Fatalf("page-level code = %v, want it kept", value["code"])
+	}
+	entries, ok := value["entries"].([]any)
+	if !ok || len(entries) != 2 {
+		t.Fatalf("entries = %v, want two", value["entries"])
+	}
+	for index, item := range entries {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("entry %d is not an object", index)
+		}
+		if _, present := entry["code"]; present {
+			t.Fatalf("entry %d still has a code key", index)
+		}
+	}
+	tool, ok := entries[0].(map[string]any)["tool"].(map[string]any)
+	if !ok || tool["code"] != "kept inside tool" {
+		t.Fatalf("tool code = %v, want it kept", tool)
 	}
 }

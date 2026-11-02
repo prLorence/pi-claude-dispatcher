@@ -14,7 +14,7 @@ function twoDecimals(value: number): string {
   return value.toFixed(2);
 }
 
-function deciderTitle(decider: DeciderTaskView): string {
+export function deciderTitle(decider: DeciderTaskView): string {
   const probabilities = Object.entries(decider.probabilities)
     .map(([level, value]) => `${level} ${twoDecimals(value)}`)
     .join(", ");
@@ -32,14 +32,14 @@ function pickAttempt(lane: Lane, label: string | null): Attempt | null {
   return lane.attempts[lane.attempts.length - 1];
 }
 
-function verdictClass(review: ReviewResult): string {
+export function verdictClass(review: ReviewResult): string {
   if (review.failed) {
     return review.verdict === "changes" ? "verdict verdict-changes" : "verdict verdict-unknown";
   }
   return `verdict verdict-${review.verdict}`;
 }
 
-function verdictText(review: ReviewResult): string {
+export function verdictText(review: ReviewResult): string {
   const findings = review.findings === null ? "findings -" : `findings ${review.findings}`;
   if (review.failed) {
     return review.verdict === "changes" ? `changes, ${findings}` : `review failed, ${findings}`;
@@ -47,16 +47,22 @@ function verdictText(review: ReviewResult): string {
   return `${review.verdict}, ${findings}`;
 }
 
+export function DeciderBadge({ decider }: { decider: DeciderTaskView }) {
+  const diff = decider.ran !== null && decider.ran !== decider.suggested;
+  return (
+    <span className={diff ? "decider-badge decider-diff" : "decider-badge"} title={deciderTitle(decider)}>
+      {`decider: ${decider.suggested} - ran: ${decider.ran === null ? "-" : decider.ran}`}
+    </span>
+  );
+}
+
 export function LaneCell(props: LaneCellProps) {
   const { lane, kind, selectedId, onSelect, decider } = props;
   const [chosen, setChosen] = useState<string | null>(null);
 
-  const diff = decider !== null && decider !== undefined && decider.ran !== null && decider.ran !== decider.suggested;
   const badge =
     kind === "implementer" && decider !== null && decider !== undefined ? (
-      <span className={diff ? "decider-badge decider-diff" : "decider-badge"} title={deciderTitle(decider)}>
-        {`decider: ${decider.suggested} - ran: ${decider.ran === null ? "-" : decider.ran}`}
-      </span>
+      <DeciderBadge decider={decider} />
     ) : null;
 
   if (lane === null) {

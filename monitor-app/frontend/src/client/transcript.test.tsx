@@ -50,6 +50,19 @@ test("shows the placeholder when no attempt is selected for a repo", () => {
   expect(html).toContain("Select a lane to read its transcript");
 });
 
+test("accepts the optional fetchPage and resetKey props", () => {
+  const html = renderToStaticMarkup(
+    <Transcript
+      repo="dfph-app"
+      planId="plan.t1"
+      attemptId="a1"
+      resetKey="omp/repo/a1"
+      fetchPage={async () => ({ id: "s1", live: false, ended: true, entries: [], next: 0 })}
+    />,
+  );
+  expect(html).toContain("No output yet");
+});
+
 test("renders the title", () => {
   const html = render([]);
   expect(html).toContain("plan.t1.a1");

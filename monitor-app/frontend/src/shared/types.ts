@@ -75,6 +75,11 @@ export interface MonitorState {
   now: string;
 }
 export type EntryKind = "user" | "assistant" | "thinking" | "tool_call" | "tool_result" | "note";
+export interface CodeBlock {
+  kind: "diff" | "file" | "command";
+  path: string | null;
+  text: string;
+}
 export interface Entry {
   line: number; // 1-based line number in the session file
   ts: string | null;
@@ -84,6 +89,7 @@ export interface Entry {
   truncated: boolean;
   tool: { name: string; args: string } | null;
   isError: boolean;
+  code?: CodeBlock; // absent when the entry has no block
 }
 export interface SessionPage {
   id: string;
@@ -91,4 +97,29 @@ export interface SessionPage {
   ended: boolean;
   entries: Entry[];
   next: number;
+}
+export interface AgentSession {
+  agent: string; // "omp" | "pi"
+  id: string;
+  title: string;
+  model: string | null;
+  cwd: string;
+  group: string;
+  startedAt: string | null; // ISO
+  mtimeMs: number; // file modification time in milliseconds
+  live: boolean;
+  ended: boolean;
+  tokens: number | null;
+  cost: number | null; // USD
+  lastTool: string | null;
+  thinking: string | null;
+}
+export interface AgentGroup {
+  name: string;
+  sessions: AgentSession[];
+}
+export interface Settings {
+  ompSessions: boolean;
+  piSessions: boolean;
+  scope: "repos" | "all";
 }

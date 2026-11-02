@@ -760,3 +760,448 @@ func TestSessionIDFromName(t *testing.T) {
 		}
 	}
 }
+
+func writeLinesFile(t *testing.T, dir, name string, lines []any) string {
+	t.Helper()
+	file := filepath.Join(dir, name)
+	if err := os.WriteFile(file, []byte(linesText(t, lines)), 0o600); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+	return file
+}
+
+func ompHeader(id, cwd, title string) map[string]any {
+	return map[string]any{"type": "session", "version": 3, "id": id, "cwd": cwd, "title": title}
+}
+
+func TestParseSessionLinesReadsOmpNotesAndToolError(t *testing.T) {
+	text := linesText(t, []any{
+		ompHeader("omp1", "/tmp/repo", "omp work"),
+		messageLineRaw(ts, map[string]any{"role": "developer", "content": []any{textPart("rules")}}),
+		messageLineRaw(ts, map[string]any{"role": "fileMention", "files": []any{"a.go", "b.go"}}),
+		messageLineRaw(ts, map[string]any{"role": "toolResult", "toolName": "bash", "toolCallId": "1", "isError": true, "content": []any{textPart("boom")}}),
+	})
+	entries, next := ParseSessionLines(text, 0)
+
+	if next != 4 {
+		t.Fatalf("next = %d, want 4", next)
+	}
+	equalStrings(t, kinds(entries), []string{"note", "note", "tool_result"})
+	equalStrings(t, texts(entries), []string{"developer message", "file mention", "boom"})
+	if !entries[0].Collapsed || !entries[1].Collapsed {
+		t.Fatalf("developer or fileMention note is not collapsed")
+	}
+	if !entries[2].IsError {
+		t.Fatalf("tool result is not an error")
+	}
+}
+
+func TestParseSessionLinesIgnoresUnknownToolNames(t *testing.T) {
+	text := linesText(t, []any{
+		messageLine(t, ts, map[string]any{"role": "assistant", "content": []any{toolCall("mystery", map[string]any{"x": 1}, "1")}}),
+		map[string]any{"type": "some_unknown_line", "timestamp": ts},
+	})
+	entries, _ := ParseSessionLines(text, 0)
+
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	if entries[0].Tool == nil || entries[0].Tool.Name != "mystery" {
+		t.Fatalf("tool = %#v, want mystery", entries[0].Tool)
+	}
+}
+
+func TestSummarizeSessionReadsOmpModelAndCost(t *testing.T) {
+	dir := makePlansDir(t)
+	stop := "stop"
+	file := writeSession(t, dir, "p1", "omp1", []any{
+		ompHeader("omp1", "/tmp/repo", "omp work"),
+		messageLineRaw(ts, map[string]any{
+			"role":       "assistant",
+			"model":      "gpt-5",
+			"stopReason": stop,
+			"content":    []any{textPart("hello")},
+			"usage":      map[string]any{"input": 12.0, "output": 3.0, "cost": map[string]any{"total": 1.25}},
+		}),
+	})
+	summary := SummarizeSession(file)
+
+	if !summary.Ended {
+		t.Fatalf("ended = false, want true")
+	}
+	equalString(t, summary.Model, "gpt-5")
+	if summary.Cost == nil || *summary.Cost != 1.25 {
+		t.Fatalf("cost = %v, want 1.25", summary.Cost)
+	}
+	if summary.Tokens == nil || *summary.Tokens != 15 {
+		t.Fatalf("tokens = %v, want 15", summary.Tokens)
+	}
+}
+
+func TestReadSessionHeader(t *testing.T) {
+	dir := t.TempDir()
+	headerLine := `{"type":"session","version":3,"id":"abc","cwd":"/tmp/repo","title":"Work"}`
+	write := func(name, content string) string {
+		file := filepath.Join(dir, name)
+		if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+		return file
+	}
+
+	header, ok := ReadSessionHeader(write("good.jsonl", headerLine+"\n"))
+	if !ok {
+		t.Fatalf("good header = false, want true")
+	}
+	if header.ID != "abc" || header.Cwd != "/tmp/repo" || header.Title != "Work" {
+		t.Fatalf("header = %#v", header)
+	}
+
+	header, ok = ReadSessionHeader(write("no-newline.jsonl", headerLine))
+	if !ok || header.ID != "abc" {
+		t.Fatalf("header without a trailing newline = %#v, %v", header, ok)
+	}
+
+	if _, ok := ReadSessionHeader(write("other.jsonl", `{"type":"message"}`+"\n")); ok {
+		t.Fatalf("non-session first line = true, want false")
+	}
+	if _, ok := ReadSessionHeader(write("empty.jsonl", "")); ok {
+		t.Fatalf("empty file = true, want false")
+	}
+	if _, ok := ReadSessionHeader(filepath.Join(dir, "missing.jsonl")); ok {
+		t.Fatalf("missing file = true, want false")
+	}
+
+	header, ok = ReadSessionHeader(write("broken-after.jsonl", headerLine+"\nnot json\n"))
+	if !ok || header.ID != "abc" {
+		t.Fatalf("invalid JSON after the header = %#v, %v, want the header", header, ok)
+	}
+
+	huge := `{"type":"session","id":"` + strings.Repeat("x", headerMaxBytes) + `"}`
+	if _, ok := ReadSessionHeader(write("huge.jsonl", huge+"\n")); ok {
+		t.Fatalf("first line over 1 MB = true, want false")
+	}
+}
+
+func TestReadAgentInfoReadsHeaderPromptAndModel(t *testing.T) {
+	dir := t.TempDir()
+	file := writeLinesFile(t, dir, "omp.jsonl", []any{
+		ompHeader("omp1", "/tmp/repo", "omp work"),
+		userMsg("hello there", ts),
+		messageLineRaw(ts, map[string]any{"role": "assistant", "model": "omp-model", "content": []any{textPart("hi")}}),
+	})
+
+	info, ok := ReadAgentInfo(file)
+	if !ok {
+		t.Fatalf("ReadAgentInfo = false, want true")
+	}
+	if info.ID != "omp1" || info.Cwd != "/tmp/repo" || info.Title != "omp work" {
+		t.Fatalf("header = %#v", info.SessionHeader)
+	}
+	if info.FirstPrompt != "hello there" {
+		t.Fatalf("first prompt = %q, want %q", info.FirstPrompt, "hello there")
+	}
+	equalString(t, info.Model, "omp-model")
+}
+
+func TestReadAgentInfoFallsBackToFirstPromptForTitle(t *testing.T) {
+	dir := t.TempDir()
+	prompt := strings.Repeat("p", 100)
+	file := writeLinesFile(t, dir, "untitled.jsonl", []any{
+		ompHeader("omp1", "/tmp/repo", ""),
+		userMsg(prompt, ts),
+	})
+
+	info, ok := ReadAgentInfo(file)
+	if !ok {
+		t.Fatalf("ReadAgentInfo = false, want true")
+	}
+	if want := strings.Repeat("p", 80); info.FirstPrompt != want {
+		t.Fatalf("first prompt length = %d, want 80", textLen(info.FirstPrompt))
+	}
+	if info.Title != info.FirstPrompt {
+		t.Fatalf("title = %q, want the first prompt", info.Title)
+	}
+	if info.Model != nil {
+		t.Fatalf("model = %q, want nil", *info.Model)
+	}
+}
+
+func TestReadAgentInfoRejectsFileWithoutSessionHeader(t *testing.T) {
+	dir := t.TempDir()
+	file := writeLinesFile(t, dir, "other.jsonl", []any{
+		map[string]any{"type": "message", "timestamp": ts},
+		userMsg("hello", ts),
+	})
+	if _, ok := ReadAgentInfo(file); ok {
+		t.Fatalf("ReadAgentInfo = true, want false")
+	}
+}
+
+func TestReadAgentInfoPrefersLatestModelChange(t *testing.T) {
+	dir := t.TempDir()
+	file := writeLinesFile(t, dir, "model.jsonl", []any{
+		ompHeader("omp1", "/tmp/repo", "omp work"),
+		messageLineRaw(ts, map[string]any{"role": "assistant", "model": "assistant-model", "content": []any{textPart("one")}}),
+		modelChange("opencode-go/changed-model", ts),
+		messageLineRaw(ts, map[string]any{"role": "assistant", "model": "later-assistant", "content": []any{textPart("two")}}),
+	})
+
+	info, ok := ReadAgentInfo(file)
+	if !ok {
+		t.Fatalf("ReadAgentInfo = false, want true")
+	}
+	equalString(t, info.Model, "changed-model")
+}
+
+func TestReadAgentInfoSkipsOverlongLine(t *testing.T) {
+	dir := t.TempDir()
+	text := mustJSON(t, ompHeader("omp1", "/tmp/repo", "omp work")) + "\n" +
+		strings.Repeat("z", agentLineMaxBytes+1) + "\n" +
+		mustJSON(t, userMsg("after the long line", ts)) + "\n"
+	file := filepath.Join(dir, "long.jsonl")
+	if err := os.WriteFile(file, []byte(text), 0o600); err != nil {
+		t.Fatalf("write long: %v", err)
+	}
+
+	info, ok := ReadAgentInfo(file)
+	if !ok {
+		t.Fatalf("ReadAgentInfo = false, want true")
+	}
+	if info.FirstPrompt != "after the long line" {
+		t.Fatalf("first prompt = %q, want the line after the overlong one", info.FirstPrompt)
+	}
+}
+
+func codeAt(t *testing.T, entries []model.Entry, index int) *model.CodeBlock {
+	t.Helper()
+	if len(entries) <= index {
+		t.Fatalf("entries = %d, want at least %d", len(entries), index+1)
+	}
+	if entries[index].Code == nil {
+		t.Fatalf("entry %d has no code block", index)
+	}
+	return entries[index].Code
+}
+
+func noCodeAt(t *testing.T, entries []model.Entry, index int) {
+	t.Helper()
+	if len(entries) <= index {
+		t.Fatalf("entries = %d, want at least %d", len(entries), index+1)
+	}
+	if entries[index].Code != nil {
+		t.Fatalf("entry %d code = %#v, want none", index, entries[index].Code)
+	}
+}
+
+func equalCode(t *testing.T, block *model.CodeBlock, kind string, path *string, text string) {
+	t.Helper()
+	if block.Kind != kind {
+		t.Fatalf("code kind = %q, want %q", block.Kind, kind)
+	}
+	if path == nil {
+		if block.Path != nil {
+			t.Fatalf("code path = %q, want nil", *block.Path)
+		}
+	} else if block.Path == nil || *block.Path != *path {
+		t.Fatalf("code path = %v, want %q", block.Path, *path)
+	}
+	if block.Text != text {
+		t.Fatalf("code text = %q, want %q", block.Text, text)
+	}
+}
+
+func TestParseSessionLinesCodeBlocksForToolCalls(t *testing.T) {
+	text := linesText(t, []any{
+		messageLine(t, ts, map[string]any{"role": "assistant", "content": []any{
+			toolCall("write", map[string]any{"path": "src/a.ts", "content": "package a\n\nfunc A() {}\n"}, "w1"),
+			toolCall("bash", map[string]any{"command": "go test ./..."}, "b1"),
+			toolCall("edit", map[string]any{"path": "src/b.ts", "edits": []any{
+				map[string]any{"oldText": "one\ntwo\n", "newText": "uno\n"},
+				map[string]any{"oldText": "three", "newText": "tres"},
+			}}, "e1"),
+		}}),
+	})
+	entries, _ := ParseSessionLines(text, 0)
+
+	if len(entries) != 3 {
+		t.Fatalf("entries = %d, want 3", len(entries))
+	}
+	equalCode(t, codeAt(t, entries, 0), "file", ptr("src/a.ts"), "package a\n\nfunc A() {}\n")
+	equalCode(t, codeAt(t, entries, 1), "command", nil, "go test ./...")
+	equalCode(t, codeAt(t, entries, 2), "diff", ptr("src/b.ts"), "-one\n-two\n+uno\n@@\n-three\n+tres")
+	equalString(t, &entries[0].Text, `write {"content":"package a\n\nfunc A() {}\n","path":"src/a.ts"}`)
+	if entries[0].Truncated {
+		t.Fatalf("write entry is truncated")
+	}
+}
+
+func TestParseSessionLinesOmpEditPathFromInput(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		path  *string
+	}{
+		{name: "stars", input: "*** src/e.go\n@@ -1 +1 @@\n-old\n+new\n", path: ptr("src/e.go")},
+		{name: "dashes", input: "--- src/e.go\n+++ src/e.go\n-a\n+b\n", path: ptr("src/e.go")},
+		{name: "at", input: "\n@@ src/e.go\n", path: ptr("src/e.go")},
+		{name: "begin patch", input: "*** Begin Patch\n*** Update File: src/e.go\n", path: nil},
+		{name: "space", input: "*** src/e.go extra\n", path: nil},
+		{name: "no suffix", input: "*** Makefile\n", path: nil},
+		{name: "long suffix", input: "*** a.abcdefghi\n", path: nil},
+		{name: "no marker", input: "src/e.go\n", path: nil},
+		{name: "empty", input: "", path: nil},
+	}
+
+	for _, item := range cases {
+		t.Run(item.name, func(t *testing.T) {
+			text := linesText(t, []any{
+				messageLine(t, ts, map[string]any{"role": "assistant", "content": []any{
+					toolCall("edit", map[string]any{"input": item.input}, "e1"),
+				}}),
+			})
+			entries, _ := ParseSessionLines(text, 0)
+			equalCode(t, codeAt(t, entries, 0), "diff", item.path, item.input)
+		})
+	}
+}
+
+func TestParseSessionLinesEditWithNeitherEditsNorInputHasNoCode(t *testing.T) {
+	text := linesText(t, []any{
+		messageLine(t, ts, map[string]any{"role": "assistant", "content": []any{
+			toolCall("edit", map[string]any{"path": "src/a.ts"}, "e1"),
+		}}),
+	})
+	entries, _ := ParseSessionLines(text, 0)
+	noCodeAt(t, entries, 0)
+	equalString(t, &entries[0].Text, `edit {"path":"src/a.ts"}`)
+}
+
+func TestParseSessionLinesCodeBlocksForReadResults(t *testing.T) {
+	text := linesText(t, []any{
+		messageLine(t, ts, map[string]any{"role": "assistant", "content": []any{
+			toolCall("read", map[string]any{"path": "src/c.ts"}, "r1"),
+			toolCall("write", map[string]any{"path": "src/d.ts", "content": "x"}, "w1"),
+		}}),
+		messageLineRaw(ts, map[string]any{"role": "toolResult", "toolName": "read", "toolCallId": "missing", "content": []any{textPart("orphan")}}),
+		messageLineRaw(ts, map[string]any{"role": "toolResult", "toolName": "read", "toolCallId": "r1", "content": []any{textPart("file body")}}),
+		messageLineRaw(ts, map[string]any{"role": "toolResult", "toolName": "read", "toolCallId": "r1", "isError": true, "content": []any{textPart("failed")}}),
+		messageLineRaw(ts, map[string]any{"role": "toolResult", "toolName": "write", "toolCallId": "w1", "content": []any{textPart("written")}}),
+	})
+	entries, _ := ParseSessionLines(text, 0)
+
+	if len(entries) != 6 {
+		t.Fatalf("entries = %d, want 6", len(entries))
+	}
+	noCodeAt(t, entries, 0)
+	equalCode(t, codeAt(t, entries, 1), "file", ptr("src/d.ts"), "x")
+	noCodeAt(t, entries, 2)
+	equalCode(t, codeAt(t, entries, 3), "file", ptr("src/c.ts"), "file body")
+	noCodeAt(t, entries, 4)
+	noCodeAt(t, entries, 5)
+	equalString(t, &entries[3].Text, "file body")
+}
+
+func TestParseSessionLinesMatchesReadCallBeforeAfter(t *testing.T) {
+	text := linesText(t, []any{
+		messageLine(t, ts, map[string]any{"role": "assistant", "content": []any{
+			toolCall("read", map[string]any{"path": "src/early.ts"}, "r1"),
+		}}),
+		messageLineRaw(ts, map[string]any{"role": "toolResult", "toolName": "read", "toolCallId": "r1", "content": []any{textPart("later body")}}),
+	})
+	entries, next := ParseSessionLines(text, 1)
+
+	if next != 2 {
+		t.Fatalf("next = %d, want 2", next)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	equalCode(t, codeAt(t, entries, 0), "file", ptr("src/early.ts"), "later body")
+}
+
+func TestParseSessionLinesCodeBlocksForOtherToolsAndBadArguments(t *testing.T) {
+	text := linesText(t, []any{
+		messageLine(t, ts, map[string]any{"role": "assistant", "content": []any{
+			toolCall("find", map[string]any{"paths": []any{"."}, "pattern": "x"}, "f1"),
+			toolCall("mystery", map[string]any{"x": 1}, "m1"),
+			toolCall("bash", "not an object", "b1"),
+		}}),
+		messageLineRaw(ts, map[string]any{"role": "toolResult", "toolName": "find", "toolCallId": "f1", "content": []any{textPart("hits")}}),
+	})
+	entries, _ := ParseSessionLines(text, 0)
+
+	if len(entries) != 4 {
+		t.Fatalf("entries = %d, want 4", len(entries))
+	}
+	for index := range entries {
+		noCodeAt(t, entries, index)
+	}
+}
+
+func TestParseSessionLinesCapsCodeBlockText(t *testing.T) {
+	command := strings.Repeat("q", ToolArgsCap+25)
+	text := linesText(t, []any{
+		messageLine(t, ts, map[string]any{"role": "assistant", "content": []any{
+			toolCall("write", map[string]any{"path": "src/big.ts", "content": command}, "w1"),
+		}}),
+	})
+	entries, _ := ParseSessionLines(text, 0)
+	block := codeAt(t, entries, 0)
+
+	if !strings.HasSuffix(block.Text, truncationNote) {
+		t.Fatalf("block text does not end with the note")
+	}
+	if got, want := textLen(block.Text), ToolArgsCap+textLen(truncationNote); got != want {
+		t.Fatalf("block text length = %d, want %d", got, want)
+	}
+	if !entries[0].Truncated {
+		t.Fatalf("entry is not truncated")
+	}
+}
+
+func TestParseSessionLinesEntryTruncationIsItsOwnText(t *testing.T) {
+	// The command alone is under the argument cap, but the entry text
+	// ("bash " plus the JSON arguments) is over it: the block stays whole
+	// while the entry keeps its own truncated flag.
+	command := strings.Repeat("r", ToolArgsCap-10)
+	text := linesText(t, []any{
+		messageLine(t, ts, map[string]any{"role": "assistant", "content": []any{
+			toolCall("bash", map[string]any{"command": command}, "b1"),
+		}}),
+	})
+	entries, _ := ParseSessionLines(text, 0)
+	block := codeAt(t, entries, 0)
+
+	if block.Text != command {
+		t.Fatalf("block text length = %d, want %d", textLen(block.Text), textLen(command))
+	}
+	if !entries[0].Truncated {
+		t.Fatalf("entry is not truncated")
+	}
+	if !strings.HasSuffix(entries[0].Text, truncationNote) {
+		t.Fatalf("entry text does not end with the note")
+	}
+}
+
+func TestParseSessionLinesEntryWithoutCodeEncodesAsBefore(t *testing.T) {
+	text := linesText(t, []any{userMsg("hello", ts)})
+	entries, _ := ParseSessionLines(text, 0)
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	want := `{"line":1,"ts":"` + ts + `","kind":"user","text":"hello","collapsed":true,"truncated":false,"tool":null,"isError":false}`
+	if got := mustJSON(t, entries[0]); got != want {
+		t.Fatalf("entry JSON = %s, want %s", got, want)
+	}
+
+	withCode := linesText(t, []any{
+		messageLine(t, ts, map[string]any{"role": "assistant", "content": []any{
+			toolCall("bash", map[string]any{"command": "ls"}, "b1"),
+		}}),
+	})
+	coded, _ := ParseSessionLines(withCode, 0)
+	if !strings.Contains(mustJSON(t, coded[0]), `"code":{"kind":"command","path":null,"text":"ls"}`) {
+		t.Fatalf("entry with a block encodes no code: %s", mustJSON(t, coded[0]))
+	}
+}

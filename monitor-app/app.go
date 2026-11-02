@@ -12,6 +12,7 @@ import (
 	"pi-monitor/internal/model"
 	"pi-monitor/internal/repos"
 	"pi-monitor/internal/service"
+	"pi-monitor/internal/settings"
 )
 
 // pollEvery is the poll interval of spec R7, the same as the Bun monitor.
@@ -20,9 +21,10 @@ const pollEvery = 500 * time.Millisecond
 // App is the Wails binding surface of spec R8. It holds no state of its own:
 // the service builds the board and the repo Manager owns the repo list.
 type App struct {
-	ctx     context.Context
-	manager *repos.Manager
-	service *service.Service
+	ctx           context.Context
+	manager       *repos.Manager
+	settingsStore settings.Store
+	service       *service.Service
 }
 
 // NewApp builds the shell state: the repo Manager from the --plans flags, the
@@ -34,7 +36,10 @@ func NewApp() *App {
 		Store: repos.Store{Path: reposFile()},
 	}
 
-	app := &App{manager: manager}
+	app := &App{
+		manager:       manager,
+		settingsStore: settings.Store{Path: settingsFile()},
+	}
 	manager.Pick = func() (string, error) {
 		chosen, err := runtime.OpenDirectoryDialog(app.ctx, runtime.OpenDialogOptions{
 			Title: "Choose a plans folder",
@@ -46,8 +51,10 @@ func NewApp() *App {
 	}
 
 	app.service = service.New(service.Options{
-		Repos: manager.Configs,
-		Now:   func() int64 { return time.Now().UnixMilli() },
+		Repos:    manager.Configs,
+		Now:      func() int64 { return time.Now().UnixMilli() },
+		Settings: app.settingsStore.Load,
+		Home:     userHome(),
 	})
 	return app
 }
@@ -91,6 +98,31 @@ func (a *App) RemoveRepo(name string) string {
 	return message
 }
 
+// Settings returns the saved monitor settings.
+func (a *App) Settings() settings.Settings {
+	return a.settingsStore.Load()
+}
+
+// SetSettings saves the monitor settings. The returned text is the
+// user-facing message, empty when the settings were saved.
+func (a *App) SetSettings(value settings.Settings) string {
+	if err := a.settingsStore.Save(value); err != nil {
+		return err.Error()
+	}
+	runtime.EventsEmit(a.ctx, "change")
+	return ""
+}
+
+// Agents returns the coding-agent sessions of the enabled roots.
+func (a *App) Agents() []model.AgentGroup {
+	return a.service.Agents()
+}
+
+// AgentSession returns one page of an agent session transcript.
+func (a *App) AgentSession(agent, group, id string, after int) (model.SessionPage, error) {
+	return a.service.AgentSession(agent, group, id, after)
+}
+
 // plansFlags collects the values of every repeatable --plans flag, in the form
 // --plans [name=]<path> or --plans=[name=]<path>.
 func plansFlags(args []string) []string {
@@ -119,6 +151,25 @@ func workingDir() string {
 		return "."
 	}
 	return cwd
+}
+
+// settingsFile is the saved settings under the user's config folder.
+func settingsFile() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".config", "pi-monitor", "settings.json")
+	}
+	return filepath.Join(home, ".config", "pi-monitor", "settings.json")
+}
+
+// userHome is the folder the agent session roots live under. An empty value
+// makes the service skip the agent roots instead of guessing a folder.
+func userHome() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home
 }
 
 // reposFile is the saved repo list under the user's config folder.

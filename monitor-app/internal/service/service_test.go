@@ -3,13 +3,17 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
 	"pi-monitor/internal/model"
 	"pi-monitor/internal/repos"
+	"pi-monitor/internal/settings"
+	"pi-monitor/internal/watch"
 )
 
 const (
@@ -283,5 +287,209 @@ func TestPollEmitsAtStartThenOnChangeAndStops(t *testing.T) {
 	case <-emits:
 		t.Fatalf("Poll emitted after the context was cancelled")
 	default:
+	}
+}
+
+// agentRepo builds a repo root with a plans folder under it, so the parent of
+// the plans folder is the root an omp session's cwd is compared with.
+func agentRepo(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	plans := filepath.Join(root, ".plans")
+	for _, name := range []string{"traces", "running", "done", "sessions", "inbox"} {
+		if err := os.MkdirAll(filepath.Join(plans, name), 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+	}
+	return root
+}
+
+// writeAgentSession writes a synthetic omp session under the injected home.
+// The fixture is built from the omp structure in the spec; nothing under a
+// real agent folder is ever read.
+func writeAgentSession(t *testing.T, home, slug, id, cwd string, ended bool, mtimeMs int64) string {
+	t.Helper()
+	folder := filepath.Join(home, ".omp", "agent", "sessions", slug)
+	if err := os.MkdirAll(folder, 0o700); err != nil {
+		t.Fatalf("mkdir omp folder: %v", err)
+	}
+	stop := "endTurn"
+	if !ended {
+		stop = "toolUse"
+	}
+	text := fmt.Sprintf(`{"type":"session","version":3,"id":%s,"timestamp":%s,"cwd":%s,"title":%s}`+"\n",
+		strconv.Quote(id), strconv.Quote(t1), strconv.Quote(cwd), strconv.Quote("Work "+id)) +
+		`{"type":"thinking_level_change","timestamp":"` + t2 + `","thinkingLevel":"high"}` + "\n" +
+		`{"type":"message","timestamp":"` + t3 + `","message":{"role":"user","content":[{"type":"text","text":"do it"}]}}` + "\n" +
+		fmt.Sprintf(`{"type":"message","timestamp":%s,"message":{"role":"assistant","model":"omp-model","stopReason":%s,"content":[{"type":"text","text":"ok"}],"usage":{"input":10,"output":5,"cost":{"total":0.25}}}}`+"\n",
+			strconv.Quote(t4), strconv.Quote(stop))
+	file := filepath.Join(folder, "2026-10-23T10-00-00-000Z_"+id+".jsonl")
+	if err := os.WriteFile(file, []byte(text), 0o600); err != nil {
+		t.Fatalf("write omp session: %v", err)
+	}
+	at := time.UnixMilli(mtimeMs)
+	if err := os.Chtimes(file, at, at); err != nil {
+		t.Fatalf("chtimes omp session: %v", err)
+	}
+	return file
+}
+
+// newAgentService builds a service over one repo, with the settings returned by
+// the injected callback and the injected home.
+func newAgentService(t *testing.T, root, home string, current *settings.Settings) *Service {
+	t.Helper()
+	now := fixedNow(t)
+	return New(Options{
+		Repos: func() ([]repos.RepoConfig, *string) {
+			return []repos.RepoConfig{{Name: "item-a", Dir: filepath.Join(root, ".plans")}}, nil
+		},
+		Now:      func() int64 { return now },
+		Home:     home,
+		Settings: func() settings.Settings { return *current },
+	})
+}
+
+func TestAgentsOffReadsNothingAndKeepsTheWatchSignature(t *testing.T) {
+	root := agentRepo(t)
+	home := t.TempDir()
+	writeAgentSession(t, home, "-root", "s1", root, true, fixedNow(t)-1000)
+	current := settings.Default()
+	svc := newAgentService(t, root, home, &current)
+
+	groups := svc.Agents()
+	if groups == nil || len(groups) != 0 {
+		t.Fatalf("Agents with both toggles off = %#v, want an empty non-nil slice", groups)
+	}
+
+	list, _ := svc.repos()
+	if got, want := svc.signature(), watch.Signature(list); got != want {
+		t.Fatalf("signature with both toggles off = %q, want the watch signature %q", got, want)
+	}
+}
+
+func TestAgentsListsTheOmpSessionOfAnAddedRepo(t *testing.T) {
+	root := agentRepo(t)
+	home := t.TempDir()
+	writeAgentSession(t, home, "-root", "s1", root, true, fixedNow(t)-1000)
+	current := settings.Settings{OmpSessions: true, Scope: settings.ScopeRepos}
+	svc := newAgentService(t, root, home, &current)
+
+	groups := svc.Agents()
+	if len(groups) != 1 {
+		t.Fatalf("Agents = %#v, want one group", groups)
+	}
+	if groups[0].Name != "item-a" {
+		t.Fatalf("group name = %q, want item-a", groups[0].Name)
+	}
+	if len(groups[0].Sessions) != 1 {
+		t.Fatalf("sessions = %#v, want one", groups[0].Sessions)
+	}
+	session := groups[0].Sessions[0]
+	if session.Agent != "omp" || session.ID != "s1" || session.Title != "Work s1" {
+		t.Fatalf("session = %#v, want the omp session s1", session)
+	}
+	if session.Model == nil || *session.Model != "omp-model" {
+		t.Fatalf("model = %v, want omp-model", session.Model)
+	}
+	if session.Cost == nil || *session.Cost != 0.25 {
+		t.Fatalf("cost = %v, want 0.25", session.Cost)
+	}
+}
+
+func TestAgentSessionPagesAndMarksLive(t *testing.T) {
+	root := agentRepo(t)
+	home := t.TempDir()
+	now := fixedNow(t)
+	writeAgentSession(t, home, "-root", "recent", root, false, now-1000)
+	writeAgentSession(t, home, "-root", "old", root, false, now-60000)
+	current := settings.Settings{OmpSessions: true, Scope: settings.ScopeRepos}
+	svc := newAgentService(t, root, home, &current)
+
+	groups := svc.Agents()
+	if len(groups) != 1 || len(groups[0].Sessions) != 2 {
+		t.Fatalf("Agents = %#v, want two sessions in one group", groups)
+	}
+	live := map[string]bool{}
+	for _, session := range groups[0].Sessions {
+		live[session.ID] = session.Live
+	}
+	if !live["recent"] {
+		t.Fatalf("recent session live = false, want true")
+	}
+	if live["old"] {
+		t.Fatalf("old session live = true, want false")
+	}
+
+	page, err := svc.AgentSession("omp", "item-a", "recent", 0)
+	if err != nil {
+		t.Fatalf("AgentSession = %v, want a page", err)
+	}
+	if page.ID != "recent" {
+		t.Fatalf("page id = %q, want recent", page.ID)
+	}
+	if !page.Live || page.Ended {
+		t.Fatalf("live = %v, ended = %v, want live and not ended", page.Live, page.Ended)
+	}
+	if page.Entries == nil || len(page.Entries) == 0 {
+		t.Fatalf("entries = %#v, want the transcript", page.Entries)
+	}
+	if page.Next <= 0 {
+		t.Fatalf("next = %d, want a positive cursor", page.Next)
+	}
+
+	rest, err := svc.AgentSession("omp", "item-a", "recent", page.Next)
+	if err != nil {
+		t.Fatalf("AgentSession after %d = %v, want a page", page.Next, err)
+	}
+	if rest.Entries == nil || len(rest.Entries) != 0 {
+		t.Fatalf("rest entries = %#v, want an empty non-nil slice", rest.Entries)
+	}
+	if rest.Next != page.Next {
+		t.Fatalf("rest next = %d, want %d", rest.Next, page.Next)
+	}
+}
+
+func TestAgentSessionRefusals(t *testing.T) {
+	root := agentRepo(t)
+	home := t.TempDir()
+	writeAgentSession(t, home, "-root", "s1", root, true, fixedNow(t)-1000)
+	current := settings.Settings{OmpSessions: true, Scope: settings.ScopeRepos}
+	svc := newAgentService(t, root, home, &current)
+
+	if _, err := svc.AgentSession("omp", "item-a", "missing", 0); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unlisted id error = %v, want ErrNotFound", err)
+	}
+	if _, err := svc.AgentSession("omp", "item-a", "s1", -1); !errors.Is(err, ErrBadRequest) {
+		t.Fatalf("negative after error = %v, want ErrBadRequest", err)
+	}
+	if _, err := svc.AgentSession("other", "item-a", "s1", 0); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown agent error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestSignatureTracksSettingsAndNewSessions(t *testing.T) {
+	root := agentRepo(t)
+	home := t.TempDir()
+	now := fixedNow(t)
+	writeAgentSession(t, home, "-root", "s1", root, true, now-1000)
+	current := settings.Default()
+	svc := newAgentService(t, root, home, &current)
+
+	list, _ := svc.repos()
+	off := svc.signature()
+	if off != watch.Signature(list) {
+		t.Fatalf("signature off = %q, want the watch signature", off)
+	}
+
+	current = settings.Settings{OmpSessions: true, Scope: settings.ScopeRepos}
+	on := svc.signature()
+	if on == off {
+		t.Fatalf("signature did not change when the omp toggle was flipped on")
+	}
+
+	writeAgentSession(t, home, "-root", "s2", root, true, now-500)
+	afterNew := svc.signature()
+	if afterNew == on {
+		t.Fatalf("signature did not change when a new session file appeared")
 	}
 }

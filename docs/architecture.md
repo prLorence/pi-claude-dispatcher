@@ -123,7 +123,7 @@ Built:
 - The run record copy (`work add`) and `restore` on a new machine.
 - The config sync (`config push` and `config pull`).
 - The monitor: a read-only local web app on Bun, in `monitor/`, showing task rows with implementer and reviewer lanes and a live transcript. It shows several repos on one screen from a configured list, stacked boards for the repos with a running plan and one-line strips for the idle ones, and it shows the decider's suggested level next to the level that ran.
-- The native macOS monitor app in `monitor-app/`: a Wails v2 window on a Go port of the monitor's server logic, with the same React client and golden-file parity against the TypeScript server. It replaces the browser view on the Mac; the Bun monitor stays.
+- The native macOS monitor app in `monitor-app/`: a Wails v2 window on a Go port of the monitor's server logic, with the same React client and golden-file parity against the TypeScript server. It shows a two-pane layout (the repo, plan and task list on the left, the selected transcript on the right), code highlighting from a bundled `highlight.js`, and an Agents view. Two read-only packages feed that view beside the plan board: `internal/settings` stores the two agent toggles and the scope at `~/.config/pi-monitor/settings.json`, and `internal/agents` lists omp and Pi sessions under an injected home, reads only the `.jsonl` files of an enabled root and, in the default added-repos scope, only sessions whose working folder is inside an added repo. The service passes the settings and the groups to the client, and a settings save or a changed session fires the same `change` event as a repo change. It replaces the browser view on the Mac; the Bun monitor stays.
 
 Planned:
 

@@ -6,12 +6,28 @@ export function AddRepo() {
   return window['go']['main']['App']['AddRepo']();
 }
 
+export function AgentSession(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['AgentSession'](arg1, arg2, arg3, arg4);
+}
+
+export function Agents() {
+  return window['go']['main']['App']['Agents']();
+}
+
 export function RemoveRepo(arg1) {
   return window['go']['main']['App']['RemoveRepo'](arg1);
 }
 
 export function Session(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['Session'](arg1, arg2, arg3, arg4);
+}
+
+export function SetSettings(arg1) {
+  return window['go']['main']['App']['SetSettings'](arg1);
+}
+
+export function Settings() {
+  return window['go']['main']['App']['Settings']();
 }
 
 export function State() {

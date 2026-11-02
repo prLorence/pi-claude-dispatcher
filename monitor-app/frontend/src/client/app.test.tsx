@@ -1,7 +1,17 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { Attempt, Lane, MonitorState, PlanView, RepoView, TaskRow } from "../shared/types";
-import { AppView } from "./App";
+import type {
+  AgentGroup,
+  AgentSession,
+  Attempt,
+  Lane,
+  MonitorState,
+  PlanView,
+  RepoView,
+  Settings,
+  TaskRow,
+} from "../shared/types";
+import { AppView, loadSnapshot, reconcileSelection, shouldFetchAgents } from "./App";
 
 function attempt(over: Partial<Attempt> = {}): Attempt {
   return {
@@ -140,6 +150,8 @@ test("renders the repos in the given order, the active board and the idle strip"
     }),
   });
   expect(html.indexOf("alpha")).toBeLessThan(html.indexOf("beta"));
+  expect(html).toContain('class="panes"');
+  expect(html).toContain('class="sidebar"');
   expect(html).toContain('class="repo-section repo-active"');
   expect(html).toContain('class="repo-section repo-idle"');
   expect(html).toContain('class="repo-strip"');
@@ -177,7 +189,12 @@ test("marks only the selected repo's lane", () => {
         repo({ name: "beta", active: true }),
       ],
     }),
-    selection: { repo: "beta", planId: "20261023-1200-demo-r1", attemptId: "p1.t1.a1" },
+    selection: {
+      kind: "task",
+      repo: "beta",
+      planId: "20261023-1200-demo-r1",
+      attemptId: "p1.t1.a1",
+    },
   });
   expect(count(html, "selected")).toBe(1);
   expect(count(html, 'aria-pressed="true"')).toBe(1);
@@ -191,17 +208,57 @@ test("the selection names the transcript and there is only one", () => {
         repo({ name: "beta", active: true }),
       ],
     }),
-    selection: { repo: "beta", planId: "20261023-1200-demo-r1", attemptId: "p1.t1.a1" },
+    selection: {
+      kind: "task",
+      repo: "beta",
+      planId: "20261023-1200-demo-r1",
+      attemptId: "p1.t1.a1",
+    },
   });
   expect(count(html, 'class="transcript"')).toBe(1);
   expect(html).toContain('class="transcript-head"');
 });
 
-test("an empty selection still shows one transcript placeholder", () => {
+test("an empty selection shows the detail placeholder and no transcript", () => {
   const html = render({ state: state() });
-  expect(count(html, 'class="transcript"')).toBe(1);
-  expect(html).toContain("Select a lane to read its transcript");
+  expect(count(html, 'class="transcript"')).toBe(0);
+  expect(html).toContain("Select a task or an agent session to read it here");
   expect(html).not.toContain('class="transcript-head"');
+});
+
+test("reconcileSelection keeps null as null", () => {
+  expect(reconcileSelection(null, state())).toBeNull();
+});
+
+test("reconcileSelection keeps a task selection while its repo and plan exist", () => {
+  const selection = {
+    kind: "task" as const,
+    repo: "pi-plan-dispatch",
+    planId: "20261023-1200-demo-r1",
+    attemptId: "p1.t1.a1",
+  };
+  expect(reconcileSelection(selection, state())).toEqual(selection);
+});
+
+test("reconcileSelection drops a task selection when its repo is gone", () => {
+  const selection = {
+    kind: "task" as const,
+    repo: "pi-plan-dispatch",
+    planId: "20261023-1200-demo-r1",
+    attemptId: "p1.t1.a1",
+  };
+  expect(reconcileSelection(selection, state({ repos: [repo({ name: "other" })] }))).toBeNull();
+});
+
+test("reconcileSelection drops a task selection when the plan id changed", () => {
+  const selection = {
+    kind: "task" as const,
+    repo: "pi-plan-dispatch",
+    planId: "20261023-1200-demo-r1",
+    attemptId: "p1.t1.a1",
+  };
+  const next = state({ repos: [repo({ plan: plan({ id: "20261024-0900-other-r1" }) })] });
+  expect(reconcileSelection(selection, next)).toBeNull();
 });
 
 test("a repo with no plan shows its message", () => {
@@ -212,4 +269,158 @@ test("a repo with no plan shows its message", () => {
   });
   expect(html).toContain("folder cannot be read");
   expect(html).not.toContain('class="board"');
+});
+
+function settings(over: Partial<Settings> = {}): Settings {
+  return { ompSessions: false, piSessions: false, scope: "repos", ...over };
+}
+
+function agentSession(over: Partial<AgentSession> = {}): AgentSession {
+  return {
+    agent: "omp",
+    id: "s1",
+    title: "Fix the parser",
+    model: "deepseek-v4.1-flash",
+    cwd: "/work/pi-plan-dispatch",
+    group: "pi-plan-dispatch",
+    startedAt: "2026-10-23T11:00:00.000Z",
+    mtimeMs: Date.parse("2026-10-23T11:55:00.000Z"),
+    live: true,
+    ended: false,
+    tokens: 1200,
+    cost: 0.05,
+    lastTool: "edit core.ts",
+    thinking: "high",
+    ...over,
+  };
+}
+
+function agentGroup(over: Partial<AgentGroup> = {}): AgentGroup {
+  return { name: "pi-plan-dispatch", sessions: [agentSession()], ...over };
+}
+
+test("the header has a Settings control and the panel is closed by default", () => {
+  const html = render({ state: state(), settings: settings() });
+  expect(html).toContain('class="settings-toggle-button"');
+  expect(html).toContain('aria-expanded="false"');
+  expect(html).not.toContain('class="settings-panel"');
+});
+
+test("an open settings panel renders above the panes", () => {
+  const html = render({ state: state(), settings: settings(), settingsOpen: true });
+  expect(html).toContain('class="settings-panel"');
+  expect(html).toContain('aria-expanded="true"');
+  expect(html).toContain("omp sessions");
+});
+
+test("agents passed to the view show up in the sidebar", () => {
+  const html = render({ state: state(), agents: [agentGroup()] });
+  expect(html).toContain('class="agent-row agent-row-omp"');
+  expect(html).toContain("Fix the parser");
+});
+
+test("shouldFetchAgents is false only when both toggles are off", () => {
+  expect(shouldFetchAgents(settings())).toBe(false);
+  expect(shouldFetchAgents(settings({ ompSessions: true }))).toBe(true);
+  expect(shouldFetchAgents(settings({ piSessions: true }))).toBe(true);
+  expect(shouldFetchAgents(settings({ ompSessions: true, piSessions: true }))).toBe(true);
+});
+
+test("loadSnapshot never asks for agents when both toggles are off", async () => {
+  let agentCalls = 0;
+  const snapshot = await loadSnapshot({
+    fetchState: async () => state(),
+    fetchSettings: async () => settings(),
+    fetchAgents: async () => {
+      agentCalls += 1;
+      return [agentGroup()];
+    },
+  });
+  expect(agentCalls).toBe(0);
+  expect(snapshot.agents).toEqual([]);
+  expect(snapshot.settings).toEqual(settings());
+});
+
+test("loadSnapshot asks for agents once when a toggle is on", async () => {
+  let agentCalls = 0;
+  const snapshot = await loadSnapshot({
+    fetchState: async () => state(),
+    fetchSettings: async () => settings({ piSessions: true }),
+    fetchAgents: async () => {
+      agentCalls += 1;
+      return [agentGroup()];
+    },
+  });
+  expect(agentCalls).toBe(1);
+  expect(snapshot.agents).toEqual([agentGroup()]);
+});
+
+test("an agent selection survives a snapshot that still lists the session", async () => {
+  const selection = {
+    kind: "agent" as const,
+    agent: "omp" as const,
+    group: "pi-plan-dispatch",
+    id: "s1",
+  };
+  const sources = {
+    fetchState: async () => state(),
+    fetchSettings: async () => settings({ ompSessions: true }),
+    fetchAgents: async () => [agentGroup()],
+  };
+  const first = await loadSnapshot(sources);
+  const second = await loadSnapshot(sources);
+  expect(reconcileSelection(selection, second.state, second.agents)).toEqual(selection);
+  expect(reconcileSelection(selection, first.state, first.agents)).toEqual(selection);
+});
+
+test("an agent selection is cleared by a snapshot that drops the session", async () => {
+  const selection = {
+    kind: "agent" as const,
+    agent: "omp" as const,
+    group: "pi-plan-dispatch",
+    id: "s1",
+  };
+  const snapshot = await loadSnapshot({
+    fetchState: async () => state(),
+    fetchSettings: async () => settings({ ompSessions: true }),
+    fetchAgents: async () => [agentGroup({ sessions: [] })],
+  });
+  expect(reconcileSelection(selection, snapshot.state, snapshot.agents)).toBeNull();
+});
+
+test("reconcileSelection keeps an agent selection that is still listed", () => {
+  const selection = {
+    kind: "agent" as const,
+    agent: "pi" as const,
+    group: "pi-plan-dispatch",
+    id: "s2",
+  };
+  const agents = [
+    agentGroup({
+      sessions: [agentSession({ agent: "pi", id: "s2" }), agentSession()],
+    }),
+  ];
+  expect(reconcileSelection(selection, state(), agents)).toEqual(selection);
+});
+
+test("reconcileSelection clears an agent selection against an empty list", () => {
+  const selection = {
+    kind: "agent" as const,
+    agent: "omp" as const,
+    group: "pi-plan-dispatch",
+    id: "s1",
+  };
+  expect(reconcileSelection(selection, state(), [])).toBeNull();
+  expect(reconcileSelection(selection, state())).toBeNull();
+});
+
+test("reconcileSelection clears an agent selection whose id is gone from its group", () => {
+  const selection = {
+    kind: "agent" as const,
+    agent: "omp" as const,
+    group: "pi-plan-dispatch",
+    id: "s1",
+  };
+  const agents = [agentGroup({ sessions: [agentSession({ id: "other" })] })];
+  expect(reconcileSelection(selection, state(), agents)).toBeNull();
 });

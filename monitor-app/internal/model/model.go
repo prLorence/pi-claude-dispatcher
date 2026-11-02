@@ -3,7 +3,10 @@
 // The JSON names are the TypeScript field names of monitor/src/shared/types.ts,
 // so a value of this package encodes field for field to the same JSON the Bun
 // server produces. A TypeScript null is a pointer (or an interface) that
-// encodes to null, and every field is always encoded (no omitempty).
+// encodes to null, and every field is always encoded (no omitempty). The one
+// documented exception is Entry.Code, which is left out of the JSON when
+// there is no block, so an entry without a block encodes exactly as it did
+// before the field existed and the frozen golden transcripts stay valid.
 package model
 
 import "time"
@@ -122,6 +125,14 @@ type EntryTool struct {
 	Args string `json:"args"`
 }
 
+// CodeBlock is the code a transcript entry shows: a diff, a whole file or a
+// shell command.
+type CodeBlock struct {
+	Kind string  `json:"kind"`
+	Path *string `json:"path"`
+	Text string  `json:"text"`
+}
+
 // Entry is one transcript entry.
 type Entry struct {
 	Line      int        `json:"line"`
@@ -132,6 +143,31 @@ type Entry struct {
 	Truncated bool       `json:"truncated"`
 	Tool      *EntryTool `json:"tool"`
 	IsError   bool       `json:"isError"`
+	Code      *CodeBlock `json:"code,omitempty"`
+}
+
+// AgentSession is one coding-agent session listed in the Agents view.
+type AgentSession struct {
+	Agent     string   `json:"agent"`
+	ID        string   `json:"id"`
+	Title     string   `json:"title"`
+	Model     *string  `json:"model"`
+	Cwd       string   `json:"cwd"`
+	Group     string   `json:"group"`
+	StartedAt *string  `json:"startedAt"`
+	MtimeMs   float64  `json:"mtimeMs"`
+	Live      bool     `json:"live"`
+	Ended     bool     `json:"ended"`
+	Tokens    *float64 `json:"tokens"`
+	Cost      *float64 `json:"cost"`
+	LastTool  *string  `json:"lastTool"`
+	Thinking  *string  `json:"thinking"`
+}
+
+// AgentGroup is a group of agent sessions, usually one repo's.
+type AgentGroup struct {
+	Name     string         `json:"name"`
+	Sessions []AgentSession `json:"sessions"`
 }
 
 // SessionPage is one page of a session transcript.

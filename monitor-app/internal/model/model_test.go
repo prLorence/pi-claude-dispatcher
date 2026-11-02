@@ -372,6 +372,90 @@ func TestZeroValuesEncodeAsNullAndEmpty(t *testing.T) {
 	}
 }
 
+func TestEntryCodeJSON(t *testing.T) {
+	entry := Entry{Line: 1, Ts: nil, Kind: "user", Text: "fix the build"}
+	data, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatalf("marshal entry without code: %v", err)
+	}
+	want := `{"line":1,"ts":null,"kind":"user","text":"fix the build","collapsed":false,"truncated":false,"tool":null,"isError":false}`
+	if string(data) != want {
+		t.Fatalf("entry JSON = %s, want %s", data, want)
+	}
+
+	path := "src/app.ts"
+	entry = Entry{
+		Line: 2,
+		Kind: "tool_call",
+		Text: "edit src/app.ts",
+		Code: &CodeBlock{Kind: "diff", Path: &path, Text: "@@ -1 +1 @@"},
+	}
+	data, err = json.Marshal(entry)
+	if err != nil {
+		t.Fatalf("marshal entry with code: %v", err)
+	}
+	want = `{"line":2,"ts":null,"kind":"tool_call","text":"edit src/app.ts","collapsed":false,"truncated":false,"tool":null,"isError":false,"code":{"kind":"diff","path":"src/app.ts","text":"@@ -1 +1 @@"}}`
+	if string(data) != want {
+		t.Fatalf("entry JSON = %s, want %s", data, want)
+	}
+
+	entry = Entry{Line: 3, Kind: "tool_call", Text: "bash npm test", Code: &CodeBlock{Kind: "command", Text: "npm test"}}
+	data, err = json.Marshal(entry)
+	if err != nil {
+		t.Fatalf("marshal entry with nil code path: %v", err)
+	}
+	want = `{"line":3,"ts":null,"kind":"tool_call","text":"bash npm test","collapsed":false,"truncated":false,"tool":null,"isError":false,"code":{"kind":"command","path":null,"text":"npm test"}}`
+	if string(data) != want {
+		t.Fatalf("entry JSON = %s, want %s", data, want)
+	}
+}
+
+func TestAgentGroupJSON(t *testing.T) {
+	modelName := "deepseek-v4"
+	started := "2026-10-23T10:00:00.000Z"
+	lastTool := "edit core.ts"
+	thinking := "high"
+	group := AgentGroup{
+		Name: "repo",
+		Sessions: []AgentSession{
+			{
+				Agent:     "omp",
+				ID:        "session-1",
+				Title:     "fix the build",
+				Model:     &modelName,
+				Cwd:       "/repo",
+				Group:     "repo",
+				StartedAt: &started,
+				MtimeMs:   1792749900000,
+				Live:      true,
+				Ended:     false,
+				Tokens:    ptr(float64(1200)),
+				Cost:      ptr(0.5),
+				LastTool:  &lastTool,
+				Thinking:  &thinking,
+			},
+		},
+	}
+
+	data, err := json.Marshal(group)
+	if err != nil {
+		t.Fatalf("marshal group: %v", err)
+	}
+	want := `{"name":"repo","sessions":[{"agent":"omp","id":"session-1","title":"fix the build","model":"deepseek-v4","cwd":"/repo","group":"repo","startedAt":"2026-10-23T10:00:00.000Z","mtimeMs":1792749900000,"live":true,"ended":false,"tokens":1200,"cost":0.5,"lastTool":"edit core.ts","thinking":"high"}]}`
+	if string(data) != want {
+		t.Fatalf("group JSON = %s, want %s", data, want)
+	}
+
+	data, err = json.Marshal(AgentSession{Agent: "pi", ID: "session-2"})
+	if err != nil {
+		t.Fatalf("marshal empty session: %v", err)
+	}
+	want = `{"agent":"pi","id":"session-2","title":"","model":null,"cwd":"","group":"","startedAt":null,"mtimeMs":0,"live":false,"ended":false,"tokens":null,"cost":null,"lastTool":null,"thinking":null}`
+	if string(data) != want {
+		t.Fatalf("session JSON = %s, want %s", data, want)
+	}
+}
+
 func TestParseTime(t *testing.T) {
 	cases := []struct {
 		name string

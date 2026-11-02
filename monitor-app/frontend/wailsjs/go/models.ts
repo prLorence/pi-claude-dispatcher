@@ -1,5 +1,76 @@
 export namespace model {
 	
+	export class AgentSession {
+	    agent: string;
+	    id: string;
+	    title: string;
+	    model?: string;
+	    cwd: string;
+	    group: string;
+	    startedAt?: string;
+	    mtimeMs: number;
+	    live: boolean;
+	    ended: boolean;
+	    tokens?: number;
+	    cost?: number;
+	    lastTool?: string;
+	    thinking?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AgentSession(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.agent = source["agent"];
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.model = source["model"];
+	        this.cwd = source["cwd"];
+	        this.group = source["group"];
+	        this.startedAt = source["startedAt"];
+	        this.mtimeMs = source["mtimeMs"];
+	        this.live = source["live"];
+	        this.ended = source["ended"];
+	        this.tokens = source["tokens"];
+	        this.cost = source["cost"];
+	        this.lastTool = source["lastTool"];
+	        this.thinking = source["thinking"];
+	    }
+	}
+	export class AgentGroup {
+	    name: string;
+	    sessions: AgentSession[];
+	
+	    static createFrom(source: any = {}) {
+	        return new AgentGroup(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.sessions = this.convertValues(source["sessions"], AgentSession);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class ReviewResult {
 	    verdict: string;
 	    findings?: number;
@@ -71,6 +142,22 @@ export namespace model {
 		    }
 		    return a;
 		}
+	}
+	export class CodeBlock {
+	    kind: string;
+	    path?: string;
+	    text: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CodeBlock(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.path = source["path"];
+	        this.text = source["text"];
+	    }
 	}
 	export class DeciderFinding {
 	    id: string;
@@ -170,6 +257,7 @@ export namespace model {
 	    truncated: boolean;
 	    tool?: EntryTool;
 	    isError: boolean;
+	    code?: CodeBlock;
 	
 	    static createFrom(source: any = {}) {
 	        return new Entry(source);
@@ -185,6 +273,7 @@ export namespace model {
 	        this.truncated = source["truncated"];
 	        this.tool = this.convertValues(source["tool"], EntryTool);
 	        this.isError = source["isError"];
+	        this.code = this.convertValues(source["code"], CodeBlock);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -444,6 +533,27 @@ export namespace model {
 		    }
 		    return a;
 		}
+	}
+
+}
+
+export namespace settings {
+	
+	export class Settings {
+	    ompSessions: boolean;
+	    piSessions: boolean;
+	    scope: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Settings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ompSessions = source["ompSessions"];
+	        this.piSessions = source["piSessions"];
+	        this.scope = source["scope"];
+	    }
 	}
 
 }
