@@ -117,10 +117,12 @@ func (s Store) Remove(name string) error {
 }
 
 // save writes the list atomically: a temporary file in the same folder, then a
-// rename. The parent folder is created when it is missing.
+// rename. The file is left at mode 0600, so the list is private to the user. A
+// parent folder the store has to create is made at mode 0700; a folder that
+// already exists keeps its mode.
 func (s Store) save(list []SavedRepo) error {
 	dir := filepath.Dir(s.Path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(list, "", "  ")
@@ -152,7 +154,7 @@ func (s Store) save(list []SavedRepo) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmp, 0o644); err != nil {
+	if err := os.Chmod(tmp, 0o600); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, s.Path); err != nil {

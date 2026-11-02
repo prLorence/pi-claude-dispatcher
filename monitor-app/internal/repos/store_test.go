@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -220,5 +221,84 @@ func TestRemoveDeletesByNameAndRejectsUnknownNames(t *testing.T) {
 	list = store.Load()
 	if len(list) != 1 || list[0].Name != "b" {
 		t.Fatalf("unknown remove changed the list: %v", list)
+	}
+}
+
+func TestStoreFileMode(t *testing.T) {
+	store := newStore(t)
+	dir := plansFolder(t, t.TempDir(), "repo")
+	if _, message, err := store.Add(dir); err != nil || message != "" {
+		t.Fatalf("Add = (%q, %v), want no message and no error", message, err)
+	}
+	info, err := os.Stat(store.Path)
+	if err != nil {
+		t.Fatalf("saved file: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("file mode = %#o, want %#o", perm, 0o600)
+	}
+}
+
+func TestStoreOverwritesWiderMode(t *testing.T) {
+	store := newStore(t)
+	if err := os.WriteFile(store.Path, []byte("[]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(store.Path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := plansFolder(t, t.TempDir(), "repo")
+	if _, message, err := store.Add(dir); err != nil || message != "" {
+		t.Fatalf("Add = (%q, %v), want no message and no error", message, err)
+	}
+	info, err := os.Stat(store.Path)
+	if err != nil {
+		t.Fatalf("saved file: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("file mode after save = %#o, want %#o", perm, 0o600)
+	}
+}
+
+func TestStoreNewFolderMode(t *testing.T) {
+	old := syscall.Umask(0)
+	t.Cleanup(func() { syscall.Umask(old) })
+
+	base := t.TempDir()
+	parent := filepath.Join(base, "nested", "dir")
+	store := Store{Path: filepath.Join(parent, "repos.json")}
+	dir := plansFolder(t, base, "repo")
+	if _, message, err := store.Add(dir); err != nil || message != "" {
+		t.Fatalf("Add = (%q, %v), want no message and no error", message, err)
+	}
+	info, err := os.Stat(parent)
+	if err != nil {
+		t.Fatalf("created folder: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Fatalf("folder mode = %#o, want %#o", perm, 0o700)
+	}
+}
+
+func TestStoreKeepsExistingFolderMode(t *testing.T) {
+	base := t.TempDir()
+	parent := filepath.Join(base, "existing")
+	if err := os.Mkdir(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store := Store{Path: filepath.Join(parent, "repos.json")}
+	dir := plansFolder(t, base, "repo")
+	if _, message, err := store.Add(dir); err != nil || message != "" {
+		t.Fatalf("Add = (%q, %v), want no message and no error", message, err)
+	}
+	info, err := os.Stat(parent)
+	if err != nil {
+		t.Fatalf("existing folder: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o755 {
+		t.Fatalf("existing folder mode = %#o, want %#o", perm, 0o755)
 	}
 }

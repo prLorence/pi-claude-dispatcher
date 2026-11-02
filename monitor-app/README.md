@@ -82,7 +82,7 @@ The repos come from one of two sources, and flags win.
 
 The naming and ordering rules are the Bun monitor's: the part before the first `=` is a name only when it matches `^[\w.-]+$` and a path follows; a default name is the folder name, or the parent folder's name for a path ending in `.plans`; every default name is sanitised; duplicates get `-2`, `-3`. At most 24 repos; extra ones are ignored with the message `N more repos ignored (limit 24)`. A folder that does not exist is still a repo, with its own message, and never stops the others.
 
-Without flags, the app reads the saved list at `~/.config/pi-monitor/repos.json`, a JSON array of `{"name": "...", "path": "..."}` objects. A missing or damaged file means an empty list, never a crash.
+Without flags, the app reads the saved list at `~/.config/pi-monitor/repos.json`, a JSON array of `{"name": "...", "path": "..."}` objects. A missing or damaged file means an empty list, never a crash. The app writes the saved list with mode 0600, readable by the user only, and a folder it has to create for it with mode 0700; an existing file written by an earlier version with wider permissions is fixed the next time the list is saved.
 
 The window has an Add repo control that opens the native folder picker. A chosen folder is accepted when it is named `.plans` or contains one of `traces`, `running`, `done`, `inbox` or `sessions`; when it holds a `.plans` subfolder, that one is used; otherwise the window shows a message and nothing changes. A cancelled dialog changes nothing. The chosen folder is saved to the repo list.
 
