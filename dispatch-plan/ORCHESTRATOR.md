@@ -30,6 +30,10 @@ and Pi workers write all the code. Steps 1 to 8 are the whole flow for one reque
    its body with `Covers: R1, R2`. Fix rounds are drafts too, written the same way, with
    `parent:` set and `round:` one higher. Log `plan.drafted` with data
    `{"tasks": <count>, "spec": "<path>"}`, `--round` set to the plan round.
+   When `pairDefault` is set in `.plans/config.json`, every task without a `pair:` line gets
+   that read-only reviewer, so you need not write `pair:` lines; write `pair: none` only for a
+   task that does not need a review, with the reason in the task body. You never edit the
+   `pairDefault` config.
    When `decider.effort` is `apply` in `.plans/config.json`, run
    `node ~/.claude/skills/dispatch-plan/decide.mjs effort --plan <draft> --trace <T> --root <repo root>`
    and write each task's `thinking:` line from its `suggested` value; a level you pin instead

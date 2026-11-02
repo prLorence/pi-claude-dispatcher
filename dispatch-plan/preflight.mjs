@@ -140,11 +140,16 @@ async function main() {
 	}
 
 	const cfg = core.loadConfig(core.getDirs(root));
+	// The dispatcher applies the config's pairDefault before preflight; do the
+	// same here so the reported pairs are the ones a run would use (R3).
+	core.applyPairDefault(plan, cfg);
+	const defaulted = plan.tasks.filter((task) => task.pairSource === "default").length;
 	const { errors, warnings } = collectProblems(core, verify, plan, cfg, root);
 	for (const error of errors) console.log(`ERROR: ${error}`);
 	for (const warning of warnings) console.log(`WARN: ${warning}`);
 	if (errors.length) return 1;
 	console.log(`OK: ${plan.id}, ${plan.tasks.length} tasks`);
+	if (defaulted > 0) console.log(`INFO: ${defaulted} task(s) paired by the default role "${cfg.pairDefault}"`);
 	return 0;
 }
 

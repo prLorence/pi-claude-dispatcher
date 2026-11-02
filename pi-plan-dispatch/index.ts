@@ -28,6 +28,7 @@ import {
 	type WorkerResult,
 	DEFAULT_PAIR_ROUNDS,
 	PlanParseError,
+	applyPairDefault,
 	buildWorkerPrompt,
 	eligibleForDecider,
 	ensureDirs,
@@ -35,6 +36,7 @@ import {
 	isPlanFinished,
 	knownRoles,
 	loadConfig,
+	pairDefaultProblem,
 	parsePlan,
 	preflightPlan,
 	resolveModel,
@@ -101,6 +103,16 @@ interface OpenWindow {
 
 /** Why a pair loop stopped early: the run cap, kept with the still-open findings. */
 const runCapFinding = (max: number): ReviewFinding => ({ text: `pair loop stopped at maxRunsPerTask (${max} worker runs) with findings still open` });
+
+/**
+ * Tasks that owe their pair to the config default, and the role they use. The role
+ * comes from the task, never from a fresh config read: render() runs repeatedly and
+ * a config edit during the run must not change what the plan view says.
+ */
+function defaultPairs(plan: Plan): { count: number; role: string | undefined } {
+	const tasks = plan.tasks.filter((t) => t.pairSource === "default");
+	return { count: tasks.length, role: tasks[0]?.pair };
+}
 
 /** A role's effective settings, resolved the way a plan's `role:` line resolves it. */
 function roleSummary(cfg: DispatchConfig, name: string): { model: string; thinking: string; readonly: boolean } {
@@ -195,10 +207,11 @@ export default function (pi: ExtensionAPI, options: { deciderBackend?: Backend }
 		const done = current.tasks.filter((t) => t.state === "done").length;
 		ctx.ui.setStatus("plans", `plans: ${current.id} ${done}/${current.tasks.length}`);
 		const paused = planGate?.open === true;
+		const paired = defaultPairs(current);
 		ctx.ui.setWidget(
 			"plans",
 			[
-				`Plan ${current.id}${config().dryRun ? " (dry run)" : ""}`,
+				`Plan ${current.id}${config().dryRun ? " (dry run)" : ""}${paired.count > 0 ? ` · ${paired.count} paired by default (${paired.role})` : ""}`,
 				...(paused ? ["network outage: paused"] : []),
 				...current.tasks.map((t) => {
 					const extra = t.state === "running" && lastLine.get(t.id) ? `  ${lastLine.get(t.id)}` : "";
@@ -280,8 +293,11 @@ export default function (pi: ExtensionAPI, options: { deciderBackend?: Backend }
 			return;
 		}
 
-		// Preflight (G4): refuse an unsafe or oversized plan before any worker starts.
+		// R3: the effective pair is computed once, before preflight, so the run,
+		// preflight and the evidence all see the same pairs.
 		const cfg = config();
+		applyPairDefault(plan, cfg);
+		// Preflight (G4): refuse an unsafe or oversized plan before any worker starts.
 		const problems = preflightPlan(plan, cfg, cwd);
 		for (const [label, command] of [["plan", plan.verify], ...plan.tasks.map((t) => [`task ${t.id}`, t.verify])] as [string, string | undefined][]) {
 			if (!command) continue;
@@ -686,6 +702,8 @@ export default function (pi: ExtensionAPI, options: { deciderBackend?: Backend }
 				attempt: t.attempts,
 				data: {
 					role,
+					pair: t.pair ?? null,
+					pair_source: t.pairSource ?? null,
 					model,
 					thinking,
 					thinking_source: source,
@@ -918,8 +936,10 @@ export default function (pi: ExtensionAPI, options: { deciderBackend?: Backend }
 			path.join(outDir, "evidence.json"),
 			`${JSON.stringify({ plan: plan.id, trace: plan.trace, round: plan.round ?? 1, parent: plan.parent, changed, faults, gate, verify: [...verifyRecords.values()], pairs: pairEvidence, reviews: reviewEvidence, sessions }, null, 2)}\n`,
 		);
+		const pairedByDefault = defaultPairs(plan);
 		writeSummary(outDir, plan, [
 			`gate: **${gate.pass ? "PASS" : "FAIL"}** · ${gate.counts.error} error(s) · ${gate.counts.warn} warning(s) · evidence ${gate.evidence} · trace \`${plan.trace}\``,
+			...(pairedByDefault.count > 0 ? [`paired by default: ${pairedByDefault.count} task(s) with role "${pairedByDefault.role}"`] : []),
 			...(verifyRecords.size ? ["verification:", ...[...verifyRecords.values()].map((v) => `- ${v.scope}: ${v.ok ? "PASS" : "FAIL"} \`${v.command}\``)] : []),
 			...(pairEvidence.length
 				? [
@@ -993,6 +1013,10 @@ export default function (pi: ExtensionAPI, options: { deciderBackend?: Backend }
 		const cfg = config();
 		if (what !== "test") {
 			for (const name of knownRoles(cfg)) ctx.ui.notify(roleLine(cfg, name), "info");
+			if (cfg.pairDefault !== "") {
+				const problem = pairDefaultProblem(cfg);
+				ctx.ui.notify(problem ?? `pairDefault: ${cfg.pairDefault} (every task without a pair: line gets this reviewer)`, "info");
+			}
 			return;
 		}
 		if (busy || abort) {

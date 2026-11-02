@@ -727,6 +727,176 @@ test("pair: maxRunsPerTask stops a reviewer that keeps asking for changes", asyn
 	assert.match(fault.message, /maxRunsPerTask \(3 worker runs\)/);
 });
 
+// ---------- pairDefault ----------
+
+/** Merge keys into the repo config, creating it when a dry run or command wrote none. */
+function setPairConfig(dir: string, extra: object) {
+	const file = path.join(dir, ".plans/config.json");
+	let raw: object = {};
+	try {
+		raw = JSON.parse(fs.readFileSync(file, "utf8"));
+	} catch {}
+	fs.writeFileSync(file, JSON.stringify({ ...raw, ...extra }));
+}
+
+/** The default pairs writable tasks, skips `security`, honors `pair: none`, and keeps an explicit pair. */
+const defaultPairPlan = (id: string) => `---
+id: ${id}
+trace: tr
+status: ready
+---
+Context.
+
+## task: a
+files: src/a.ts
+depends_on: []
+Create a.
+
+## task: b
+files: src/b.ts
+depends_on: []
+Create b.
+
+## task: c
+files: src/c.ts
+pair: none
+depends_on: []
+Create c, no review needed.
+
+## task: d
+files: src/d.ts
+pair: review
+depends_on: []
+Create d.
+
+## task: audit
+files: src/api.ts
+role: security
+depends_on: []
+Review.
+`;
+
+function defaultPairFake(dir: string) {
+	const say = (text: string) =>
+		`out({ type: "message_end", message: { role: "assistant", stopReason: "stop", usage: { input: 5, output: 5, totalTokens: 10, cost: { total: 0 } },\n  content: [{ type: "text", text: ${JSON.stringify(text)} }] } });`;
+	fakePi(
+		dir,
+		`import fs from "node:fs";
+const out = (o) => console.log(JSON.stringify(o));
+const prompt = process.argv[process.argv.length - 1];
+if (/You are the security reviewer for task/.test(prompt)) {
+	${say("VERDICT: clean\nFINDINGS: none")}
+} else if (/You are the reviewer for task/.test(prompt)) {
+	${say("VERDICT: approve\nFINDINGS: none")}
+} else {
+	const id = /## Your task: (\\w+)/.exec(prompt)?.[1];
+	const file = "src/" + id + ".ts";
+	fs.writeFileSync(file, "v2");
+	out({ type: "tool_execution_start", toolCallId: "1", toolName: "read", args: { path: file } });
+	out({ type: "tool_execution_start", toolCallId: "2", toolName: "edit", args: { path: file } });
+	out({ type: "message_end", message: { role: "assistant", stopReason: "stop", usage: { input: 5, output: 5, totalTokens: 10, cost: { total: 0 } },\n  content: [{ type: "text", text: "STATUS: done\\nCHANGED:\\n" + file + "\\nTESTS: none\\nNOTES: n\\nNEEDS: none" }] } });
+}
+`,
+	);
+}
+
+test("pairDefault: defaulted tasks run a reviewer, none and security do not, and task.start records the source", async () => {
+	const dir = repo();
+	defaultPairFake(dir);
+	setPairConfig(dir, { pairDefault: "review" });
+	await withExtension(
+		dir,
+		false,
+		async (x) => {
+			drop(dir, "dp1", defaultPairPlan("dp1"));
+			await waitFor(path.join(dir, ".plans/done/dp1/_summary.md"));
+			assert.ok(
+				x.widgets.some((w) => w[0]?.startsWith("Plan dp1") && w[0].includes("2 paired by default (review)")),
+				"the plan header names the default pairs",
+			);
+		},
+		{ ui: true },
+	);
+
+	const ev = evidence(dir, "dp1");
+	assert.equal(ev.gate.pass, true, JSON.stringify(ev.faults));
+	assert.deepEqual(
+		ev.pairs.map((p: { task: string }) => p.task).sort(),
+		["a", "b", "d"],
+		"the writable tasks are reviewed, none/security are not",
+	);
+	const starts = readEvents(path.join(dir, ".plans"), "tr").filter((e) => e.kind === "task.start");
+	const start = (id: string) => starts.find((e) => e.task === id)!.data as { pair: string | null; pair_source: string | null };
+	assert.deepEqual([start("a").pair, start("a").pair_source], ["review", "default"]);
+	assert.deepEqual([start("b").pair, start("b").pair_source], ["review", "default"]);
+	assert.deepEqual([start("c").pair, start("c").pair_source], [null, "none"], "pair: none is the opt-out");
+	assert.deepEqual([start("d").pair, start("d").pair_source], ["review", "task"], "an explicit pair wins");
+	assert.deepEqual([start("audit").pair, start("audit").pair_source], [null, null], "security is skipped silently");
+	const reviews = readEvents(path.join(dir, ".plans"), "tr").filter(
+		(e) => e.kind === "task.review" && (e.data as { reviewer_role: string }).reviewer_role === "review",
+	);
+	assert.equal(reviews.length, 3, "a, b and d each got one reviewer");
+	assert.match(fs.readFileSync(path.join(dir, ".plans/done/dp1/_summary.md"), "utf8"), /paired by default: 2 task\(s\) with role "review"/);
+});
+
+test("pairDefault: a dry run still pairs the tasks but starts no reviewer", async () => {
+	const dir = repo();
+	await withExtension(
+		dir,
+		true,
+		async (x) => {
+			setPairConfig(dir, { pairDefault: "review" });
+			drop(dir, "dp2", pairPlan("dp2"));
+			await waitFor(path.join(dir, ".plans/done/dp2/_summary.md"));
+			assert.ok(
+				x.widgets.some((w) => w[0]?.startsWith("Plan dp2") && w[0].includes("1 paired by default (review)")),
+				"the header still names the pairing",
+			);
+		},
+		{ ui: true },
+	);
+
+	const events = readEvents(path.join(dir, ".plans"), "tr");
+	assert.equal(events.filter((e) => e.kind === "task.review").length, 0, "dry runs skip pairs");
+	const start = events.find((e) => e.kind === "task.start")!.data as { pair: string | null; pair_source: string | null };
+	assert.deepEqual([start.pair, start.pair_source], ["review", "default"]);
+	assert.match(fs.readFileSync(path.join(dir, ".plans/done/dp2/_summary.md"), "utf8"), /paired by default: 1 task\(s\) with role "review"/);
+});
+
+test("pairDefault: off leaves the header and the summary without a pairing line", async () => {
+	const dir = repo();
+	await withExtension(
+		dir,
+		true,
+		async (x) => {
+			drop(dir, "dp3", pairPlan("dp3"));
+			await waitFor(path.join(dir, ".plans/done/dp3/_summary.md"));
+			assert.ok(
+				x.widgets.some((w) => w[0] === "Plan dp3 (dry run)"),
+				`unexpected header: ${JSON.stringify(x.widgets.map((w) => w[0]))}`,
+			);
+		},
+		{ ui: true },
+	);
+
+	assert.doesNotMatch(fs.readFileSync(path.join(dir, ".plans/done/dp3/_summary.md"), "utf8"), /paired by default/);
+	const start = readEvents(path.join(dir, ".plans"), "tr").find((e) => e.kind === "task.start")!.data as { pair: string | null; pair_source: string | null };
+	assert.deepEqual([start.pair, start.pair_source], [null, null]);
+});
+
+test("pairDefault: an invalid value rejects the plan with the one-line error", async () => {
+	const dir = repo();
+	await withExtension(dir, true, async () => {
+		setPairConfig(dir, { pairDefault: "architect" });
+		drop(dir, "dp4", pairPlan("dp4"));
+		await waitFor(path.join(dir, ".plans/failed/dp4.error.md"));
+	});
+
+	const error = fs.readFileSync(path.join(dir, ".plans/failed/dp4.error.md"), "utf8");
+	assert.match(error, /pairDefault names unknown role "architect" \(known roles: implement, review, security, qa\)/);
+	assert.equal(fs.existsSync(path.join(dir, ".plans/done/dp4")), false, "no worker starts");
+});
+
 // ---------- Security role (read-only reviewer) ----------
 
 const SECURITY_ISSUES = "VERDICT: issues\nFINDINGS:\n- [high] src/api.ts:1: user input reaches exec. Escape it.";
@@ -873,6 +1043,28 @@ test("/plans roles lists each role with its resolved model, thinking level and r
 		assert.match(x.notes[1], /^review: opencode-go\/minimax-m3\.1-flash-free, thinking low, readonly$/);
 		assert.match(x.notes[2], /^security: opencode-go\/glm-5\.3-flash, thinking high, readonly$/);
 		assert.match(x.notes[3], /^qa: opencode-go\/mimo-v2\.6-flash, thinking none, read-write$/);
+	});
+});
+
+test("/plans roles adds one pairDefault line only when the key is set", async () => {
+	const dir = repo();
+	await withExtension(dir, false, async (x) => {
+		await x.command("roles");
+		assert.equal(x.notes.length, 4, "off keeps today's output");
+
+		setPairConfig(dir, { pairDefault: "review" });
+		await x.command("roles");
+		assert.equal(x.notes.length, 9, x.notes.join("\n"));
+		assert.equal(x.notes[8], "pairDefault: review (every task without a pair: line gets this reviewer)");
+
+		setPairConfig(dir, { pairDefault: "architect" });
+		await x.command("roles");
+		assert.equal(x.notes.length, 14, x.notes.join("\n"));
+		assert.equal(x.notes[13], 'pairDefault names unknown role "architect" (known roles: implement, review, security, qa)');
+
+		setPairConfig(dir, { pairDefault: "qa" });
+		await x.command("roles");
+		assert.equal(x.notes[18], 'pairDefault role "qa" is not read-only; a pair reviewer must be a read-only role');
 	});
 });
 

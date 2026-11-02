@@ -129,6 +129,8 @@ export interface DispatchConfig {
 	maxTaskChars: number;
 	/** Role name to model, thinking, read-only flag and prompt */
 	roles: Record<string, RoleConfig>;
+	/** Reviewer role paired to every task without a `pair:` line (empty = off) */
+	pairDefault: string;
 	/** Cap on worker runs for one task: implementer runs plus pair reviewer runs */
 	maxRunsPerTask: number;
 	/** Resumes of the same session after a transient error, before `retries` applies (0 = off) */
@@ -167,6 +169,7 @@ export const DEFAULT_CONFIG: DispatchConfig = {
 	maxFilesPerTask: 10,
 	maxTaskChars: 8000,
 	roles: cloneRoles(DEFAULT_ROLES),
+	pairDefault: "",
 	maxRunsPerTask: 8,
 	transientRetries: 6,
 	backoffSeconds: [15, 30, 60, 120, 300, 300],
@@ -179,6 +182,9 @@ export const DEFAULT_CONFIG: DispatchConfig = {
 
 export type TaskState = "pending" | "running" | "done" | "failed" | "skipped";
 
+/** Where a task's pair reviewer came from (R2). */
+export type PairSource = "task" | "default" | "none";
+
 export interface PlanTask {
 	id: string;
 	files: string[];
@@ -189,6 +195,8 @@ export interface PlanTask {
 	role?: string;
 	/** Role that reviews this task after it passes (`pair:`); must be read-only */
 	pair?: string;
+	/** Where `pair` came from: the task line, the config default, or `pair: none` */
+	pairSource?: PairSource;
 	/** Pair review rounds to run before an open review is recorded (1-3, default 2) */
 	pairRounds?: number;
 	/** Implementer re-runs caused by a pair review so far; counted apart from retries */
@@ -289,6 +297,7 @@ export function loadConfig(d: Dirs): DispatchConfig {
 	cfg.outagePauseMinutes = numberOr(raw?.outagePauseMinutes, DEFAULT_CONFIG.outagePauseMinutes, (n) => n > 0);
 	cfg.probeSeconds = numberOr(raw?.probeSeconds, DEFAULT_CONFIG.probeSeconds, (n) => n > 0);
 	cfg.probeUrls = stringsOr(raw?.probeUrls, DEFAULT_CONFIG.probeUrls);
+	cfg.pairDefault = typeof raw?.pairDefault === "string" ? raw.pairDefault.trim() : "";
 	return cfg;
 }
 
@@ -300,6 +309,45 @@ export function knownRoles(cfg: DispatchConfig): string[] {
 /** The role's config, with the built-in defaults for every field the user did not set. */
 export function resolveRole(cfg: DispatchConfig | undefined, name: string): RoleConfig {
 	return { ...(DEFAULT_ROLES[name] ?? {}), ...(cfg?.roles?.[name] ?? {}) };
+}
+
+/**
+ * Why a non-empty `pairDefault` cannot be used, or undefined when it can (R4).
+ * The word `none` is reserved as the `pair:` opt-out, so a role named none can
+ * never be a default reviewer.
+ */
+export function pairDefaultProblem(cfg: DispatchConfig): string | undefined {
+	const value = cfg.pairDefault;
+	if (value === "") return undefined;
+	if (value.toLowerCase() === "none") return `pairDefault cannot be "none"; none is the pair: opt-out word`;
+	const names = knownRoles(cfg).join(", ");
+	if (!knownRoles(cfg).includes(value)) return `pairDefault names unknown role "${value}" (known roles: ${names})`;
+	if (!resolveRole(cfg, value).readonly) {
+		return `pairDefault role "${value}" is not read-only; a pair reviewer must be a read-only role`;
+	}
+	return undefined;
+}
+
+/**
+ * Apply the config's `pairDefault` to every task without its own pair line
+ * (R2, R3). The single place the default is computed; idempotent, so a second
+ * call changes nothing. Read-only tasks, `security` included, are skipped.
+ */
+export function applyPairDefault(plan: Plan, cfg: DispatchConfig): void {
+	const problem = cfg.pairDefault === "" ? undefined : pairDefaultProblem(cfg);
+	for (const task of plan.tasks) {
+		if (task.pairSource !== undefined) continue;
+		if (task.pair) {
+			task.pairSource = "task";
+			continue;
+		}
+		if (cfg.pairDefault === "" || problem !== undefined) continue;
+		const roleName = task.role || "implement";
+		if (resolveRole(cfg, roleName).readonly === true) continue;
+		task.pair = cfg.pairDefault;
+		task.pairSource = "default";
+		task.pairRounds = task.pairRounds ?? DEFAULT_PAIR_ROUNDS;
+	}
 }
 
 export interface ResolvedModel {
@@ -452,7 +500,15 @@ export function parsePlan(text: string, fallbackId: string): Plan {
 			else if (key === "model") task.model = val;
 			else if (key === "thinking") task.thinking = val;
 			else if (key === "role") task.role = val || undefined;
-			else if (key === "pair") task.pair = val || undefined;
+			else if (key === "pair") {
+				if (!val) {
+					// An empty value counts as no pair line.
+				} else if (val.toLowerCase() === "none") task.pairSource = "none";
+				else {
+					task.pair = val;
+					task.pairSource = "task";
+				}
+			}
 			// A non-numeric pair_rounds becomes NaN, which preflight rejects.
 			else if (key === "pair_rounds") task.pairRounds = val === "" ? Number.NaN : Number.parseInt(val, 10);
 		}
@@ -555,6 +611,8 @@ function escapesRepo(root: string, target: string): boolean {
  */
 export function preflightPlan(plan: Plan, cfg: DispatchConfig, cwd?: string): string[] {
 	const errors: string[] = [];
+	const badPairDefault = pairDefaultProblem(cfg);
+	if (badPairDefault !== undefined) errors.push(badPairDefault);
 	const names = knownRoles(cfg).join(", ");
 	// Resolved once, so a symlinked checkout still matches. A cwd that cannot be
 	// resolved turns the check off rather than failing the plan.
@@ -584,7 +642,7 @@ export function preflightPlan(plan: Plan, cfg: DispatchConfig, cwd?: string): st
 				errors.push(`Task ${task.id}: pair role "${task.pair}" is not read-only; a pair reviewer must be a read-only role`);
 			}
 		}
-		if (task.pairRounds !== undefined && !(task.pairRounds >= 1 && task.pairRounds <= 3)) {
+		if (task.pairSource !== "none" && task.pairRounds !== undefined && !(task.pairRounds >= 1 && task.pairRounds <= 3)) {
 			errors.push(`Task ${task.id}: pair_rounds must be 1 to 3, got ${task.pairRounds}`);
 		}
 		for (const entry of task.files) {

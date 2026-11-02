@@ -173,6 +173,67 @@ test("PI_PLAN_DISPATCH_DIR finds the dispatcher outside the repo", () => {
 	assert.ok(r.stdout.includes("OK: p-r1, 1 tasks"), r.stdout);
 });
 
+/** Write the dispatcher config the CLI loads from the temp repo. */
+function writeConfig(ctx, cfg) {
+	const dir = path.join(ctx.root, ".plans");
+	fs.mkdirSync(dir, { recursive: true });
+	fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(cfg));
+}
+
+/** Three tasks: one plain, one `pair: none`, one read-only security task. */
+function pairPlan() {
+	return `${head("verify: node --version\n")}## task: a
+files: docs/a.md
+verify: node --version
+
+Do the thing.
+
+## task: b
+files: docs/b.md
+verify: node --version
+pair: none
+
+Do the thing.
+
+## task: c
+role: security
+files: docs/c.md
+verify: node --version
+
+Do the security thing.
+`;
+}
+
+test("pairDefault prints the count of tasks paired by the default", () => {
+	const ctx = setup();
+	writeConfig(ctx, { pairDefault: "review" });
+	const r = run(ctx, [writePlan(ctx, "p-r1.md", pairPlan())]);
+	assert.equal(r.status, 0, r.stdout + r.stderr);
+	assert.equal(r.stdout.includes("ERROR"), false);
+	const lines = r.stdout.trim().split("\n");
+	const ok = lines.findIndex((line) => line === "OK: p-r1, 3 tasks");
+	assert.ok(ok >= 0, r.stdout);
+	assert.equal(lines[ok + 1], 'INFO: 1 task(s) paired by the default role "review"', r.stdout);
+});
+
+test("pairDefault off prints no INFO line", () => {
+	const ctx = setup();
+	writeConfig(ctx, { pairDefault: "" });
+	const r = run(ctx, [writePlan(ctx, "p-r1.md", pairPlan())]);
+	assert.equal(r.status, 0, r.stdout + r.stderr);
+	assert.ok(r.stdout.includes("OK: p-r1, 3 tasks"), r.stdout);
+	assert.equal(r.stdout.includes("INFO:"), false, r.stdout);
+});
+
+test("an unknown pairDefault rejects the plan", () => {
+	const ctx = setup();
+	writeConfig(ctx, { pairDefault: "ghost" });
+	const r = run(ctx, [writePlan(ctx, "p-r1.md", cleanPlan())]);
+	assert.equal(r.status, 1, r.stdout + r.stderr);
+	assert.ok(r.stdout.includes('ERROR: pairDefault names unknown role "ghost"'), r.stdout);
+	assert.equal(r.stdout.includes("OK:"), false, r.stdout);
+});
+
 test("the settings packages list is a fallback and npm: entries are not folders", () => {
 	const ctx = setup({ link: false });
 	const agentDir = path.join(ctx.home, ".pi", "agent");

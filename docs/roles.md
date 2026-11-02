@@ -34,7 +34,7 @@ the task's role, plan frontmatter, config defaults. The role prompt is appended 
 A user entry overrides only the fields it sets; add a role by naming it under `roles` and using it
 in a plan. `maxRunsPerTask` (default 8) caps implementer plus reviewer runs for one task; at the cap
 the pair loop stops, the task keeps its last verified state and a `pair_unresolved` warning is
-recorded. The config role `qa` is unrelated to the Pi agent of that name in `~/.pi/agent/agents/`.
+recorded. `pairDefault` (default `""`, off) names the read-only role that reviews every task without its own `pair:` line; the value must be a known, read-only role, and the word `none` is rejected because it is the `pair:` opt-out. When it is not valid, every plan is rejected at preflight with one line that names the key (`pairDefault names unknown role "x"` or `pairDefault role "x" is not read-only; a pair reviewer must be a read-only role`), and `/plans roles` shows the same problem. The orchestrator never edits this key. The config role `qa` is unrelated to the Pi agent of that name in `~/.pi/agent/agents/`.
 MiniMax M3.1 Flash is free for a limited period with no paid replacement listed; MiMo's thinking
 levels are untested, so no flag is passed. Run `/plans roles test`. `config-init.mjs` writes the starting config, and the review model is the field to change when the free period ends.
 
@@ -56,6 +56,19 @@ a non-read-only pair role, or a pair on a read-only task, is rejected. `pair_rou
 After an implementer task succeeds and its `verify:` passes, the dispatcher runs the pair
 reviewer on that task: a read-only worker that gets the implementer's report and the prompt.
 The loop is inside the task's lifecycle, so dependents wait for it, and a dry run skips it.
+
+`pairDefault` in `.plans/config.json` supplies the reviewer for every task that has no `pair:` line of
+its own. A task's own `pair: review` (or any other read-only role) wins over the default; `pair: none`
+opts that task out; `pair_rounds:` keeps its default of 2 and its 1 to 3 range whether the role came
+from the task or from the default. Read-only tasks, `security` included, are skipped silently, because
+the dispatcher already refuses to pair them explicitly. The `task.start` event carries `pair` (the
+effective role or `null`) and `pair_source` (`task`, `default`, `none` or `null` when there is no
+pair), and the plan summary and the widget header say how many tasks are paired by the default.
+
+Known limits: the word `none` is reserved as the opt-out, so a role named `none` cannot be used as a
+pair reviewer. The monitor (`monitor/` and the Go app) parses `pair:` itself and does not know the
+default, so with the setting on a defaulted task shows no reviewer lane, and a `pair: none` task shows
+a reviewer lane for a role named none that never fills.
 
 - `approve` means done.
 - `changes` with findings and rounds left means the implementer runs again with the findings
@@ -115,8 +128,9 @@ level is found before a plan runs.
 
 ## Pilot protocol
 
-The pair benefit is a hypothesis. Run the same tasks solo and with `pair: review`, then
-compare worker cost, gate pass rate, rounds and faults per model in the Models table.
+The pair benefit is a hypothesis. Run the same tasks solo and with `pair: review`, or run the same
+plans with `pairDefault` off and on, then compare worker cost, gate pass rate, rounds and faults per
+model in the Models table.
 
 ## Decider (optional)
 

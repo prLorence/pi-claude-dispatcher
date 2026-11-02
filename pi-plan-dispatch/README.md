@@ -118,6 +118,7 @@ Commands inside Pi:
 | `maxFilesPerTask` | `10` | Preflight rejects a task listing more files |
 | `maxTaskChars` | `8000` | Preflight rejects a longer task body |
 | `maxRunsPerTask` | `8` | Cap on worker runs per task: implementer plus pair reviewer runs |
+| `pairDefault` | `""` | Read-only role that reviews every task without its own `pair:` line; empty is off, `pair: none` opts a task out |
 | `transientRetries` | `6` | Resumes of the same session after a transient network or provider error; outside `retries` and `maxRunsPerTask` |
 | `backoffSeconds` | `[15, 30, 60, 120, 300, 300]` | Seconds to wait before resume n (1-based); past the end the last value repeats |
 | `stallMinutes` | `3` | Kill a worker that prints nothing for this long while no tool call is in flight (`0` = off) |

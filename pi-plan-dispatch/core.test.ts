@@ -8,6 +8,7 @@ import {
 	DEFAULT_CONFIG,
 	DEFAULT_PAIR_ROUNDS,
 	DEFAULT_ROLES,
+	applyPairDefault,
 	buildWorkerPrompt,
 	eligibleForDecider,
 	ensureDirs,
@@ -15,6 +16,7 @@ import {
 	getDirs,
 	knownRoles,
 	loadConfig,
+	pairDefaultProblem,
 	parsePlan,
 	preflightPlan,
 	resolveModel,
@@ -592,6 +594,131 @@ Do.
 
 	const defaulted = parsePlan(`---\nid: p\n---\nctx\n\n## task: a\npair: review\nfiles: a.ts\nDo.\n`, "x");
 	assert.equal(defaulted.tasks[0].pairRounds, DEFAULT_PAIR_ROUNDS, "pair without pair_rounds gets the default");
+	assert.equal(defaulted.tasks[0].pairSource, "task", "a role on the pair line comes from the task");
+});
+
+test("parsePlan: pair: none in any spelling is the opt-out, an empty line is no pair", () => {
+	for (const spelling of ["none", "None", "NONE", "  NoNe  "]) {
+		const plan = parsePlan(`---\nid: p\n---\nctx\n\n## task: a\npair: ${spelling}\nfiles: a.ts\nDo.\n`, "x");
+		assert.equal(plan.tasks[0].pair, undefined, spelling);
+		assert.equal(plan.tasks[0].pairSource, "none", spelling);
+		assert.equal(plan.tasks[0].pairRounds, undefined, spelling);
+	}
+
+	const role = parsePlan(`---\nid: p\n---\nctx\n\n## task: a\npair: review # a comment\nfiles: a.ts\nDo.\n`, "x");
+	assert.equal(role.tasks[0].pair, "review");
+	assert.equal(role.tasks[0].pairSource, "task");
+
+	const empty = parsePlan(`---\nid: p\n---\nctx\n\n## task: a\npair:\nfiles: a.ts\nDo.\n`, "x");
+	assert.equal(empty.tasks[0].pair, undefined);
+	assert.equal(empty.tasks[0].pairSource, undefined);
+
+	const missing = parsePlan(`---\nid: p\n---\nctx\n\n## task: a\nfiles: a.ts\nDo.\n`, "x");
+	assert.equal(missing.tasks[0].pairSource, undefined);
+});
+
+test("config: pairDefault is repaired and trimmed", () => {
+	assert.equal(DEFAULT_CONFIG.pairDefault, "", "the setting is off by default");
+	const dirs = getDirs(tmp());
+	ensureDirs(dirs);
+	const load = (value: unknown) => {
+		fs.writeFileSync(path.join(dirs.root, "config.json"), JSON.stringify(value));
+		return loadConfig(dirs).pairDefault;
+	};
+
+	assert.equal(load({}), "", "a missing key is off");
+	assert.equal(load({ pairDefault: 7 }), "", "a number is off");
+	assert.equal(load({ pairDefault: "   " }), "", "a blank string is off");
+	assert.equal(load({ pairDefault: " review " }), "review", "a padded role name is trimmed");
+	assert.equal(load({ pairDefault: "review" }), "review");
+});
+
+test("applyPairDefault: the full matrix of the effective pair", () => {
+	const cfg = (pairDefault: string, roles = DEFAULT_CONFIG.roles): DispatchConfig => ({ ...DEFAULT_CONFIG, pairDefault, roles });
+
+	// default off: nothing changes
+	const off = planOf([{ id: "a" }]);
+	applyPairDefault(off, cfg(""));
+	assert.equal(off.tasks[0].pair, undefined);
+	assert.equal(off.tasks[0].pairSource, undefined);
+	assert.equal(off.tasks[0].pairRounds, undefined);
+
+	// default on: an implement task is paired with the default rounds
+	const on = planOf([{ id: "a" }]);
+	applyPairDefault(on, cfg("review"));
+	assert.equal(on.tasks[0].pair, "review");
+	assert.equal(on.tasks[0].pairSource, "default");
+	assert.equal(on.tasks[0].pairRounds, DEFAULT_PAIR_ROUNDS);
+
+	// an explicit role wins over the default
+	const explicit = planOf([{ id: "a", pair: "security" }]);
+	applyPairDefault(explicit, cfg("review"));
+	assert.equal(explicit.tasks[0].pair, "security");
+	assert.equal(explicit.tasks[0].pairSource, "task");
+
+	// none wins over the default
+	const none = planOf([{ id: "a", pairSource: "none" }]);
+	applyPairDefault(none, cfg("review"));
+	assert.equal(none.tasks[0].pair, undefined);
+	assert.equal(none.tasks[0].pairSource, "none");
+	assert.equal(none.tasks[0].pairRounds, undefined);
+
+	// a pair_rounds on a defaulted task is kept
+	const rounds = planOf([{ id: "a", pairRounds: 3 }]);
+	applyPairDefault(rounds, cfg("review"));
+	assert.equal(rounds.tasks[0].pair, "review");
+	assert.equal(rounds.tasks[0].pairRounds, 3);
+
+	// read-only tasks, security included, are skipped silently
+	for (const role of ["review", "security"]) {
+		const skipped = planOf([{ id: role, role }]);
+		applyPairDefault(skipped, cfg("review"));
+		assert.equal(skipped.tasks[0].pair, undefined, role);
+		assert.equal(skipped.tasks[0].pairSource, undefined, role);
+	}
+
+	// a custom non-read-only task role is paired, and so is a custom read-only default
+	const customRoles = {
+		...DEFAULT_CONFIG.roles,
+		e2e: { model: "x/model", readonly: false },
+		audit: { model: "x/audit", readonly: true },
+	};
+	const customTask = planOf([{ id: "a", role: "e2e" }]);
+	applyPairDefault(customTask, cfg("review", customRoles));
+	assert.equal(customTask.tasks[0].pair, "review");
+	const customDefault = planOf([{ id: "a" }]);
+	applyPairDefault(customDefault, cfg("audit", customRoles));
+	assert.equal(customDefault.tasks[0].pair, "audit");
+
+	// an invalid pairDefault applies nothing
+	for (const bad of ["architect", "qa", "none"]) {
+		const invalid = planOf([{ id: "a" }]);
+		applyPairDefault(invalid, cfg(bad));
+		assert.equal(invalid.tasks[0].pair, undefined, bad);
+		assert.equal(invalid.tasks[0].pairSource, undefined, bad);
+	}
+
+	// the call is idempotent
+	const twice = planOf([{ id: "a" }, { id: "b", pairSource: "none" }, { id: "c", pair: "security" }]);
+	applyPairDefault(twice, cfg("review"));
+	const afterFirst = structuredClone(twice);
+	applyPairDefault(twice, cfg("review"));
+	assert.deepEqual(twice, afterFirst, "a second call changes nothing");
+});
+
+test("pairDefaultProblem: an unknown role, a read-only role and the reserved word none", () => {
+	const cfg = (pairDefault: string): DispatchConfig => ({ ...DEFAULT_CONFIG, pairDefault });
+	assert.equal(pairDefaultProblem(cfg("")), undefined, "off is not a problem");
+	assert.equal(pairDefaultProblem(cfg("review")), undefined);
+
+	assert.equal(pairDefaultProblem(cfg("architect")), 'pairDefault names unknown role "architect" (known roles: implement, review, security, qa)');
+	assert.equal(
+		pairDefaultProblem(cfg("qa")),
+		'pairDefault role "qa" is not read-only; a pair reviewer must be a read-only role',
+	);
+	for (const spelling of ["none", "None", "NONE"]) {
+		assert.equal(pairDefaultProblem(cfg(spelling)), 'pairDefault cannot be "none"; none is the pair: opt-out word', spelling);
+	}
 });
 
 test("resolveModel: task, role, plan and config order, and empty thinking means no flag", async () => {
@@ -968,6 +1095,33 @@ test("preflightPlan rejects bad roles and pair settings", () => {
 
 	assert.deepEqual(PREFLIGHT([{ id: "g", role: "qa", pair: "review", pairRounds: 3, files: ["t.test.ts"] }]), []);
 	assert.deepEqual(PREFLIGHT([{ id: "h", role: "security", files: ["src/auth.ts"] }]), [], "a read-only role needs no pair");
+});
+
+test("preflightPlan rejects a bad pairDefault and accepts a valid one", () => {
+	const unknown = PREFLIGHT([{ id: "a", files: ["a.ts"] }], { pairDefault: "architect" });
+	assert.equal(unknown.length, 1, "one line naming the key");
+	assert.match(unknown[0], /pairDefault names unknown role "architect"/);
+
+	const notReadonly = PREFLIGHT([{ id: "a", files: ["a.ts"] }], { pairDefault: "qa" });
+	assert.equal(notReadonly.length, 1);
+	assert.match(notReadonly[0], /pairDefault role "qa" is not read-only/);
+
+	const reserved = PREFLIGHT([{ id: "a", files: ["a.ts"] }], { pairDefault: "none" });
+	assert.equal(reserved.length, 1);
+	assert.match(reserved[0], /pairDefault cannot be "none"/);
+
+	assert.deepEqual(PREFLIGHT([{ id: "a", files: ["a.ts"] }], { pairDefault: "review" }), [], "a valid default is accepted");
+});
+
+test("preflightPlan: pair_rounds on a pair: none task is ignored", () => {
+	const plan = parsePlan(`---\nid: p\n---\nctx\n\n## task: a\npair: none\npair_rounds: 0\nfiles: a.ts\nDo.\n`, "x");
+	applyPairDefault(plan, { ...DEFAULT_CONFIG, pairDefault: "review" });
+	assert.deepEqual(preflightPlan(plan, { ...DEFAULT_CONFIG, pairDefault: "review" }), []);
+
+	// the same out of range value is still rejected on a task that is paired
+	const paired = planOf([{ id: "a", pair: "review", pairRounds: 0, files: ["a.ts"] }]);
+	assert.match(PREFLIGHT([{ id: "a", pair: "review", pairRounds: 0, files: ["a.ts"] }])[0], /pair_rounds must be 1 to 3/);
+	assert.equal(paired.tasks[0].pairRounds, 0);
 });
 
 test("preflightPlan rejects read-only task roles other than security", () => {
