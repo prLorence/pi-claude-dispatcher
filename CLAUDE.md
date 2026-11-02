@@ -258,6 +258,8 @@ Claude models, Sonnet and Opus included, never write code, tests, scripts, confi
 | `docs/decider.md`                      | The decider contract: the checked API shape, the config, the exit codes and the privacy gate; the endpoint is alpha                                                                                            |
 | `docs/vault.md`                        | The agent vault: note types (with `spec` and `idea`), the `work/` and `config/` folders, repo modes, the CLI contract and exit codes, who may write, sync and conflicts, Graphify, non-goals                   |
 | `docs/architecture.md`                 | Architecture diagrams: components and data flow, with built and planned parts, and one request in order                                                                                                        |
+| `docs/omp-probe.md`                    | The dated read-only probe of `omp` against Pi: flags, events, session files, models, the 400 from OpenCode Go, and what was not measured                                                                       |
+| `docs/roadmap-agent-abstraction.md`    | The roadmap for agent-agnostic workers and the long-term dev box: coupling inventory, agent adapter, phases, risks, measurement plan                                                                           |
 
 Targets `@earendil-works/pi-coding-agent >=1.3.0`. Extensions load through jiti, so there's no build step.
 
@@ -332,4 +334,5 @@ One trace is one user request across all rounds. Plans link through frontmatter:
 - An `agent:` per-task field to map tasks to the `dev-fe`, `dev-be` and `qa` Pi agents.
 - Optional: install a community orchestration skill (`claude-pi`, `pi-cc-plugin`) after reading its source.
 - ~~How to set up the OpenCode Go key in Pi.~~ Resolved: pi has a built-in `opencode-go` provider; key lives in `~/.pi/agent/auth.json`, models smoke-tested. See [docs/pi-migration.md](docs/pi-migration.md).
+- The agent abstraction roadmap (agent-agnostic workers, `omp` as the first other agent, an always-on dev box) is in [docs/roadmap-agent-abstraction.md](docs/roadmap-agent-abstraction.md); the probe behind it is dated in [docs/omp-probe.md](docs/omp-probe.md).
 - Whether other OpenCode Go models should also serve as workers.
