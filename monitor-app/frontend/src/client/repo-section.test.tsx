@@ -169,3 +169,12 @@ test("the selected attempt is handed to the board", () => {
   expect(html).toContain("selected");
   expect(html).toContain('aria-pressed="true"');
 });
+
+test("the idle strip carries its state and gate in data attributes", () => {
+  const html = render(
+    repo({ active: false, plan: plan({ state: "done", gate: "pass" }) }),
+    false,
+  );
+  expect(html).toContain('data-state="done"');
+  expect(html).toContain('data-gate="pass"');
+});

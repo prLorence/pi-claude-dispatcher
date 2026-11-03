@@ -1,0 +1,220 @@
+/* Shell and states: reset, body, panes, scrollbars, focus, banners, empty and loading messages, motion. */
+
+* {
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(128, 136, 160, 0.38) transparent;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--s0);
+  color: var(--text);
+  font: 400 13px/20px var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+.app {
+  height: 100vh;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  min-height: 0;
+}
+
+/* Panes: flush, full-height regions; the sidebar scrolls on its own. */
+.panes {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  gap: 0;
+  flex: 1;
+  min-height: 0;
+}
+
+.sidebar {
+  min-height: 0;
+  min-width: 0;
+  background: var(--s1);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--sp-2) 0 var(--sp-4);
+}
+
+.detail {
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--s0);
+  box-shadow: none;
+  overflow: hidden;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(128, 136, 160, 0.38);
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 136, 160, 0.62);
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Keyboard focus ring. Selection is a fill and a border, never the only focus cue. */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: inherit;
+}
+
+.repos-bar :focus-visible,
+.code-view :focus-visible {
+  outline-offset: -2px;
+}
+
+.banner {
+  margin: 0;
+  padding: 10px var(--sp-4);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--s2);
+  font-size: 13px;
+}
+
+.banner-error {
+  background: var(--failed-bg);
+  border-bottom-color: var(--failed-bd);
+  color: var(--failed-fg);
+  font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--failed-fg);
+}
+
+.muted {
+  color: var(--text-3);
+}
+
+/* The state message also carries .muted, so it keeps its own colour here. */
+.state-message {
+  margin: 0;
+  padding: 8px var(--sp-4);
+  background: var(--warn-bg);
+  border-bottom: 1px solid var(--warn-bd);
+  color: var(--warn-fg);
+  font-size: 12px;
+}
+
+/* Loading and empty states: a pulsing skeleton bar above the word. */
+.app > p.muted:not(.state-message) {
+  margin: auto;
+  padding: 72px 0 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.app > p.muted:not(.state-message)::before {
+  content: "";
+  display: block;
+  width: 240px;
+  height: 8px;
+  margin: 0 auto 20px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--s2), var(--s3), var(--s2));
+  opacity: 0.8;
+  animation: live-breathe 1.8s ease-in-out infinite;
+}
+
+@keyframes live-ring {
+  from {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  to {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+
+@keyframes live-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.62;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .badge-live::after {
+    opacity: 0.35;
+    transform: scale(1.8);
+  }
+}
+
+@media (max-width: 900px) {
+  .panes {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(160px, 38vh) minmax(0, 1fr);
+  }
+
+  .sidebar {
+    max-height: none;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+}

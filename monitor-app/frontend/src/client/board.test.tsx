@@ -326,3 +326,36 @@ test("a hostile finding id is escaped", () => {
   expect(html).toContain("&lt;b&gt;x&lt;/b&gt;");
   expect(html).not.toContain("<b>x</b>");
 });
+
+test("a failed plan carries its gate and state on the header and one strip segment per task", () => {
+  const html = renderPlan(
+    plan({
+      state: "failed",
+      gate: "fail",
+      done: 1,
+      total: 2,
+      tasks: [
+        task({ id: "t1", implementer: lane([attempt({ state: "done" })]) }),
+        task({ id: "t2", implementer: lane([attempt({ id: "p1.t2.a1", state: "failed" })]) }),
+      ],
+    }),
+  );
+  expect(html).toContain('data-gate="fail"');
+  expect(html).toContain('data-state="failed"');
+  expect(html.split('<i data-state=').length - 1).toBe(2);
+});
+
+test("the audit row carries the proposal in a data attribute", () => {
+  const html = renderPlan(
+    plan({
+      audit: {
+        proposal: "fix",
+        aggregate: 0.627,
+        verdict: "fail",
+        auditRound: 1,
+        findings: [{ id: "f1", severity: "major", p: 0.5 }],
+      },
+    }),
+  );
+  expect(html).toContain('data-proposal="fix"');
+});

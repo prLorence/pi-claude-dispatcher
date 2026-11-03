@@ -127,13 +127,13 @@ test("a task attempt shows its header numbers and the transcript", () => {
   expect(html).toContain('class="detail-head"');
   expect(html).toContain('class="detail-task">t1<');
   expect(html).toContain('class="detail-attempt">a1<');
-  expect(html).toContain("role implement");
-  expect(html).toContain("model deepseek-v4.1-flash");
-  expect(html).toContain("thinking low");
-  expect(html).toContain("tokens 1.5k");
-  expect(html).toContain("cost $0.0020");
-  expect(html).toContain("state live");
-  expect(html).toContain("elapsed 12s");
+  expect(html).toContain('class="stat-label">role</span>implement');
+  expect(html).toContain('class="stat-label">model</span>deepseek-v4.1-flash');
+  expect(html).toContain('class="stat-label">thinking</span>low');
+  expect(html).toContain('class="stat-label">tokens</span>1.5k');
+  expect(html).toContain('class="stat-label">cost</span>$0.0020');
+  expect(html).toContain('class="stat-label">state</span><span class="badge badge-live">live</span>');
+  expect(html).toContain('class="stat-label">elapsed</span>12s');
 });
 
 test("an attempt that is not in the state says so", () => {
@@ -167,10 +167,10 @@ test("an agent session shows its header and its transcript", () => {
   );
   expect(html).toContain("Refactor the parser");
   expect(html).toContain('class="detail-agent">omp<');
-  expect(html).toContain("model claude-sonnet-4");
-  expect(html).toContain("thinking medium");
-  expect(html).toContain("tokens 4.2k");
-  expect(html).toContain("cost $0.0123");
+  expect(html).toContain('class="stat-label">model</span>claude-sonnet-4');
+  expect(html).toContain('class="stat-label">thinking</span>medium');
+  expect(html).toContain('class="stat-label">tokens</span>4.2k');
+  expect(html).toContain('class="stat-label">cost</span>$0.0123');
   expect(html).toContain(">live<");
   expect(html).toContain("/repos/pi-plan-dispatch");
   expect(html).toContain('class="transcript-head">agent-session-1<');

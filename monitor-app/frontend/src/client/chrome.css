@@ -1,0 +1,258 @@
+/* Chrome: header, repo chips and the Settings panel. */
+
+.app-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: var(--sp-3);
+  height: var(--toolbar-h);
+  margin: 0;
+  padding: 0 var(--sp-4);
+  background: var(--s1);
+  border-bottom: 1px solid var(--border);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.app-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font: 600 13px/20px var(--font-sans);
+  letter-spacing: 0;
+}
+
+.app-title::before {
+  content: "\03C0";
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font: 700 13px/1 var(--font-sans);
+}
+
+/* Repo controls */
+.repos {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  margin-left: auto;
+}
+
+.repos-bar {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--sp-2);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.repos-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 4px 0 10px;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--s2);
+}
+
+.repos-item::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+
+.repos-name {
+  font: 500 12px/16px var(--font-sans);
+  color: var(--text-2);
+}
+
+.repos-remove {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-3);
+  opacity: 0;
+  cursor: pointer;
+}
+
+.repos-remove::after {
+  content: "\00D7";
+  font-size: 15px;
+  line-height: 20px;
+}
+
+.repos-item:hover .repos-remove,
+.repos-item:focus-within .repos-remove {
+  opacity: 1;
+}
+
+.repos-remove:hover {
+  background: var(--failed-bg);
+  color: var(--failed-fg);
+}
+
+.repos-add,
+.settings-toggle-button {
+  height: 28px;
+  padding: 0 12px;
+  flex: none;
+  font: 500 12px/1 var(--font-sans);
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.repos-add:hover,
+.settings-toggle-button:hover {
+  background: var(--s2);
+}
+
+.repos-add:active,
+.settings-toggle-button:active {
+  background: var(--s3);
+}
+
+.settings-toggle-button[aria-expanded="true"] {
+  background: var(--s3);
+  border-color: var(--accent-bd);
+  color: var(--accent);
+}
+
+.repos-message {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+/* The header note floats over the panes; in the Settings popover it stays in
+   normal flow, because that Repos list is the panel's own content. */
+.app-header .repos-message {
+  position: absolute;
+  top: calc(var(--toolbar-h) + 8px);
+  right: var(--sp-4);
+  z-index: 30;
+  max-width: 360px;
+  margin: 0;
+  padding: 8px 12px;
+  background: var(--s3);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-pop);
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+/* Settings panel */
+.settings-panel {
+  position: absolute;
+  top: calc(var(--toolbar-h) + 8px);
+  right: var(--sp-4);
+  z-index: 20;
+  width: 380px;
+  max-height: calc(100vh - 80px);
+  overflow: auto;
+  display: grid;
+  gap: var(--sp-3);
+  margin: 0;
+  padding: var(--sp-4);
+  background: var(--s3);
+  border: 0;
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-pop);
+  animation: pop-in var(--dur-base) var(--ease-out);
+}
+
+.settings-title {
+  margin: 0;
+  font: 600 14px/20px var(--font-sans);
+}
+
+.settings-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+}
+
+.settings-toggle,
+.settings-scope-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  font-size: 13px;
+}
+
+.settings-panel input[type="checkbox"],
+.settings-panel input[type="radio"] {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.settings-scope {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+}
+
+.settings-heading {
+  margin: 0;
+  font: 600 11px/16px var(--font-sans);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.settings-scope legend {
+  padding: 0 4px;
+  font: 600 11px/16px var(--font-sans);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.settings-note,
+.settings-message {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.settings-repos {
+  display: grid;
+  gap: 6px;
+}
+
+.settings-repos .repos-remove {
+  opacity: 1;
+}
+
+@media (max-width: 900px) {
+  .settings-panel {
+    right: var(--sp-2);
+    width: calc(100vw - 16px);
+  }
+}

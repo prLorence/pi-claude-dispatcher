@@ -1,0 +1,94 @@
+/* Design tokens: the single source of colour, type, spacing, radii, shadow, layout and motion.
+   Dark is the default; light follows the system setting. Old names (--bg, --panel, ...) stay
+   as aliases at the end so existing rules and code.css keep working. */
+
+:root {
+  color-scheme: dark light;
+
+  /* surfaces: L0 canvas, L1 panes/toolbar, L2 chips/hover/raised, L3 selected/popover */
+  --s0: #0e0f13;
+  --s1: #15171c;
+  --s2: #1c1f26;
+  --s3: #252932;
+  --code-bg: #0a0b0e;           /* sunken, below L0 */
+  --border: #2a2e38;            /* hairlines, 1.32:1 on s1 (decorative) */
+  --border-strong: #3b4150;     /* control outlines, 1.76:1 */
+
+  /* text (ratios on s0 / s1 / s2 / s3) */
+  --text: #e8eaf0;              /* 15.9 / 14.9 / 13.7 / 12.1 */
+  --text-2: #a9afbd;            /* 8.7 / 8.2 / 7.5 / 6.6 */
+  --text-3: #8a91a3;            /* 6.1 / 5.7 / 5.2 / 4.6  (use text-2 on s3 when small) */
+
+  /* accent (selection, focus, links) */
+  --accent: #8b9cff;            /* 7.6 on s0, 7.1 on s1, 5.8 on s3 */
+  --accent-bg: rgba(139, 156, 255, 0.14);
+  --accent-bd: rgba(139, 156, 255, 0.45);
+  --on-accent: #0e0f13;         /* 7.6 on --accent */
+  --focus: #8b9cff;
+
+  /* semantic state: fg, bg tint (alpha over the surface), border */
+  --done-fg: #5ecb8b;     --done-bg: rgba(94, 203, 139, 0.14);    --done-bd: rgba(94, 203, 139, 0.32);
+  --live-fg: #56b9ff;     --live-bg: rgba(86, 185, 255, 0.14);    --live-bd: rgba(86, 185, 255, 0.34);
+  --failed-fg: #ff7373;   --failed-bg: rgba(255, 115, 115, 0.14); --failed-bd: rgba(255, 115, 115, 0.36);
+  --waiting-fg: #98a0b2;  --waiting-bg: rgba(152, 160, 178, 0.12);--waiting-bd: rgba(152, 160, 178, 0.28);
+  --warn-fg: #f2b84b;     --warn-bg: rgba(242, 184, 75, 0.14);    --warn-bd: rgba(242, 184, 75, 0.34);
+  --info-fg: #9aa8ff;     --info-bg: rgba(154, 168, 255, 0.14);   --info-bd: rgba(154, 168, 255, 0.34);
+
+  /* type */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  --fs-2xs: 11px; --fs-xs: 12px; --fs-sm: 13px; --fs-md: 14px; --fs-lg: 17px;   /* line heights: 16 / 16 / 20 / 20 / 24 */
+
+  /* spacing (4px base) */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px; --sp-7: 32px;
+
+  /* radii */
+  --r-xs: 4px;   /* inline chips, stat chips */
+  --r-sm: 6px;   /* buttons, entries, code */
+  --r-md: 8px;   /* popovers, empty-state panels */
+  --r-pill: 999px;
+
+  /* shadows (only for things that float) */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-pop: 0 0 0 1px var(--border-strong), 0 12px 32px rgba(0, 0, 0, 0.55);
+
+  /* layout */
+  --sidebar-w: clamp(340px, 28vw, 440px);
+  --toolbar-h: 48px;
+  --titlebar-inset: 0px;   /* 84px when the macOS inset title bar is on (task 9) */
+
+  /* motion */
+  --dur-fast: 120ms;  --dur-base: 180ms;  --dur-slow: 280ms;
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);     /* enter, hover in */
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);          /* exit: use 70% of the enter duration */
+  --ease-std: cubic-bezier(0.3, 0, 0.2, 1);
+
+  /* legacy aliases (do not remove in this project) */
+  --bg: var(--s0);  --panel: var(--s1);  --fg: var(--text);  --muted: var(--text-3);
+  --line: var(--border);  --live: var(--live-fg);  --done: var(--done-fg);
+  --failed: var(--failed-fg);  --stalled: var(--warn-fg);  --waiting: var(--waiting-fg);
+  --approve: var(--done-fg);  --changes: var(--warn-fg);  --unknown: var(--waiting-fg);
+  --shadow: var(--shadow-1);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --s0: #f2f3f7;  --s1: #ffffff;  --s2: #f6f7fa;  --s3: #eceef3;
+    --code-bg: #f7f8fb;
+    --border: #dcdfe7;  --border-strong: #c3c8d4;
+    --text: #14161c;    /* 16.3 / 18.1 / 16.9 / 15.6 */
+    --text-2: #464c5b;  /* 7.8 / 8.6 / 8.0 / 7.4 */
+    --text-3: #656c7e;  /* 4.7 / 5.3 / 4.9 / 4.5 */
+    --accent: #4553d6;  /* 5.5 on s0, 6.1 on white */
+    --accent-bg: rgba(69, 83, 214, 0.10);  --accent-bd: rgba(69, 83, 214, 0.40);
+    --on-accent: #ffffff;  --focus: #4553d6;
+    --done-fg: #136b42;    --done-bg: rgba(19, 107, 66, 0.12);    --done-bd: rgba(19, 107, 66, 0.30);
+    --live-fg: #0b66a8;    --live-bg: rgba(11, 102, 168, 0.12);   --live-bd: rgba(11, 102, 168, 0.30);
+    --failed-fg: #c0262d;  --failed-bg: rgba(192, 38, 45, 0.10);  --failed-bd: rgba(192, 38, 45, 0.32);
+    --waiting-fg: #566077; --waiting-bg: rgba(86, 96, 119, 0.10); --waiting-bd: rgba(86, 96, 119, 0.28);
+    --warn-fg: #85560a;    --warn-bg: rgba(133, 86, 10, 0.12);    --warn-bd: rgba(133, 86, 10, 0.32);
+    --info-fg: #4553d6;    --info-bg: rgba(69, 83, 214, 0.10);    --info-bd: rgba(69, 83, 214, 0.30);
+    --shadow-1: 0 1px 2px rgba(20, 22, 28, 0.08);
+    --shadow-pop: 0 0 0 1px var(--border-strong), 0 12px 32px rgba(20, 22, 28, 0.16);
+  }
+}

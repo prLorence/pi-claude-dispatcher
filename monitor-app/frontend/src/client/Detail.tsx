@@ -61,13 +61,34 @@ function TaskDetail(props: { state: MonitorState | null; selection: TaskSelectio
           <span className="detail-attempt">{attempt.label}</span>
         </h2>
         <div className="detail-meta">
-          <span className="detail-role">role {task.role}</span>
-          <span className="detail-model">model {attempt.model ?? "-"}</span>
-          <span className="detail-thinking">thinking {attempt.thinking ?? "-"}</span>
-          <span className="detail-tokens">tokens {formatTokens(attempt.tokens)}</span>
-          <span className="detail-cost">cost {formatCost(attempt.cost)}</span>
-          <span className="detail-state">state {stateLabel(attempt.state)}</span>
-          <span className="detail-elapsed">elapsed {formatElapsed(attempt.elapsedS)}</span>
+          <span className="detail-role">
+            <span className="stat-label">role</span>
+            {task.role}
+          </span>
+          <span className="detail-model">
+            <span className="stat-label">model</span>
+            {attempt.model ?? "-"}
+          </span>
+          <span className="detail-thinking">
+            <span className="stat-label">thinking</span>
+            {attempt.thinking ?? "-"}
+          </span>
+          <span className="detail-tokens">
+            <span className="stat-label">tokens</span>
+            {formatTokens(attempt.tokens)}
+          </span>
+          <span className="detail-cost">
+            <span className="stat-label">cost</span>
+            {formatCost(attempt.cost)}
+          </span>
+          <span className="detail-state">
+            <span className="stat-label">state</span>
+            <span className={`badge badge-${attempt.state}`}>{stateLabel(attempt.state)}</span>
+          </span>
+          <span className="detail-elapsed">
+            <span className="stat-label">elapsed</span>
+            {formatElapsed(attempt.elapsedS)}
+          </span>
         </div>
       </header>
       <Transcript
@@ -99,10 +120,22 @@ function AgentDetail(props: {
         <h2 className="detail-title">{title}</h2>
         <div className="detail-meta">
           <span className="detail-agent">{selection.agent}</span>
-          <span className="detail-model">model {model}</span>
-          <span className="detail-thinking">thinking {thinking}</span>
-          <span className="detail-tokens">tokens {tokens}</span>
-          <span className="detail-cost">cost {cost}</span>
+          <span className="detail-model">
+            <span className="stat-label">model</span>
+            {model}
+          </span>
+          <span className="detail-thinking">
+            <span className="stat-label">thinking</span>
+            {thinking}
+          </span>
+          <span className="detail-tokens">
+            <span className="stat-label">tokens</span>
+            {tokens}
+          </span>
+          <span className="detail-cost">
+            <span className="stat-label">cost</span>
+            {cost}
+          </span>
           <span className="detail-state">{state}</span>
           <span className="detail-cwd">{cwd}</span>
         </div>

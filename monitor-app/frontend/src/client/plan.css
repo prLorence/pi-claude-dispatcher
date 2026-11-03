@@ -1,0 +1,322 @@
+/* Repo sections: the sidebar section, the two-line repo strip and the plan board.
+   The board is the section body, not a card: structure comes from spacing and hairlines. */
+
+.repo-section {
+  display: block;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.repo-section + .repo-section {
+  border-top: 1px solid var(--border);
+}
+
+.repo-active,
+.repo-idle {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.repo-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4) var(--sp-1);
+}
+
+.repo-name {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+  font: 600 14px/20px var(--font-sans);
+  letter-spacing: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.repo-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  height: 18px;
+  border-radius: var(--r-pill);
+  font: 600 10px/1 var(--font-sans);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--live-fg);
+  background: var(--live-bg);
+  border: 1px solid var(--live-bd);
+}
+
+.repo-live::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.repo-message {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-4);
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+/* Two-line strip: name and state on the first line, plan id and gate on the second. */
+.repo-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "name state"
+    "plan gate";
+  gap: 2px var(--sp-3);
+  width: 100%;
+  margin: 0;
+  padding: 10px var(--sp-4) 10px 36px;
+  position: relative;
+  font: inherit;
+  font-size: var(--fs-xs);
+  text-align: left;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.repo-strip:hover {
+  background: var(--s2);
+}
+
+.repo-strip::before {
+  content: "\25B8";
+  position: absolute;
+  left: 16px;
+  top: 12px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.repo-strip[aria-expanded="true"]::before {
+  content: "\25BE";
+}
+
+.repo-strip-name {
+  grid-area: name;
+  font: 600 14px/20px var(--font-sans);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repo-strip-plan {
+  grid-area: plan;
+  font: 400 11px/16px var(--font-mono);
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repo-strip-state {
+  grid-area: state;
+  justify-self: end;
+}
+
+.repo-strip-gate {
+  grid-area: gate;
+  justify-self: end;
+  font: 500 11px/16px var(--font-sans);
+  color: var(--text-3);
+}
+
+/* The expanded board header repeats the plan id, state and gate. */
+.repo-strip[aria-expanded="true"] .repo-strip-plan,
+.repo-strip[aria-expanded="true"] .repo-strip-state,
+.repo-strip[aria-expanded="true"] .repo-strip-gate {
+  display: none;
+}
+
+.repo-strip[aria-expanded="true"] .repo-strip-name {
+  grid-column: 1 / -1;
+}
+
+/* State and gate pills, driven by the data attributes of the markup. */
+.repo-strip-state,
+.plan-state,
+.plan-gate {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--r-pill);
+  font: 600 11px/1 var(--font-sans);
+  border: 1px solid var(--waiting-bd);
+  background: var(--waiting-bg);
+  color: var(--waiting-fg);
+}
+
+.repo-strip-state[data-state="running"],
+.plan-state[data-state="running"] {
+  color: var(--live-fg);
+  background: var(--live-bg);
+  border-color: var(--live-bd);
+}
+
+.repo-strip-state[data-state="done"],
+.plan-state[data-state="done"],
+.repo-strip-gate[data-gate="pass"],
+.plan-gate[data-gate="pass"] {
+  color: var(--done-fg);
+  background: var(--done-bg);
+  border-color: var(--done-bd);
+}
+
+.repo-strip-state[data-state="failed"],
+.plan-state[data-state="failed"],
+.repo-strip-gate[data-gate="fail"],
+.plan-gate[data-gate="fail"] {
+  color: var(--failed-fg);
+  background: var(--failed-bg);
+  border-color: var(--failed-bd);
+}
+
+/* Board: a plain section body. */
+.board {
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.plan-header {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 6px var(--sp-2);
+  padding: var(--sp-2) var(--sp-4) var(--sp-3);
+  border: 0;
+}
+
+.plan-id {
+  grid-column: 1 / -1;
+  font: 500 12px/16px var(--font-mono);
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-count {
+  justify-self: end;
+  font: 500 12px/16px var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+
+/* Run strip: one segment per task, coloured by the newest attempt's state. */
+.plan-strip {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 2px;
+  height: 6px;
+}
+
+.plan-strip > i {
+  flex: 1 1 0;
+  min-width: 3px;
+  border-radius: 2px;
+  background: var(--waiting-bd);
+}
+
+.plan-strip > i[data-state="done"] {
+  background: var(--done-fg);
+}
+
+.plan-strip > i[data-state="live"] {
+  background: var(--live-fg);
+  animation: live-breathe 2.4s ease-in-out infinite;
+}
+
+.plan-strip > i[data-state="failed"] {
+  background: var(--failed-fg);
+}
+
+.plan-strip > i[data-state="stalled"] {
+  background: var(--warn-fg);
+}
+
+/* Decider audit: a calm advisory row, tinted by the proposal. */
+.plan-audit {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--waiting-bd);
+  background: var(--waiting-bg);
+  color: var(--waiting-fg);
+  font: 500 12px/16px var(--font-sans);
+}
+
+.plan-audit[data-proposal="approve"] {
+  color: var(--done-fg);
+  background: var(--done-bg);
+  border-color: var(--done-bd);
+}
+
+.plan-audit[data-proposal="fix"] {
+  color: var(--failed-fg);
+  background: var(--failed-bg);
+  border-color: var(--failed-bd);
+}
+
+.plan-audit[data-proposal="hold"] {
+  color: var(--warn-fg);
+  background: var(--warn-bg);
+  border-color: var(--warn-bd);
+}
+
+.plan-audit details {
+  flex: 1 1 100%;
+  padding: 0;
+}
+
+.plan-audit summary {
+  display: inline;
+  font-size: 11px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.plan-audit ul {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 6px 0 0;
+  padding: 0;
+  font: 400 11px/16px var(--font-mono);
+  color: var(--text-2);
+}
+
+.plan-audit li {
+  padding: 0 6px;
+  border-radius: var(--r-xs);
+  background: var(--s2);
+}

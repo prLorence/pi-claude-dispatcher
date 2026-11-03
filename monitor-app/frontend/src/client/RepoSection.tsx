@@ -50,8 +50,8 @@ export function RepoSection(props: RepoSectionProps) {
       <button type="button" className="repo-strip" aria-expanded={expanded} onClick={onToggle}>
         <span className="repo-strip-name">{repo.name}</span>
         <span className="repo-strip-plan">{plan.id}</span>
-        <span className="repo-strip-state">{plan.state}</span>
-        <span className="repo-strip-gate">{gateText(plan)}</span>
+        <span className="repo-strip-state" data-state={plan.state}>{plan.state}</span>
+        <span className="repo-strip-gate" data-gate={plan.gate ?? "none"}>{gateText(plan)}</span>
       </button>
       {expanded ? <Board plan={plan} selectedId={selectedId} onSelect={select} /> : null}
     </section>

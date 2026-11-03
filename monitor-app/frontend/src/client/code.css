@@ -1,12 +1,12 @@
-/* Code blocks and diff rows. The app's style.css defines the base colours; the
-   token colours below are local to code so both themes keep readable contrast. */
+/* Code blocks and diff rows. tokens.css defines the base colours; the token
+   colours below are local to code so both themes keep readable contrast. */
 
 .code-view {
   margin-top: 6px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
   overflow: hidden;
-  background: var(--panel);
+  background: var(--code-bg);
   --code-add-bg: #e6f4ea;
   --code-add-fg: #14532d;
   --code-del-bg: #fdecea;
@@ -29,43 +29,48 @@
 }
 
 .code-head {
-  padding: 4px 8px;
-  border-bottom: 1px solid var(--line);
-  background: var(--bg);
-  color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--s2);
+  color: var(--text-2);
+  font: 500 11px/16px var(--font-mono);
   overflow-wrap: anywhere;
+}
+
+.code-body,
+.diff-body {
+  max-height: 420px;
+  overflow: auto;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .code-body {
   margin: 0;
-  padding: 8px 10px;
-  overflow-x: auto;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.5;
   white-space: pre;
   tab-size: 2;
 }
 
 .code-more {
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--border);
 }
 
 .code-more summary {
   padding: 4px 8px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
-  color: var(--muted);
+  color: var(--text-3);
   cursor: pointer;
 }
 
 .diff-body {
-  overflow-x: auto;
+  padding: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.5;
 }
 
 .diff-row {
@@ -76,9 +81,11 @@
 
 .diff-sign {
   flex: none;
-  width: 1.5em;
+  width: 28px;
   text-align: center;
-  color: var(--muted);
+  color: var(--text-3);
+  border-right: 1px solid var(--border);
+  margin-right: 8px;
   user-select: none;
 }
 
@@ -98,8 +105,8 @@
 
 .diff-separator {
   padding: 0 8px;
-  color: var(--muted);
-  background: var(--bg);
+  color: var(--text-3);
+  background: var(--s2);
 }
 
 /* highlight.js token colours, light theme */
@@ -190,6 +197,12 @@
 
 .hljs-strong {
   font-weight: 600;
+}
+
+@media (prefers-color-scheme: light) {
+  .code-view {
+    background: var(--s1);
+  }
 }
 
 @media (prefers-color-scheme: dark) {

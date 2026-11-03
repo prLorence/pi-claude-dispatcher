@@ -162,3 +162,7 @@ It regenerates into a temporary folder and exits non-zero on any difference, pri
 - `parity/`: the golden-file parity test.
 - `tools/golden.ts`: the golden generator.
 - `testdata/`: the fixture trees, the golden JSON and the manifest.
+
+## Styling
+
+The CSS lives in `monitor-app/frontend/src/client/` as `tokens.css`, `base.css`, `chrome.css`, `plan.css`, `tasks.css`, `detail.css`, `transcript.css` and `code.css`, linked from `index.html` in that order. Every colour, size, radius, spacing, type and motion value comes from the custom properties of `tokens.css`, so a change of look starts there. Dark is the default and light follows the system through `prefers-color-scheme`.

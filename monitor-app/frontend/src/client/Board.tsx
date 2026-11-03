@@ -1,4 +1,4 @@
-import type { Attempt, DeciderAuditView, DeciderTaskView, Lane, PlanView } from "../shared/types";
+import type { Attempt, DeciderAuditView, DeciderTaskView, Lane, LaneState, PlanView, TaskRow } from "../shared/types";
 import { formatCost, formatElapsed, formatTokens, stateLabel } from "./format";
 import { DeciderBadge, deciderTitle, verdictClass, verdictText } from "./LaneCell";
 
@@ -14,9 +14,14 @@ function gateText(plan: PlanView): string {
   return plan.gate === null ? "gate -" : `gate ${plan.gate}`;
 }
 
+function stripState(task: TaskRow): LaneState {
+  if (task.reviewer !== null && task.reviewer.state === "live") return "live";
+  return task.implementer.state;
+}
+
 function Audit({ audit }: { audit: DeciderAuditView }) {
   return (
-    <span className="plan-audit">
+    <span className="plan-audit" data-proposal={audit.proposal}>
       {`decider audit: ${audit.proposal} (${audit.aggregate.toFixed(2)})`}
       <details>
         <summary>findings</summary>
@@ -151,12 +156,17 @@ export function Board(props: BoardProps) {
     <section className="board">
       <header className="plan-header">
         <span className="plan-id">{plan.id}</span>
-        <span className="plan-state">{plan.state}</span>
+        <span className="plan-state" data-state={plan.state}>{plan.state}</span>
         <span className="plan-count">
           {plan.done}/{plan.total} tasks
         </span>
-        <span className="plan-gate">{gateText(plan)}</span>
+        <span className="plan-gate" data-gate={plan.gate ?? "none"}>{gateText(plan)}</span>
         {plan.audit === null ? null : <Audit audit={plan.audit} />}
+        <span className="plan-strip" aria-hidden="true">
+          {plan.tasks.map((task) => (
+            <i key={task.id} data-state={stripState(task)} />
+          ))}
+        </span>
       </header>
       {plan.tasks.map((task) => {
         const select = (attemptId: string): void => {
