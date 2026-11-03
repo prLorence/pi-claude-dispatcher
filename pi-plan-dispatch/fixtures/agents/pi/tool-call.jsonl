@@ -1,0 +1,5 @@
+{"type":"turn_start"}
+{"type":"tool_execution_start","toolCallId":"tool-1","toolName":"edit","args":{"path":"src/other.ts"}}
+{"type":"tool_execution_end","toolCallId":"tool-1","toolName":"edit","isError":true,"result":{"content":[{"type":"text","text":"BLOCKED by pi-plan-dispatch: src/other.ts is outside this task's files"}]}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"STATUS: done"}],"usage":{"input":200,"output":8,"totalTokens":208,"cost":{"input":0,"output":0,"total":0}},"stopReason":"stop"}}
+{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"STATUS: done"}]}}

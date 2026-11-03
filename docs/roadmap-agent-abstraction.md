@@ -24,8 +24,8 @@ the two is the files under `.plans/` and the small CLIs, not a particular chat a
 This roadmap does not:
 
 - change any code, test or config, including `piCommand`, the roles config and the dispatcher;
-- start Phase 0, or run a model call against `omp` or `pi` to gather more evidence;
-- fix the HTTP 400 that stops `omp` today;
+- start Phase 0, or run a model call against `omp` or `pi` to gather more evidence (Phase 0's
+  result is recorded below; the HTTP 400 that stopped `omp` during the probe is fixed);
 - treat Claude Code as a worker agent, which is only mentioned as a later option.
 
 One task stays one agent run. An agent does not fan out its own subagents inside a task, because
@@ -81,8 +81,8 @@ the Pi-specific code listed in the inventory.
   dispatcher's stream handler and the stall watchdog work on the normalised events only. For `omp`
   this means mapping its envelope (`session`, `agent_start`, `turn_start`, `message_start`,
   `message_end`, `turn_end`, `agent_end`) and treating `auto_retry_start`/`auto_retry_end` as
-  progress or as a retry notice rather than as a fault. The tool events themselves are not yet
-  measured on `omp`, so this mapping stays unverified until a successful run exists.
+  progress or as a retry notice rather than as a fault. The probe's dated addendum in
+  `docs/omp-probe.md` records that `omp`'s tool events use the same names and fields as Pi's.
 - **Session location and format.** The adapter says where sessions live (`.plans/sessions/<plan>/`
   stays the dispatcher-side location), what a session file is called, how it is opened by id, and
   how a reader should interpret it. Pi uses `session`, `session_info`, `model_change` with
@@ -165,6 +165,8 @@ and 5 can proceed on Pi alone while Phase 0 is unresolved.
 
 ### Phase 0
 
+**Status: done, 2026-11-02.** The 400 was fixed with a provider header override rather than any change in this repository: `providers.opencode-go.headers` in the agent's `models.yml` now carries `x-opencode-session: "!uuidgen"`, and with it two read-only probe runs succeeded on 2026-11-02. The first returned `READY`, and the second made one `read` tool call on `README.md:1` and answered with its first line. The probe record in `docs/omp-probe.md` holds the dated addendum with the event names, fields and usage shape those runs showed.
+
 **Goal.** Make `omp` finish one run through OpenCode Go. Today every run ends with a 400,
 `Request is missing x-opencode-session and cannot be routed efficiently`, type `MissingSessionID`,
 and the assistant message has no content and `stopReason: "error"`. The retry with a real session
@@ -214,6 +216,8 @@ this repo, it is the roadmap's own evidence file, `docs/omp-probe.md` or its suc
 
 ### Phase 1
 
+**Status: built.** The normalised event layer and the Pi adapter are in place, and the dispatcher's stream handler and stall watchdog read only the normalised events. The fixtures live under `pi-plan-dispatch/fixtures/agents/`, written from the documented event shapes rather than copied from raw probe streams, and the existing tests are unchanged. What was left out is the guard, the worker environment, the transient-error text and the thinking ladder, which stay where they were and are not behind the adapter yet.
+
 **Goal.** Record real Pi streams as fixtures and add a normalised event layer to the dispatcher,
 with no behaviour change.
 
@@ -231,6 +235,8 @@ there, the new adapter module and its tests, and new fixtures under `pi-plan-dis
 (planned).
 
 ### Phase 2
+
+**Status: built.** A role may name an `agent`, defaulting to `pi`, and Pi is the only known agent; any other name is rejected at preflight and never falls back to Pi at run time. The Pi adapter reproduces today's arguments, normalised events, session paths and resume command, with no existing test file edited. The guard, the worker environment, the error text and the thinking ladder are not behind the adapter yet, and the agent is not yet recorded on `task.start`, `task.review` or the evidence; that is Phase 5.
 
 **Goal.** Add the optional `agent` field to roles and a Pi adapter that reproduces today's
 behaviour exactly.

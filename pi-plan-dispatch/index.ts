@@ -26,8 +26,10 @@ import {
 	type PlanTask,
 	type ToolRecord,
 	type WorkerResult,
+	DEFAULT_AGENT,
 	DEFAULT_PAIR_ROUNDS,
 	PlanParseError,
+	agentProblem,
 	applyPairDefault,
 	buildWorkerPrompt,
 	eligibleForDecider,
@@ -39,6 +41,7 @@ import {
 	pairDefaultProblem,
 	parsePlan,
 	preflightPlan,
+	resolveAgent,
 	resolveModel,
 	resolveRole,
 	resolveThinking,
@@ -120,18 +123,21 @@ function roleSummary(cfg: DispatchConfig, name: string): { model: string; thinki
 	return { model: rc.model || cfg.model, thinking: rc.thinking ?? cfg.thinking ?? "", readonly: rc.readonly === true };
 }
 
-/** One line per role for `/plans roles`: name, model, thinking level, read-only flag. */
+/** One line per role for `/plans roles`: name, model, thinking level, read-only flag, agent. */
 function roleLine(cfg: DispatchConfig, name: string): string {
 	const s = roleSummary(cfg, name);
-	return `${name}: ${s.model}, thinking ${s.thinking || "none"}, ${s.readonly ? "readonly" : "read-write"}`;
+	const agent = resolveAgent(cfg, name);
+	const suffix = agent === DEFAULT_AGENT ? "" : `, agent ${agent}`;
+	return `${name}: ${s.model}, thinking ${s.thinking || "none"}, ${s.readonly ? "readonly" : "read-write"}${suffix}`;
 }
 
-/** Every distinct (model, thinking) pair the roles use, in role order. */
-function modelPairs(cfg: DispatchConfig): { model: string; thinking: string }[] {
-	const seen = new Map<string, { model: string; thinking: string }>();
+/** Every distinct (model, thinking, agent) triple the roles use, in role order. */
+function modelPairs(cfg: DispatchConfig): { model: string; thinking: string; agent: string }[] {
+	const seen = new Map<string, { model: string; thinking: string; agent: string }>();
 	for (const name of knownRoles(cfg)) {
 		const { model, thinking } = roleSummary(cfg, name);
-		seen.set(`${model}\u0000${thinking}`, { model, thinking });
+		const agent = resolveAgent(cfg, name);
+		seen.set(`${agent}\u0000${model}\u0000${thinking}`, { model, thinking, agent });
 	}
 	return [...seen.values()];
 }
@@ -546,7 +552,7 @@ export default function (pi: ExtensionAPI, options: { deciderBackend?: Backend }
 			reviewerTools.set(t.id, [...(reviewerTools.get(t.id) ?? []), ...(rr.tools ?? [])]);
 			// Reviewer spend belongs to the task it reviewed.
 			t.cost = (t.cost || 0) + rr.cost;
-			if (rr.session) sessions.push({ task: reviewTask.id, attempt: 1, id: rr.session.id, file: rr.session.file, resume: resumeCommand(cwd, rr.session) });
+			if (rr.session) sessions.push({ task: reviewTask.id, attempt: 1, id: rr.session.id, file: rr.session.file, resume: resumeCommand(cwd, rr.session, resolveAgent(cfg, role)) });
 			// A reviewer that crashed reports nothing: unknown, which never fails the task.
 			const report: ReviewReport = rr.ok ? parseReviewReport(rr.output) : { verdict: "unknown", findings: [] };
 			const rec = pairRecord(t.id);
@@ -710,7 +716,7 @@ export default function (pi: ExtensionAPI, options: { deciderBackend?: Backend }
 					files: t.files,
 					depends_on: t.dependsOn,
 					prompt_sha: shortHash(prompt),
-					session_id: sessionFor(cwd, cfg, plan, t)?.id,
+					session_id: sessionFor(cwd, cfg, plan, t, resolveAgent(cfg, role))?.id,
 					prompt_file: promptFile,
 				},
 			});
@@ -733,7 +739,7 @@ export default function (pi: ExtensionAPI, options: { deciderBackend?: Backend }
 			t.cost = (t.cost || 0) + r.cost;
 			lastLine.delete(t.id);
 			// Keep every attempt's tool calls: a failed first try may have edited out of scope.
-			if (r.session) sessions.push({ task: t.id, attempt: t.attempts, id: r.session.id, file: r.session.file, resume: resumeCommand(cwd, r.session) });
+			if (r.session) sessions.push({ task: t.id, attempt: t.attempts, id: r.session.id, file: r.session.file, resume: resumeCommand(cwd, r.session, resolveAgent(cfg, role)) });
 			// The dispatcher, not the worker, decides whether the attempt worked.
 			const verifyCommand = t.verify;
 			if (r.ok && verifyCommand && !cfg.dryRun) {
@@ -1013,6 +1019,10 @@ export default function (pi: ExtensionAPI, options: { deciderBackend?: Backend }
 		const cfg = config();
 		if (what !== "test") {
 			for (const name of knownRoles(cfg)) ctx.ui.notify(roleLine(cfg, name), "info");
+			for (const name of knownRoles(cfg)) {
+				const problem = agentProblem(cfg, name);
+				if (problem !== undefined) ctx.ui.notify(problem, "info");
+			}
 			if (cfg.pairDefault !== "") {
 				const problem = pairDefaultProblem(cfg);
 				ctx.ui.notify(problem ?? `pairDefault: ${cfg.pairDefault} (every task without a pair: line gets this reviewer)`, "info");
@@ -1025,10 +1035,10 @@ export default function (pi: ExtensionAPI, options: { deciderBackend?: Backend }
 		}
 		const pairs = modelPairs(cfg);
 		ctx.ui.notify(`Testing ${pairs.length} model(s) with a tiny call`, "info");
-		for (const { model, thinking } of pairs) {
-			const r = await smokeTestModel(ctx.cwd, cfg, model, thinking);
+		for (const { model, thinking, agent } of pairs) {
+			const r = await smokeTestModel(ctx.cwd, cfg, model, thinking, agent);
 			const line = [
-				`${r.ok ? "PASS" : "FAIL"} ${model}${thinking ? ` (thinking ${thinking})` : ""}`,
+				`${r.ok ? "PASS" : "FAIL"} ${model}${thinking ? ` (thinking ${thinking})` : ""}${agent === DEFAULT_AGENT ? "" : ` (agent ${agent})`}`,
 				`$${r.cost.toFixed(4)}`,
 				`${r.seconds}s`,
 				...(r.error ? [r.error] : []),

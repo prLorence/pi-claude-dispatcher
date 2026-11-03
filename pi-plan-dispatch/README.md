@@ -125,7 +125,7 @@ Commands inside Pi:
 | `outagePauseMinutes` | `30` | Give up on an outage after this long without a healthy probe |
 | `probeSeconds` | `30` | Wait this long between network probes while an outage is open |
 | `probeUrls` | `["https://openrouter.ai", "https://opencode.ai"]` | Any of these answering with any HTTP status means the network is up |
-| `roles` | see [docs/roles.md](../docs/roles.md) | Map of role name to model, thinking, read-only flag and prompt. A user entry overrides only the fields it sets |
+| `roles` | see [docs/roles.md](../docs/roles.md) | Map of role name to model, thinking, read-only flag, prompt and `agent`. A user entry overrides only the fields it sets |
 | `decider` | `{"effort": "off", "audit": "off", "escalate": false}` | Decider settings: `effort` is `off`, `apply` or `dispatch`; `audit` is `off` or `shadow`; `escalate` steps a retried task's level up in `dispatch` mode. See [docs/decider.md](../docs/decider.md) |
 
 A plan's frontmatter, or an individual task, can override `model` and `thinking`.
@@ -154,6 +154,25 @@ With `persistSessions` on, each task attempt keeps its Pi session, so its conver
 can be reopened. Re-running the same plan id renames the old session files to
 `.prev-<timestamp>` instead of continuing them, so a re-run never appends to the old
 conversation. Setting `persistSessions` to `false` makes workers ephemeral.
+
+### Worker agents
+
+A role may name the coding agent that runs its workers with an optional `agent` field,
+for example `{"roles": {"review": {"agent": "pi"}}}`. It defaults to `pi`, is matched
+exactly, and `pi` is the only known agent today; any other value makes a plan that uses
+the role fail preflight with `role "review" names agent "omp", which is not available
+(known agents: pi)`, and `/plans roles` shows the same problem. A plan never names an
+agent. With no `agent` anywhere, every worker runs on `pi` exactly as before.
+
+The agent-specific code lives in `pi-plan-dispatch/adapters/`: `types.ts` (the
+`AgentAdapter` interface and the normalised `AgentEvent`), `pi.ts` (the Pi adapter),
+`ids.ts` (the id sanitiser `core.ts` re-exports) and `index.ts` (the registry:
+`getAdapter`, `knownAgents`). An adapter covers the worker command and its argument
+list, the parsing of the worker's stdout into normalised events, the task-attempt
+sessions (create, find the file, retire, resume) and the smoke-test arguments. It does
+not yet cover the live guard, the worker environment, the transient-error text in
+`resilience.ts` or the decider's thinking ladder; those stay in `core.ts` and
+`resilience.ts` and are the same for every agent.
 
 ## How scheduling works
 

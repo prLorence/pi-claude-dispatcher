@@ -1,0 +1,17 @@
+{"type":"session","version":3,"id":"omp-session-fixture-2","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/work/repo"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"Read README.md"}],"attribution":"user","timestamp":"2026-01-01T00:00:00.500Z"}}
+{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"Read README.md"}],"attribution":"user","timestamp":"2026-01-01T00:00:00.500Z"}}
+{"type":"message_start","message":{"role":"assistant","content":[],"api":"openai-completions","provider":"opencode-go","model":"deepseek-v4.1-flash"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"call-1","name":"read","arguments":{"path":"README.md"}}],"api":"openai-completions","provider":"opencode-go","model":"deepseek-v4.1-flash","usage":{"input":300,"output":12,"cacheRead":0,"cacheWrite":0,"totalTokens":312,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"toolUse","timestamp":"2026-01-01T00:00:01.000Z","responseId":"resp-fixture-2","duration":900}}
+{"type":"tool_execution_start","toolCallId":"call-1","toolName":"read","args":{"path":"README.md"},"intent":"read the project readme"}
+{"type":"tool_execution_end","toolCallId":"call-1","toolName":"read","result":{"content":[{"type":"text","text":"# Title"}],"details":{}},"isError":false}
+{"type":"message_start","message":{"role":"toolResult","toolCallId":"call-1","toolName":"read","content":[{"type":"text","text":"# Title"}],"details":{},"isError":false}}
+{"type":"message_end","message":{"role":"toolResult","toolCallId":"call-1","toolName":"read","content":[{"type":"text","text":"# Title"}],"details":{},"isError":false,"timestamp":"2026-01-01T00:00:01.500Z"}}
+{"type":"turn_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"call-1","name":"read","arguments":{"path":"README.md"}}],"stopReason":"toolUse"},"toolResults":[{"role":"toolResult","toolCallId":"call-1","toolName":"read","content":[{"type":"text","text":"# Title"}],"isError":false}]}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"assistant","content":[],"api":"openai-completions","provider":"opencode-go","model":"deepseek-v4.1-flash"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"# Title"}],"api":"openai-completions","provider":"opencode-go","model":"deepseek-v4.1-flash","usage":{"input":320,"output":4,"cacheRead":0,"cacheWrite":0,"totalTokens":324,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":"2026-01-01T00:00:02.000Z","responseId":"resp-fixture-3","duration":700}}
+{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"# Title"}],"stopReason":"stop"},"toolResults":[]}
+{"type":"agent_end","messages":[{"role":"user","content":[{"type":"text","text":"Read README.md"}]},{"role":"assistant","content":[{"type":"text","text":"# Title"}],"stopReason":"stop"}]}

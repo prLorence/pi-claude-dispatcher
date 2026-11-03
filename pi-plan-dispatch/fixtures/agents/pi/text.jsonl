@@ -1,0 +1,7 @@
+{"type":"session","version":3,"id":"pi-session-fixture-1","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/work/repo"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"assistant","content":[]}}
+{"type":"message_update","message":{"role":"assistant","content":[{"type":"text","text":"READ"}]}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"READY"}],"usage":{"input":120,"output":3,"totalTokens":123,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":"2026-01-01T00:00:01.000Z"}}
+{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"READY"}]}}

@@ -1,0 +1,11 @@
+{"type":"session","version":3,"id":"omp-session-fixture-3","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/work/repo"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"Reply with the single word OK"}],"attribution":"user","timestamp":"2026-01-01T00:00:00.500Z"}}
+{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"Reply with the single word OK"}],"attribution":"user","timestamp":"2026-01-01T00:00:00.500Z"}}
+{"type":"message_start","message":{"role":"assistant","content":[],"api":"openai-completions","provider":"opencode-go","model":"deepseek-v4.1-flash"}}
+{"type":"auto_retry_start","attempt":1,"maxAttempts":3,"delayMs":2000}
+{"type":"message_end","message":{"role":"assistant","content":[],"api":"openai-completions","provider":"opencode-go","model":"deepseek-v4.1-flash","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"error","errorStatus":400,"errorMessage":"400 Request is missing x-opencode-session and cannot be routed efficiently","timestamp":"2026-01-01T00:00:01.000Z"}}
+{"type":"auto_retry_end","success":false,"finalError":"Retry cancelled"}
+{"type":"turn_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"400 Request is missing x-opencode-session and cannot be routed efficiently"},"toolResults":[]}
+{"type":"agent_end","messages":[{"role":"user","content":[{"type":"text","text":"Reply with the single word OK"}]},{"role":"assistant","content":[],"stopReason":"error"}]}

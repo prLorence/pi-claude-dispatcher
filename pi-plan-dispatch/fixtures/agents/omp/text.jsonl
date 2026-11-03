@@ -1,0 +1,11 @@
+{"type":"session","version":3,"id":"omp-session-fixture-1","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/work/repo"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"Reply with the single word OK"}],"attribution":"user","timestamp":"2026-01-01T00:00:00.500Z"}}
+{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"Reply with the single word OK"}],"attribution":"user","timestamp":"2026-01-01T00:00:00.500Z"}}
+{"type":"message_start","message":{"role":"assistant","content":[],"api":"openai-completions","provider":"opencode-go","model":"deepseek-v4.1-flash","timestamp":"2026-01-01T00:00:01.000Z"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"RE"},"message":{"role":"assistant","content":[{"type":"text","text":"RE"}],"api":"openai-completions","provider":"opencode-go","model":"deepseek-v4.1-flash"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"ADY"},"message":{"role":"assistant","content":[{"type":"text","text":"READY"}],"api":"openai-completions","provider":"opencode-go","model":"deepseek-v4.1-flash"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"READY"}],"api":"openai-completions","provider":"opencode-go","model":"deepseek-v4.1-flash","usage":{"input":120,"output":3,"cacheRead":0,"cacheWrite":0,"totalTokens":123,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":"2026-01-01T00:00:02.000Z","responseId":"resp-fixture-1","duration":1000}}
+{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"READY"}],"api":"openai-completions","provider":"opencode-go","model":"deepseek-v4.1-flash","stopReason":"stop"},"toolResults":[]}
+{"type":"agent_end","messages":[{"role":"user","content":[{"type":"text","text":"Reply with the single word OK"}]},{"role":"assistant","content":[{"type":"text","text":"READY"}],"stopReason":"stop"}]}

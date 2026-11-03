@@ -3,10 +3,12 @@
  * No Pi imports here, so it can be tested on its own.
  */
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { getAdapter, knownAgents } from "./adapters/index.ts";
+import { safeId } from "./adapters/ids.ts";
+import type { AgentAdapter, AgentEvent, AgentSessionRef } from "./adapters/types.ts";
 import { DECIDER_DEFAULTS, loadDeciderConfig, type DeciderConfig } from "./decider/config.ts";
 import { escalateLevel } from "./decider/effort.ts";
 import { BLOCKED_MARKER, GUARD_ENV, VAULT_ENV } from "./guard.ts";
@@ -27,6 +29,8 @@ export interface RoleConfig {
 	readonly?: boolean;
 	/** Appended to the worker prompt as a "## Your role" section */
 	prompt?: string;
+	/** Worker agent name, trimmed; missing or empty means the default (pi) */
+	agent?: string;
 }
 
 export const DEFAULT_ROLES: Record<string, RoleConfig> = {
@@ -87,6 +91,7 @@ function roleFrom(value: unknown): RoleConfig {
 	if (typeof o.thinking === "string") role.thinking = o.thinking;
 	if (typeof o.readonly === "boolean") role.readonly = o.readonly;
 	if (typeof o.prompt === "string") role.prompt = o.prompt;
+	if (typeof o.agent === "string" && o.agent.trim() !== "") role.agent = o.agent.trim();
 	return role;
 }
 
@@ -311,6 +316,27 @@ export function resolveRole(cfg: DispatchConfig | undefined, name: string): Role
 	return { ...(DEFAULT_ROLES[name] ?? {}), ...(cfg?.roles?.[name] ?? {}) };
 }
 
+/** The agent every role uses unless its config names another one. */
+export const DEFAULT_AGENT = "pi";
+
+/**
+ * The worker agent a role resolves to. `||` rather than `??` on purpose: an
+ * in-memory empty `agent` falls back to the default, as a trimmed empty one does.
+ */
+export function resolveAgent(cfg: DispatchConfig | undefined, roleName: string): string {
+	return resolveRole(cfg, roleName).agent || DEFAULT_AGENT;
+}
+
+/**
+ * Why a role's agent cannot be used, or undefined when the registry knows it.
+ * The text is the one preflight reports and `/plans roles` shows.
+ */
+export function agentProblem(cfg: DispatchConfig, roleName: string): string | undefined {
+	const agent = resolveAgent(cfg, roleName);
+	if (knownAgents().includes(agent)) return undefined;
+	return `role "${roleName}" names agent "${agent}", which is not available (known agents: ${knownAgents().join(", ")})`;
+}
+
 /**
  * Why a non-empty `pairDefault` cannot be used, or undefined when it can (R4).
  * The word `none` is reserved as the `pair:` opt-out, so a role named none can
@@ -448,9 +474,8 @@ function stripComment(v: string): string {
 
 export class PlanParseError extends Error {}
 
-export function safeId(v: string): string {
-	return v.replace(/[^\w.-]+/g, "-");
-}
+/** Re-exported from the adapters, so the core's public surface keeps `safeId`. */
+export { safeId };
 
 export function parsePlan(text: string, fallbackId: string): Plan {
 	const fm = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
@@ -613,6 +638,23 @@ export function preflightPlan(plan: Plan, cfg: DispatchConfig, cwd?: string): st
 	const errors: string[] = [];
 	const badPairDefault = pairDefaultProblem(cfg);
 	if (badPairDefault !== undefined) errors.push(badPairDefault);
+	// One agent problem per role, in first-use order: the pairDefault, then each
+	// task's role and pair role. A role the config does not know keeps only the
+	// unknown-role error it already gets below.
+	const agentRoles: string[] = [];
+	const noteAgentRole = (name: string | undefined) => {
+		if (!name || agentRoles.includes(name) || !knownRoles(cfg).includes(name)) return;
+		agentRoles.push(name);
+	};
+	if (cfg.pairDefault !== "") noteAgentRole(cfg.pairDefault);
+	for (const task of plan.tasks) {
+		noteAgentRole(task.role || "implement");
+		if (task.pair) noteAgentRole(task.pair);
+	}
+	for (const name of agentRoles) {
+		const problem = agentProblem(cfg, name);
+		if (problem !== undefined) errors.push(problem);
+	}
 	const names = knownRoles(cfg).join(", ");
 	// Resolved once, so a symlinked checkout still matches. A cwd that cannot be
 	// resolved turns the check off rather than failing the plan.
@@ -754,66 +796,28 @@ export interface WorkerResult {
 	session?: WorkerSession;
 }
 
-export interface WorkerSession {
-	id: string;
-	/** absolute directory holding the session file */
-	dir: string;
-	/** session file, found after the worker exits */
-	file?: string;
-}
+/** The session of a worker run, in the shape the agent adapters use. */
+export type WorkerSession = AgentSessionRef;
 
-/** Shell command that reopens a worker's session in Pi, run from the repo root. */
-export function resumeCommand(cwd: string, s: WorkerSession): string {
-	return `pi --session ${s.id} --session-dir ${path.relative(cwd, s.dir) || "."}`;
+/** Shell command that reopens a worker's session, run from the repo root. */
+export function resumeCommand(cwd: string, s: WorkerSession, agent: string = DEFAULT_AGENT): string {
+	return getAdapter(agent)?.resumeCommand(cwd, s) ?? "";
 }
 
 /**
- * Pi requires a session id of `^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$`.
- * safeId can leave a `-` or `.` at either end (and maps `!` to one), so trim
- * anything that is not a letter or digit off both ends. `x` if nothing is left.
+ * One session per task attempt, so a retry never appends to a failed attempt's
+ * history. The adapter builds the id and directory; sessions are off on a dry
+ * run and when the config disables them.
  */
-function sessionIdPart(v: string): string {
-	const trimmed = safeId(v).replace(/^[^A-Za-z0-9]+/, "").replace(/[^A-Za-z0-9]+$/, "");
-	return trimmed || "x";
-}
-
-/** Short stable hash, so two task ids that sanitise to the same part never collide. */
-function shortHash(v: string): string {
-	return createHash("sha256").update(v).digest("hex").slice(0, 8);
-}
-
-/** One session per task attempt, so a retry never appends to a failed attempt's history. */
-export function sessionFor(cwd: string, cfg: DispatchConfig, plan: Plan, task: PlanTask): WorkerSession | undefined {
+export function sessionFor(
+	cwd: string,
+	cfg: DispatchConfig,
+	plan: Plan,
+	task: PlanTask,
+	agent: string = DEFAULT_AGENT,
+): WorkerSession | undefined {
 	if (!cfg.persistSessions || cfg.dryRun) return undefined;
-	const planId = sessionIdPart(plan.id);
-	const part = sessionIdPart(task.id);
-	const taskId = part === task.id ? task.id : `${part}-${shortHash(task.id)}`;
-	return { id: `${planId}.${taskId}.a${task.attempts}`, dir: path.join(cwd, ".plans", "sessions", planId) };
-}
-
-/**
- * Move old session files for this id out of the way before a worker starts.
- * `pi --session-id` would otherwise reopen the old conversation on a re-run of
- * the same plan, so keep the history under `.prev-<timestamp>` instead.
- */
-function retireSession(s: WorkerSession) {
-	let names: string[] = [];
-	try {
-		names = fs.readdirSync(s.dir).filter((n) => n.endsWith(`_${s.id}.jsonl`));
-	} catch {
-		// First run: the session directory does not exist yet.
-		return;
-	}
-	const stamp = Date.now();
-	for (const n of names) fs.renameSync(path.join(s.dir, n), path.join(s.dir, `${n}.prev-${stamp}`));
-}
-
-function findSessionFile(s: WorkerSession): string | undefined {
-	try {
-		return fs.readdirSync(s.dir).find((n) => n.endsWith(`_${s.id}.jsonl`));
-	} catch {
-		return undefined;
-	}
+	return getAdapter(agent)?.sessionFor({ cwd, planId: plan.id, taskId: task.id, attempt: task.attempts });
 }
 
 /**
@@ -869,20 +873,7 @@ function retrySection(feedback: string, kind: PlanTask["feedbackKind"]): string 
 	return `## Your previous attempt failed verification\n${feedback}\nFix the cause of the failure. Do not re-run the same thing blindly.`;
 }
 
-/** Text of a tool result, whatever shape Pi handed us. */
-function toolResultText(value: unknown): string {
-	if (typeof value === "string") return value;
-	if (Array.isArray(value)) return value.map(toolResultText).filter(Boolean).join("\n");
-	if (!value || typeof value !== "object") return "";
-	const obj = value as Record<string, unknown>;
-	if (Array.isArray(obj.content)) return toolResultText(obj.content);
-	if (typeof obj.text === "string") return obj.text;
-	if (typeof obj.output === "string") return obj.output;
-	if (typeof obj.message === "string") return obj.message;
-	return "";
-}
-
-/** What runWorker and smokeTestModel read from Pi's JSON event stream. */
+/** What runWorker and smokeTestModel read from the worker's event stream. */
 interface WorkerStreamState {
 	finalText: string;
 	cost: number;
@@ -895,8 +886,9 @@ interface WorkerStreamState {
 }
 
 function createWorkerStream(
+	adapter: AgentAdapter,
 	onText?: (text: string) => void,
-	onEvent?: (ev: any) => void,
+	onEvent?: (ev: AgentEvent) => void,
 ): { state: WorkerStreamState; handle: (line: string) => void } {
 	const state: WorkerStreamState = {
 		finalText: "",
@@ -909,54 +901,50 @@ function createWorkerStream(
 	};
 	const toolById = new Map<string, ToolRecord>();
 
-	const handle = (line: string) => {
-		if (!line.trim()) return;
-		let ev: any;
-		try {
-			ev = JSON.parse(line);
-		} catch {
-			// Pi prints some errors (e.g. "No API key found") as plain text.
-			state.plain += `${line}\n`;
-			if (state.plain.length > 20_000) state.plain = state.plain.slice(-20_000);
-			return;
-		}
-		// Every parsed event is reported before it is interpreted, so a caller can
-		// watch the stream (the stall watchdog uses it for the tool calls).
-		onEvent?.(ev);
-		if (ev.type === "tool_execution_start") {
+	const handleEvent = (ev: AgentEvent) => {
+		if (ev.kind === "tool_start") {
 			const a = ev.args || {};
 			const rec: ToolRecord = {
-				name: String(ev.toolName ?? "unknown"),
-				path: a.path ?? a.file_path ?? a.filePath ?? a.file,
+				name: ev.name,
+				path: (a.path ?? a.file_path ?? a.filePath ?? a.file) as string | undefined,
 				detail: typeof a.command === "string" ? a.command.slice(0, 160) : undefined,
 			};
 			state.tools.push(rec);
-			if (ev.toolCallId) toolById.set(ev.toolCallId, rec);
-		} else if (ev.type === "tool_execution_end") {
-			const rec = toolById.get(ev.toolCallId);
+			if (ev.id) toolById.set(ev.id, rec);
+		} else if (ev.kind === "tool_end") {
+			const rec = toolById.get(ev.id);
 			if (!rec) return;
 			if (ev.isError) rec.isError = true;
-			const text = toolResultText(ev.result);
+			const text = ev.text;
 			if (!text) return;
 			rec.result = text.slice(0, 300);
 			// Only a real error that the guard wrote counts: a normal result (say, a
 			// read of guard.ts) can quote the marker without being blocked.
 			if (ev.isError === true && text.startsWith(BLOCKED_MARKER)) rec.blocked = true;
-		} else if (ev.type === "message_end" && ev.message?.role === "assistant") {
-			const msg = ev.message;
-			const text = (msg.content || [])
-				.filter((p: any) => p.type === "text")
-				.map((p: any) => p.text)
-				.join("\n")
-				.trim();
+		} else if (ev.kind === "assistant_end") {
+			const text = ev.text;
 			if (text) state.finalText = text;
-			state.cost += msg.usage?.cost?.total || 0;
-			state.tokens.input += msg.usage?.input || 0;
-			state.tokens.output += msg.usage?.output || 0;
-			state.tokens.total += msg.usage?.totalTokens || 0;
-			if (msg.stopReason) state.stopReason = msg.stopReason;
-			if (msg.errorMessage) state.errorMessage = msg.errorMessage;
+			state.cost += ev.usage.cost;
+			state.tokens.input += ev.usage.input;
+			state.tokens.output += ev.usage.output;
+			state.tokens.total += ev.usage.total;
+			if (ev.stopReason) state.stopReason = ev.stopReason;
+			if (ev.errorMessage) state.errorMessage = ev.errorMessage;
 			if (text && onText) onText(text);
+		} else if (ev.kind === "plain") {
+			// Some agents print errors (e.g. "No API key found") as plain text.
+			state.plain += `${ev.text}\n`;
+			if (state.plain.length > 20_000) state.plain = state.plain.slice(-20_000);
+		}
+	};
+
+	const handle = (line: string) => {
+		if (!line.trim()) return;
+		for (const ev of adapter.parseLine(line)) {
+			// Every event is reported before it is interpreted, so a caller can watch
+			// the stream (the stall watchdog uses it for the tool calls).
+			onEvent?.(ev);
+			handleEvent(ev);
 		}
 	};
 
@@ -1072,33 +1060,43 @@ export function runWorker(
 		});
 	}
 
+	const role = task.role || "implement";
+	const agent = resolveAgent(cfg, role);
+	const adapter = getAdapter(agent);
+	if (!adapter) {
+		return Promise.resolve({ ok: false, cost: 0, output: "", error: `unknown agent "${agent}" for role "${role}"` });
+	}
+	const command = adapter.command(cfg);
 	const resolved = resolveModel(cfg, plan, task);
 	const model = resolved.model;
 	const thinking = opts?.thinking !== undefined ? opts.thinking : resolved.thinking;
-	const args = ["--mode", "json", "-p"];
-	const session = sessionFor(cwd, cfg, plan, task);
+	const session = sessionFor(cwd, cfg, plan, task, agent);
 	if (session) {
 		// A resume continues the conversation: the file stays and the same id is
 		// reopened. Without a file there is nothing to reopen, so a fresh session
 		// starts and the caller passes the original prompt.
-		const reopening = opts?.resume === true && findSessionFile(session) !== undefined;
-		if (!reopening) retireSession(session);
-		args.push("--session-id", session.id, "--session-dir", session.dir, "--name", `${plan.id}/${task.id}`);
-	} else args.push("--no-session");
-	args.push("--model", model);
-	if (thinking) args.push("--thinking", thinking);
-	if (cfg.tools.length) args.push("--tools", cfg.tools.join(","));
-	args.push(prompt);
+		const reopening = opts?.resume === true && adapter.findSessionFile(session) !== undefined;
+		if (!reopening) adapter.retireSession(session);
+	}
+	const args = adapter.workerArgs({
+		model,
+		thinking,
+		tools: cfg.tools,
+		prompt,
+		session,
+		name: `${plan.id}/${task.id}`,
+	});
 
 	return new Promise((resolve) => {
 		const stallMs = cfg.stallMinutes * 60_000;
 		const tracker = new StallTracker({ stallMs });
 		const stream = createWorkerStream(
+			adapter,
 			(text) => onLine?.(text.split("\n")[0].slice(0, 120)),
 			(ev) => {
 				tracker.touch();
-				if (ev.type === "tool_execution_start" && ev.toolCallId) tracker.toolStart(String(ev.toolCallId));
-				else if (ev.type === "tool_execution_end" && ev.toolCallId) tracker.toolEnd(String(ev.toolCallId));
+				if (ev.kind === "tool_start" && ev.id) tracker.toolStart(ev.id);
+				else if (ev.kind === "tool_end" && ev.id) tracker.toolEnd(ev.id);
 			},
 		);
 		const state = stream.state;
@@ -1109,7 +1107,7 @@ export function runWorker(
 		let killReason = "";
 		let stallTimer: NodeJS.Timeout | undefined;
 
-		const proc = spawn(cfg.piCommand, args, {
+		const proc = spawn(command, args, {
 			cwd,
 			shell: false,
 			stdio: ["ignore", "pipe", "pipe"],
@@ -1177,7 +1175,7 @@ export function runWorker(
 				tokens: state.tokens,
 				tools: state.tools,
 				session,
-				error: `could not start '${cfg.piCommand}': ${e.message}`,
+				error: `could not start '${command}': ${e.message}`,
 			}),
 		);
 		proc.on("close", (code) => {
@@ -1192,7 +1190,7 @@ export function runWorker(
 				(selfReportedFail ? "worker reported STATUS: failed" : "") ||
 				dropSessionWarning(`${stderr}${state.plain}`).trim().slice(-2000) ||
 				(noOutput ? "worker produced no reply" : `exit code ${code}`);
-			if (session) session.file = findSessionFile(session);
+			if (session) session.file = adapter.findSessionFile(session);
 			finish({
 				ok: !failed,
 				cost: state.cost,
@@ -1218,21 +1216,27 @@ export interface SmokeResult {
 
 /** How long one smoke-test call may take. */
 const SMOKE_TEST_TIMEOUT_MS = 90_000;
-const SMOKE_TEST_PROMPT = "Reply with the single word OK";
 
 /**
  * One tiny real call for a (model, thinking) pair, so a wrong model id or an
  * unsupported thinking level shows up before a plan runs. Empty thinking means
  * no --thinking flag. Any assistant reply counts as a pass: the call happened.
  */
-export function smokeTestModel(cwd: string, cfg: DispatchConfig, model: string, thinking: string): Promise<SmokeResult> {
+export function smokeTestModel(
+	cwd: string,
+	cfg: DispatchConfig,
+	model: string,
+	thinking: string,
+	agent: string = DEFAULT_AGENT,
+): Promise<SmokeResult> {
 	const started = Date.now();
-	const args = ["--mode", "json", "-p", "--no-session", "--model", model];
-	if (thinking) args.push("--thinking", thinking);
-	args.push(SMOKE_TEST_PROMPT);
+	const adapter = getAdapter(agent);
+	if (!adapter) return Promise.resolve({ ok: false, error: `unknown agent "${agent}"`, cost: 0, seconds: 0 });
+	const command = adapter.command(cfg);
+	const args = adapter.smokeArgs({ model, thinking });
 
 	return new Promise((done) => {
-		const stream = createWorkerStream();
+		const stream = createWorkerStream(adapter);
 		let stderr = "";
 		let buffer = "";
 		let settled = false;
@@ -1249,7 +1253,7 @@ export function smokeTestModel(cwd: string, cfg: DispatchConfig, model: string, 
 			done({ ok: !error, error, cost: stream.state.cost, seconds });
 		};
 
-		const proc = spawn(cfg.piCommand, args, {
+		const proc = spawn(command, args, {
 			cwd,
 			shell: false,
 			stdio: ["ignore", "pipe", "pipe"],
@@ -1273,7 +1277,7 @@ export function smokeTestModel(cwd: string, cfg: DispatchConfig, model: string, 
 			stderr += d.toString();
 			if (stderr.length > 20_000) stderr = stderr.slice(-20_000);
 		});
-		proc.on("error", (e) => finish(`could not start '${cfg.piCommand}': ${e.message}`));
+		proc.on("error", (e) => finish(`could not start '${command}': ${e.message}`));
 		proc.on("close", (code) => {
 			if (buffer.trim()) stream.handle(buffer);
 			const state = stream.state;

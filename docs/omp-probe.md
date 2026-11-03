@@ -199,3 +199,22 @@ Each check is read-only or cheap, and none of them was run by this document's au
 | Whether other Pi extensions load in `omp` | Load one small extension with `omp -e <path> --help` (help printing, no model call), and read `omp`'s extension API for `SettingsManager`. |
 | Whether the model catalog difference matters | `omp --list-models` and `pi --list-models`, diffed for `opencode-go/deepseek-v4.1-flash`; both are read-only. |
 | Whether `omp`'s `hindsight` memory backend changes what a worker can reach | Read `~/.omp/agent/config.yml` and the backend's local API URL, and check whether it is enabled by default in a worker run. |
+
+## Addendum, 2026-11-02: Phase 0 result
+
+The 400 above is fixed. A provider header override in the agent's own `models.yml`, under
+`providers.opencode-go.headers`, sets `x-opencode-session: "!uuidgen"`. With that header the two
+read-only probe prompts succeeded on 2026-11-02, and no HTTP 400 was returned.
+
+- Prompt 1 returned a `READY` reply with `stopReason: "stop"`.
+- Prompt 2 made one `read` tool call on `README.md:1`; the model's final answer was the first line
+  of the README, while the tool itself returned the whole file.
+- The tool events use the same names and fields as Pi's: `tool_execution_start` with
+  `toolCallId`, `toolName`, `args` and `intent`, and `tool_execution_end` with `toolCallId`,
+  `toolName`, `result` and `isError`.
+- The usage shape is the same too, including `cost.total`; that total was 0 for the OpenCode Go
+  model used.
+- A one-line prompt cost about 33 000 input tokens.
+- The raw streams are not committed here because they hold local paths. The small fixtures under
+  `pi-plan-dispatch/fixtures/agents/` are written from these documented shapes, not copied from
+  the probe.

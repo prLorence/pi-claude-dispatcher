@@ -32,7 +32,16 @@ the task's role, plan frontmatter, config defaults. The role prompt is appended 
 ```
 
 A user entry overrides only the fields it sets; add a role by naming it under `roles` and using it
-in a plan. `maxRunsPerTask` (default 8) caps implementer plus reviewer runs for one task; at the cap
+in a plan.
+
+A role also takes an optional `agent` field, the coding agent that runs its workers. It defaults to
+`pi`, is matched exactly (after trimming, so `Pi` is unknown), and `pi` is the only known agent
+today. An unknown value, such as `"agent": "omp"`, makes every plan that uses the role fail
+preflight with `role "review" names agent "omp", which is not available (known agents: pi)`, and
+`/plans roles` shows the same problem; a plan never names an agent itself. When no entry sets an
+`agent`, every role runs on `pi`, exactly as before.
+
+`maxRunsPerTask` (default 8) caps implementer plus reviewer runs for one task; at the cap
 the pair loop stops, the task keeps its last verified state and a `pair_unresolved` warning is
 recorded. `pairDefault` (default `""`, off) names the read-only role that reviews every task without its own `pair:` line; the value must be a known, read-only role, and the word `none` is rejected because it is the `pair:` opt-out. When it is not valid, every plan is rejected at preflight with one line that names the key (`pairDefault names unknown role "x"` or `pairDefault role "x" is not read-only; a pair reviewer must be a read-only role`), and `/plans roles` shows the same problem. The orchestrator never edits this key. The config role `qa` is unrelated to the Pi agent of that name in `~/.pi/agent/agents/`.
 MiniMax M3.1 Flash is free for a limited period with no paid replacement listed; MiMo's thinking
