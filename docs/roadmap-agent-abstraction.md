@@ -381,6 +381,9 @@ scheduler.
 - **Blocks it.** The billing question below, and the user's decision on whether a second front end
   is worth building while Claude Code works.
 
+The dedicated plan for a second front end, the DeepSeek Harness (`dsh`), is in
+`docs/roadmap-dsh-frontend.md`.
+
 ### (d) Unattended safety
 
 - **Exists today.** The live guard, `verify:`, preflight, the plan audit and the gate. The gate
