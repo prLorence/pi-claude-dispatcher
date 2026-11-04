@@ -203,3 +203,247 @@ says whether the check is read-only or needs a key or subscription the user supp
 
 The checks that need a key cover the same ground as the roadmap's Phase 0; this table only names
 them, and decides nothing about when they run.
+
+## Addendum, 2026-11-04: live runs
+
+The probe above was key-free and made no model call. This addendum records the live part of the
+same probe, run one day later on the same version. It is append-only: every line above stays as
+it was written, including the statements that the live runs later corrected. Where that happens,
+the correction is stated here and the earlier sentence is marked as superseded, not edited.
+
+### Method
+
+- Date: 2026-11-04.
+- Binary: the user's own `dsh`, version `0.2.1-rc.5`, the same version as the key-free probe. Its
+  dsh home was the default `~/.dsh`, so this addendum also records what a real run leaves there.
+- Configuration: a minimal patch kept in a scratch folder, with three settings:
+  `agent-default-model` set to `provider: opencode-go` and `model: deepseek-v4-pro`, and the
+  plugin `llm-pi-ai` with `providers.opencode-go.apiKeyEnv: OPENCODE_GO_API_KEY`.
+- Credential: the key was entered by the user in a terminal and passed as that one environment
+  variable, `OPENCODE_GO_API_KEY`, for the run. It was never written to a file and appears in no
+  output file quoted below.
+- Working folders: each run used its own scratch working folder outside the repository. Run 2
+  used a folder holding an `AGENTS.md`, a `note.txt` and a project skill
+  `.agents/skills/probe-skill/SKILL.md`.
+- Method limit: two model calls, one resume and one `claude -p` call. This is a smoke test of the
+  surfaces a front end and a worker adapter need, not a measurement of quality, speed or cost.
+
+### Results
+
+#### 1. The credential and the failed runs
+
+The user had configured the OpenCode Go route in the dsh desktop app. Its profile file,
+`~/.dsh/profiles/desktop/cordis.patch.yml`, holds an `llm-pi-ai` entry with
+`apiKeyEnv: OPENCODE_GO_API_KEY` and a model list, and no key value. That patch also lists
+`deepseek-official` as the default provider with `deepseek-v4.1-flash`, and
+`subagent-model-selection-settings` allowing `opencode-go` models.
+
+The headless profile does not read that stored credential. Without the variable the run failed
+with:
+
+```text
+MISSING_CREDENTIAL: llm-pi-ai: no credential for provider route "opencode-go"; its profile resolves OPENCODE_GO_API_KEY, which is not set
+```
+
+Exporting `OPENCODE_GO_API_KEY` for the command fixed it. Credentials are therefore per profile
+and per environment, not shared between the desktop and headless profiles.
+
+A failed run is not silent. It still emitted `session` and `status` events, a `turn_end` with an
+error reason and a `final` event with empty text, then exited 1:
+
+```json
+{"type":"turn_end","reason":{"kind":"error","error":{"message":"..."}}}
+{"type":"final","text":""}
+```
+
+A headless run also creates `~/.dsh/profiles/headless/` (four small files) and a session folder
+`~/.dsh/sessions/<working folder encoded>/session-<uuid>`.
+
+#### 2. Run 1: a plain answer, real event shapes and usage
+
+Prompt: reply with the word READY. The OpenCode Go route answered with no error and no
+`x-opencode-session` 400. The output is one JSON object per line:
+
+```json
+{"type":"session","sessionId":"session-<uuid>","cwd":"..."}
+{"type":"status","phase":"turn_start","turn":1}
+{"type":"status","phase":"step_start","turn":1,"step":1}
+{"type":"text","text":"READY"}
+{"type":"status","phase":"step_end","turn":1,"step":1,"usage":{"inputTokens":297,"outputTokens":2,"totalTokens":7979,"cacheReadTokens":7680}}
+{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"completed"}}
+{"type":"final","text":"READY"}
+```
+
+What the shapes say:
+
+- The `text` event carried the whole text at once, not a delta stream.
+- Usage is on `step_end`, per step, not on `turn_end`.
+- The fields are `inputTokens`, `outputTokens`, `totalTokens` and `cacheReadTokens`.
+- `totalTokens` equals input plus output plus cache read: 297 + 2 + 7,680 = 7,979.
+- dsh reports no cost field. Cost has to be computed outside the harness from a price table.
+- The first call used about 8K tokens of context, mostly served from cache.
+
+#### 3. Run 2: a tool call, the AGENTS.md load and the skill catalog
+
+The workspace held an `AGENTS.md` with the rule "end every final answer with the single word
+PINEAPPLE", a file `note.txt`, and a project skill `.agents/skills/probe-skill/SKILL.md`. The
+prompt asked the model to read the file with a tool, list the skill names and say what
+instruction text it was given.
+
+A tool call and its result look like this:
+
+```json
+{"type":"tool_call","callId":"call_<id>","tool":"read","input":{"file_path":"note.txt"}}
+{"type":"tool_result","callId":"call_<id>","status":"completed","result":"<path>...</path><type>file</type><content>\n1: ...\n</content>"}
+```
+
+- `tool_result` carries no tool name; only the `callId` links it to its `tool_call`.
+- The result text is line-numbered file content, wrapped in the harness's own tags.
+- The read ran with no approval prompt in the headless profile.
+- The run had two `step_end` events with their own `usage`; the second step used 372 new input
+  tokens and 7,936 cache-read tokens.
+- Then came a `text` event, a `turn_end` with `completed`, and a `final` event.
+- The answer quoted `note.txt` correctly, quoted the `AGENTS.md` rule and ended with PINEAPPLE.
+  So an `AGENTS.md` in the working folder is loaded by default.
+
+#### 4. Skills: 31 in the catalog, 13 hidden on purpose
+
+The model listed 31 skill names: code-review, codebase-design, defuddle, diagnosing-bugs,
+domain-modeling, find-skills, gemini-meeting-debrief, grilling, hindsight-docs, impeccable,
+json-canvas, knap, obsidian-bases, obsidian-cli, obsidian-markdown, ponytail, ponytail-audit,
+ponytail-debt, ponytail-gain, ponytail-help, ponytail-review, probe-skill (the project skill),
+project-doc, prototype, research, rex, tdd, vault-cleanup, vercel-composition-patterns,
+vercel-react-best-practices and web-design-guidelines.
+
+The user's Pi skills live in `~/.agents/skills`, 43 folders (not 44). Nothing pointed dsh at that
+folder; it found it by itself. The 13 folders not listed are ask-matt, grill-me, grill-with-docs,
+handoff, implement, improve-codebase-architecture, setup-matt-pocock-skills, teach, to-spec,
+to-tickets, triage, wayfinder and writing-great-skills. Each carries
+`disable-model-invocation: true` in its frontmatter, which `dsh-skill-filesystem` documents as
+keeping a skill out of the model-facing catalog. Such a skill stays user-invocable unless the
+frontmatter also sets `user-invocable: false`. The 13 are therefore recognised, not missing.
+
+`dsh-skill-filesystem` documents the roots it scans, in rank order:
+
+1. `<projectRoot>/.dsh/skills`
+2. `<projectRoot>/.agents/skills`
+3. `Config.customSkillDirs`
+4. `<dshHome>/skills`
+5. `<agentsHome>/skills`
+
+A skill is a `<name>/SKILL.md` folder or a flat `<name>.md` file. Frontmatter requires `name` and
+`description` and optionally `whenToUse`, `metadata`, `disable-model-invocation` and
+`user-invocable`. Nested `**/SKILL.md` files are not discovered.
+
+The folder `~/.claude/skills/dispatch-plan` is not in any scanned root, so the `dispatch-plan`
+skill is not visible to dsh as things stand.
+
+#### 5. Resume with `--session-id`
+
+A second call, `dsh --profile headless --json --session-id <id> "<question>"`, continued the same
+session. Its `session` event carried the same id, and its `step_end` and `turn_end` events say
+`turn: 2`. It answered from the first call's tool result without a tool call, and it still ended
+with PINEAPPLE, so the instruction file is reloaded or kept across the resume.
+
+#### 6. Pi agents and dsh agent presets
+
+The user's Pi agents are the files `architect.md`, `comment-sicko.md`, `dev-be.md`, `dev-fe.md`,
+`flow.md`, `poteto-agent.md`, `qa.md` and `ux.md` in `~/.pi/agent/agents/`. They use Pi
+frontmatter, and `docs/pi-migration.md` records how they were translated: `allowedAgents`, a
+`skills:` list with `inheritSkills: false`, a generated guardrails appendix and model pins.
+
+dsh has a different mechanism. `dsh-agent-preset` documents agent presets as a way to "define an
+Agent's child plugins in ordinary Cordis YAML, declare several presets and let sessions select
+one". There is also a subagent seam with spawn and fork providers and the tool
+`dsh-tool-subagent-control`. How a dsh subagent gets its skills and its prompt was not measured.
+
+#### 7. Headless `claude -p` running the plan-auditor
+
+```text
+claude -p --agent plan-auditor --output-format json --no-session-persistence "<prompt>"
+```
+
+Run in a scratch folder, this returned:
+
+- `result: "READY"` and `is_error: false`, with `num_turns: 1`.
+- `duration_ms` 2470, about 7 seconds of wall time.
+- model `claude-opus-5-5`, taken from the agent file's `model: opus`.
+- `total_cost_usd` 0.073288, a notional figure: the run used the user's Claude subscription.
+- `usage` with 9,150 cache-creation tokens.
+
+So a dsh plugin can run the `plan-auditor` agent through the official Claude Code CLI and read a
+JSON result. It was a trivial prompt. A real audit with the plan, spec and trace arguments was
+not measured, nor was the `plan.audit` event the agent logs itself.
+
+#### 8. The guard and permission APIs
+
+Read from the READMEs of the installed packages, not exercised:
+
+- `@deepseek-ai/dsh-tools` documents `ctx.tools.restrict(filter)`, an allow or deny mask on the
+  tools one agent inherits, lifted when the mask is disposed.
+- The same package documents `ctx.tools.guard(guard)`, "a monotonic synchronous guard after the
+  extensible `tools/pre-execute` waterfall: a returned reason denies the call, and no later
+  listener can turn that denial back into permission".
+- It also documents `tools/pre-execute` as the reorderable allow, deny and ask gate.
+- The packages `dsh-permission-presets` (a sandbox mode bundled with an approval policy),
+  `dsh-user-approval` (a fail-closed approval seam), `dsh-sandbox-policy` and `dsh-bash-sandbox`
+  (confined command execution with denial and escalation facts) exist.
+
+This supersedes the sentence in the key-free probe that no package named for a guard, hook or
+permission policy was found. The correction: the guard is an API of `dsh-tools`, not a package of
+its own name. It is documented and not exercised, so no claim is made here about how it behaves
+in a run.
+
+### Side effects
+
+The live runs wrote to the user's dsh home, not to the repository:
+
+- `~/.dsh/profiles/headless/`: created by the first headless run, four small files.
+- `~/.dsh/sessions/<working folder encoded>/session-<uuid>/`: one session folder per run, plus
+  the folder of the resumed session.
+- `~/.dsh/profiles/desktop/cordis.patch.yml` was already there; the runs read it, they did not
+  change it.
+
+Cleaning these up was outside this probe.
+
+### Status of the earlier Not measured list
+
+Every item of the `## Not measured` section, with its status after the live runs. "Measured"
+names the fact above; "not measured" means it is still unknown.
+
+| Item of the earlier list | Status |
+| --- | --- |
+| Any model call | Measured (facts 2 and 3) |
+| The OpenCode Go route and its key inside dsh | Measured (facts 1 and 2): answers with no 400, key from `OPENCODE_GO_API_KEY` per profile |
+| The real `--json` event shapes and their names | Measured (facts 2, 3 and 5) |
+| Whether tool calls, usage and cost appear in those events | Measured (facts 2 and 3): tool calls and usage appear, there is no cost field |
+| Session files on disk, and how a session resumes | Measured (facts 1 and 5) |
+| Token and cost reporting | Measured for tokens (facts 2 and 3); there is no cost field, so cost is not measured from dsh and must be computed |
+| The `sdk` and `acp` profiles | Not measured |
+| The bash sandbox behaviour | Not measured |
+| How the instruction loader finds AGENTS.md | Partly measured (fact 3): an `AGENTS.md` in the working folder is loaded by default. Precedence, `CLAUDE.md` and nested folders are not measured |
+| Whether a plugin can block a tool call | Not measured. The API exists and is documented (fact 8); it was not exercised |
+| Startup time and memory | Not measured |
+| `dsh plugin add` from GitHub | Not measured |
+| Whether headless `claude -p` can run the `plan-auditor` agent file | Measured (fact 7) with a trivial prompt. A real audit through it is not measured |
+
+One earlier sentence is corrected rather than measured: "No package named for a guard, hook or
+permission policy was found" (in `## Instructions and tools`). It is superseded by fact 8. The
+guard is an API of `dsh-tools` (`ctx.tools.guard`, `tools/pre-execute`), not a package of its own
+name, and it is documented but not exercised.
+
+### Still not measured
+
+These remain outside the probe after 2026-11-04:
+
+- A session-start hook, meaning a plugin hook that runs when a session starts. This is what the
+  vault plugin's automatic boot would need. Not measured.
+- The `sdk` and `acp` profiles. Not measured.
+- How a subagent gets its prompt, its tools and its skills. Not measured.
+- `dsh plugin add` from GitHub. Not measured.
+- Creator mode. Not measured.
+- Startup time and memory of a successful headless run. Not measured.
+- The bash sandbox in practice. Not measured.
+- A real plan audit through `claude -p`, with the plan, spec and trace arguments and the
+  `plan.audit` event. Not measured.
+- Whether the headless profile enforces a permission preset by default. Not measured.
