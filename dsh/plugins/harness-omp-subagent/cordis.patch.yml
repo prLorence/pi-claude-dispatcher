@@ -19,8 +19,14 @@
     # Model selection is left off: this provider does not advertise the
     # agentOptions capability, and the child's model comes from the provider's
     # own config above.
+    #
+    # maxDepth must be provider-managed. The tool refuses to mount a provider
+    # lacking the depthLimit capability whenever a numeric depth resolves, and a
+    # numeric depth is the default. A `-p` one-shot child cannot recurse, so the
+    # provider owns that budget instead of claiming a capability it lacks.
     - id: tool-subagent-omp
       name: '@deepseek-ai/dsh-tool-subagent'
       config:
         provider: omp
         toolName: subagent_omp
+        maxDepth: provider-managed
