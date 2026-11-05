@@ -14,6 +14,13 @@ and a custom role with `readonly: true` works the same way.
 | `review` | `opencode-go/minimax-m3.1-flash-free` | $0 / $0 | `low` (`low` to `max`, incl. `medium`) | yes |
 | `security` | `opencode-go/glm-5.3-flash` | $0.15 / $0.50 | `high` (`low`, `high`, `max`) | yes |
 | `qa` | `opencode-go/mimo-v2.6-flash` | $0.14 / $0.28 | not listed, so no flag | no |
+| `implement-omp` | `opencode-go/deepseek-v4.1-flash` | $0.15 / $0.60 | `low` | no |
+| `pair-omp` | `opencode-go/beam-free` | $0 / $0 | `low` | yes |
+| `pair-omp-contributor` | `opencode-go/muse-spark-1.3-contributor` | not listed | `low` | yes |
+
+The three `*-omp` roles run on `agent: "omp"`: `implement-omp` is the implementer contract, and the
+two `pair-omp*` roles are read-only reviewers on different models, so one plan can be implemented by
+omp and reviewed by omp. Pair `implement-omp` with `pair-omp` in `pairDefault` for an omp-only loop.
 
 `implement` sets no model or thinking, so it inherits the config worker defaults; prices and
 thinking levels above are Pi's catalog values. Resolution, highest first: task `model:`/`thinking:`,
@@ -35,11 +42,12 @@ A user entry overrides only the fields it sets; add a role by naming it under `r
 in a plan.
 
 A role also takes an optional `agent` field, the coding agent that runs its workers. It defaults to
-`pi`, is matched exactly (after trimming, so `Pi` is unknown), and `pi` is the only known agent
-today. An unknown value, such as `"agent": "omp"`, makes every plan that uses the role fail
-preflight with `role "review" names agent "omp", which is not available (known agents: pi)`, and
-`/plans roles` shows the same problem; a plan never names an agent itself. When no entry sets an
-`agent`, every role runs on `pi`, exactly as before.
+`dsh`, is matched exactly (after trimming, so `Pi` is unknown), and the known agents are `dsh`,
+`pi` and `omp`. An unknown value makes every plan that uses the role fail
+preflight with `role "review" names agent "nope", which is not available (known agents: dsh, pi, omp)`, and
+`/plans roles` shows the same problem; a plan never names an agent itself. The three differ only in
+how a worker is started: `dsh` runs a subagent through the profile's subagent service, while `pi`
+and `omp` spawn a child process over that tool's JSON stream. A role with no `agent` runs on `dsh`.
 
 `maxRunsPerTask` (default 8) caps implementer plus reviewer runs for one task; at the cap
 the pair loop stops, the task keeps its last verified state and a `pair_unresolved` warning is

@@ -1,11 +1,21 @@
 ---
 name: dispatch-plan
-description: Reference for handing implementation work to Pi workers via .plans/, with a saved spec, a read-only plan audit by Opus, the user's approval and a gate.
+description: Reference for handing implementation work to dispatched workers via .plans/, with a saved spec, a read-only plan audit by Opus, the user's approval and a gate.
 ---
 
 # dispatch-plan
 
-Sonnet 5.5 is the main session and the orchestrator: the user talks to it directly. It clarifies the request with the `grilling` skill into a saved spec, writes the plan from that spec, has Opus review the plan, gets the user's approval and reports the results. Opus 5.5 runs as the read-only `plan-auditor` subagent and reviews plans only; Opus never reviews worker results. Pi workers (DeepSeek V4.1 Flash on OpenCode Go, run by the `pi-plan-dispatch` extension) implement everything. Post-run quality rests on the dispatcher's gate, the `verify:` commands, the live worker guards and pair review.
+The orchestrator is the session the user talks to. It clarifies the request with the `grilling` skill into a saved spec, writes the plan from that spec, has Opus review the plan, gets the user's approval and reports the results. Opus runs as the read-only `plan-auditor` and reviews plans only; it never reviews worker results. Workers implement everything. Post-run quality rests on the dispatcher's gate, the `verify:` commands, the live worker guards and pair review.
+
+Three agents can run a worker, chosen per role by `agent:` in `.plans/config.json`, never in a plan:
+
+| `agent:` | How it runs | Default for |
+|---|---|---|
+| `dsh` (default) | in-process dsh subagent, parented to the root agent | `implement`, `review`, `security`, `qa` |
+| `omp` | an `omp` child process over its JSON stream | `implement-omp`, `pair-omp`, `pair-omp-contributor` |
+| `pi` | a `pi` child process, the same adapters as before the dsh port | nothing by default |
+
+`dsh` starts a fresh subagent for every attempt; `pi` keeps one session per task and resumes it on a retry when `persistSessions` is on; `omp` is one-shot with `--no-session`. All three honour the task's `files:`, the read-only flag and the live guard, so a plan does not change when a role moves between them. Which agents are available is fixed by the running profile: `role "x" names agent "y", which is not available (known agents: …)` is a preflight rejection, not a plan error.
 
 The pasteable rules for the orchestrator are in `dispatch-plan/ORCHESTRATOR.md`; the audit checklist and output format are in `dispatch-plan/agents/plan-auditor.md`. This file holds the plan and spec formats, the audit and approval steps, and the commands. Dispatch work that splits into tasks that each touch a known, small set of files. The orchestrator never writes code: a tiny job, or one that needs judgment across the whole codebase, still goes out as a plan, and a one-task plan is fine. The orchestrator only reads files, runs read-only commands and answers questions.
 
@@ -50,8 +60,8 @@ Covers: R2.
 - `depends_on:` holds task ids that must finish first. If a dependency fails, its dependents are skipped.
 - `verify:` is a shell command the dispatcher runs, never the worker. A task-level one runs after the attempt reports success; exit 0 verifies it, non-zero or a timeout fails the attempt (retried with the output as feedback when `retries` allow). Scope it to that task's own files, for example a single test file, so a parallel worker's half-finished edits cannot break it. Write one per task.
 - The plan-level `verify:` runs once after every task is done, so it can be the integration check (`npm test`). A failing plan-level check adds a `verify_failed` error fault and fails the gate.
-- `role:` picks the job: `implement` by default; add a `qa` task after implementation for features, and a `security` task after all implementation tasks for anything touching input handling, auth, secrets, files, network or shell. Only `security` can be a read-only task role; `review` and any other read-only role are only `pair:` reviewers. Roles and their models are in `docs/roles.md`.
-- `pair: review` on a risky implementation task runs a read-only reviewer before the task counts as done. It roughly doubles worker spend on that task, which is small next to an audit round; `pair_rounds:` (1-3) bounds it. When `pairDefault` is set in `.plans/config.json`, every task without a `pair:` line gets that read-only reviewer, so you need not write `pair:` lines; write `pair: none` only for a task that does not need a review, with the reason in the task body. The orchestrator never edits the `pairDefault` config.
+- `role:` picks the job: `implement` by default; add a `qa` task after implementation for features, and a `security` task after all implementation tasks for anything touching input handling, auth, secrets, files, network or shell. Only `security` can be a read-only task role; `review` and any other read-only role are only `pair:` reviewers. `implement-omp` is the same job as `implement` on the `omp` agent, and `pair-omp`/`pair-omp-contributor` are read-only reviewers on `omp`; the three exist so a whole plan can run, and review, on omp. Roles, their agents and their models are in `docs/roles.md`, and the Dispatcher panel's Settings tab edits the per-repo overrides.
+- `pair: review` on a risky implementation task runs a read-only reviewer before the task counts as done. It roughly doubles worker spend on that task, which is small next to an audit round; `pair_rounds:` (1-3) bounds it. When `pairDefault` is set in `.plans/config.json`, every task without a `pair:` line gets that read-only reviewer, so you need not write `pair:` lines; write `pair: none` only for a task that does not need a review, with the reason in the task body. On dsh, `dshPairDefault` overrides `pairDefault` when it is present, which is how a repo runs `pair-omp` on dsh while the shared Pi preflight still accepts `pairDefault`; the preflight warns about the role `pairDefault` names, so on a repo with both keys that warning can name a different role than the one dsh actually uses. The orchestrator never edits either key.
 - Never write model names in plans unless you are overriding on purpose. `.plans/config.json` maps roles to models; the per-task overrides `model:` and `thinking:` (for example `thinking: high`) exist for that deliberate exception.
 - Preflight rejects the plan before any worker starts when a `files:` entry is absolute, contains a `..` segment, or points inside `.git/` or `.plans/`; a task lists more than `maxFilesPerTask` files (10); a task body is longer than `maxTaskChars` chars (8000); or a `verify:` executable cannot be found. Keep tasks small: split rather than widen.
 - Two tasks that edit the same file need a `depends_on` edge between them. Overlapping `files:` already stop them running at the same time; the edge also fixes the order, so one task's result is on disk before the other starts.
@@ -119,7 +129,12 @@ No plan runs before it is audited. Run the preflight CLI first and fix every `ER
 node ~/.claude/skills/dispatch-plan/preflight.mjs <plan file>
 ```
 
-Then spawn the read-only `plan-auditor` subagent (Opus 5.5) with the Agent tool, `subagent_type: plan-auditor`, and give it the plan path, the spec path, the trace id, the plan id, the plan round and the audit round number. Its checklist and output format are in `dispatch-plan/agents/plan-auditor.md`.
+Then run the read-only `plan-auditor` (Opus) on the draft, giving it the plan path, the spec path, the trace id, the plan id, the plan round and the audit round number. Its checklist and output format are in `dispatch-plan/agents/plan-auditor.md`.
+
+- On dsh, call the `audit_plan` tool. It runs the unchanged Claude Code `plan-auditor` agent through headless `claude -p --agent plan-auditor` and returns the findings and verdict. Pass `plan`, and `spec`/`trace`/`plan_id`/`round` only to override the frontmatter, plus `audit_round`. The executable is the config key `claudeCommand` (default `claude`), and `auditTimeoutMinutes` bounds it.
+- On Claude Code, spawn the same agent with the Agent tool, `subagent_type: plan-auditor`.
+
+Either way the agent is Claude, not one of the three worker agents: the audit is a second opinion from outside the dispatcher, and `plan.audit` is logged by the auditor itself.
 
 - `[blocker]`: the plan would fail to run, would produce wrong results, loses data, or breaks a hard rule.
 - `[major]`: a real defect with a workaround or a narrow trigger, or an ambiguity that will make a worker guess.
@@ -175,7 +190,7 @@ On exit `0` it prints the summary and a `GATE PASS|FAIL` line. Read the exit cod
 - `0`: done. Read the gate (section 7) and report the result to the user.
 - `2`: the plan was rejected, which is a format error. Read `.plans/failed/<id>.error.md`, rewrite `.plans/inbox/<id>.md.draft` from `.plans/failed/<id>.md` with the fix and `status: draft`, rerun preflight, get the user's approval again, log `plan.approved` again, re-audit if more than the rejected line changed (that re-audit counts toward the `audit_round` cap of 3), then flip it under the same id. The extension deletes the stale rejection files when it accepts the plan, so nothing has to be removed by hand; `wait` also ignores a rejection older than the wait while the plan is queued or running.
 - `3`: still running. Start the background `wait` again, at most 3 launches in total for one plan, then stop and tell the user.
-- `4`: never picked up, so the Pi session with `pi-plan-dispatch` is probably not running. Stop and tell the user.
+- `4`: never picked up. The dispatcher is not watching that repo: on dsh the session's repository must be the plan's repository (or be selected with `dispatch_project`), and on Pi the `pi-plan-dispatch` extension must be running. Stop and tell the user which one applies.
 - Any other exit code: start the background `wait` again, within the same limit of 3 launches. If the error says a module or file was not found, stop at once and tell the user: the installed skill folder is stale (section 10).
 
 The foreground form, `wait --plan <id> --timeout 540` with the Bash tool's `timeout` set to `600000` ms (the default `120000` ms would kill it early and lose the exit code), is only a fallback for a caller that cannot run a command in the background. Pass `--timeout 100` there if the caller cannot set a timeout either.
@@ -184,7 +199,7 @@ The foreground form, `wait --plan <id> --timeout 540` with the Bash tool's `time
 
 Every finished plan leaves `.plans/done/<id>/` with `plan.md`, `_summary.md` (gate line plus fault list), one `<task>.md` report per task, one `<task>.prompt.md` holding the exact prompt the worker received (written only when the task starts, so a skipped task has a report but no prompt file), a `<task>.verify.md` and/or `plan.verify.md` when a `verify:` command ran (command, exit code or timeout, duration, output tail), and `evidence.json`.
 
-`evidence.json` holds `plan`, `trace`, `round`, `parent`, `changed` (files that actually changed, from a git snapshot before and after the plan), `faults`, `verify`, and `gate` (`pass`, `reasons`, `counts`, `tasks`, `evidence`). Evidence has two sources: Pi's tool-call stream (which tool edited which path, per task) and the git snapshot (what changed in the checkout, per plan). The worker's report is the third and least trusted source. Run `node ~/.claude/skills/dispatch-plan/trace.mjs gate --plan <id>` to print the gate, faults and changed files; it exits `0` pass, `1` fail, `2` no evidence yet.
+`evidence.json` holds `plan`, `trace`, `round`, `parent`, `changed` (files that actually changed, from a git snapshot before and after the plan), `faults`, `verify`, and `gate` (`pass`, `reasons`, `counts`, `tasks`, `evidence`). Evidence has two sources: the worker's tool-call stream (which tool edited which path, per task, from the dsh subagent or the pi/omp adapter) and the git snapshot (what changed in the checkout, per plan). The worker's report is the third and least trusted source. Run `node ~/.claude/skills/dispatch-plan/trace.mjs gate --plan <id>` to print the gate, faults and changed files; it exits `0` pass, `1` fail, `2` no evidence yet.
 
 | Severity | Codes |
 |---|---|
@@ -274,4 +289,4 @@ go build -C dispatch-plan/vault-search -o ../bin/vault-search .
 mkdir -p ~/.claude/skills/dispatch-plan/bin && cp dispatch-plan/bin/vault-search ~/.claude/skills/dispatch-plan/bin/
 ```
 
-Copy the runtime files by name; the `dispatch-plan/` folder also holds `archive/` and the tests, which must not be installed. The `rm -f` line removes the two superseded agent files from an earlier install. The installed copies are what `~/.claude/skills/dispatch-plan/trace.mjs` and `preflight.mjs` resolve to, so refresh them after pulling changes, including `decide.mjs` and `decide-core.mjs` after the dispatch-time effort change; a missing module means a stale install. Restart Pi to load the new `index.ts` and `core.ts`. `node dispatch-plan/vault.mjs setup --force` writes every runtime file and the agents in one step; without `--force`, setup keeps an installed file that differs from what it last wrote and prints `kept (modified): <path>`, which is how a stale or hand-edited install shows up.
+Copy the runtime files by name; the `dispatch-plan/` folder also holds `archive/` and the tests, which must not be installed. The `rm -f` line removes the two superseded agent files from an earlier install. The installed copies are what `~/.claude/skills/dispatch-plan/trace.mjs` and `preflight.mjs` resolve to, so refresh them after pulling changes, including `decide.mjs` and `decide-core.mjs` after the dispatch-time effort change; a missing module means a stale install. Restart the host to load a changed plugin: on dsh that is the profile's plugin, and on Pi the `index.ts` and `core.ts` of the extension. `node dispatch-plan/vault.mjs setup --force` writes every runtime file and the agents in one step; without `--force`, setup keeps an installed file that differs from what it last wrote and prints `kept (modified): <path>`, which is how a stale or hand-edited install shows up.

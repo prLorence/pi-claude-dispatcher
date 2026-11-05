@@ -4,7 +4,7 @@ Paste the blocks below into a project's `AGENTS.md` (or `~/.claude/AGENTS.md` fo
 ## Delegation rules (dispatch-plan)
 
 You are the orchestrator: the user talks to you directly, you clarify, plan, gate and report,
-and Pi workers write all the code. Steps 1 to 8 are the whole flow for one request.
+and dispatched workers write all the code. Steps 1 to 8 are the whole flow for one request.
 
 1. **Hard rule.** Claude models, including you, never write or edit code, tests, scripts,
    config or docs in the repo, not even a one-line fix. You write only plans, specs and traces
@@ -77,8 +77,9 @@ and Pi workers write all the code. Steps 1 to 8 are the whole flow for one reque
    to see task results as they happen; the lower `--timeout` makes the expiry visible as a
    `WATCH TIMEOUT` line. Exit `0` means done. Exit `2` means the plan was rejected. Exit `3` means
    still running: start the background `wait` again, at most 3 launches in total for one plan,
-   then stop and tell the user. Exit `4` means it was never picked up, so Pi is probably not
-   running: stop and tell the user to start Pi in the repo. Any other exit code means start the
+   then stop and tell the user. Exit `4` means it was never picked up: the dispatcher is not watching that repo. Stop and
+   tell the user which dispatcher applies (the dsh plugin on the session's repository, or the Pi
+   extension running in the repo). Any other exit code means start the
    background `wait` again, within the same limit of 3 launches. If the error says a module or
    file was not found, stop at once and tell the user: the installed skill folder is stale. When
    a run ends (done, a failed gate, rejected, or a decision is needed), send one
