@@ -17,16 +17,57 @@ export const name = "harness-vault";
 export const inject = ["tools", "systemPrompt", "agents", "workingDirectory"];
 
 export async function apply(ctx, config = {}) {
-	const root = config.root || ctx.workingDirectory?.defaultDirectory || process.cwd();
+	const defaultRoot = config.root || ctx.workingDirectory?.defaultDirectory || process.cwd();
 	const skillRoot = config.skillRoot || defaultSkillRoot(os.homedir());
 	const cli = createVaultCli({ skillRoot, timeoutMs: config.timeoutMs ?? 20_000 });
-	let bootText = "";
+	// Boot text is per session directory, not per plugin load: two sessions in
+	// different repositories must not share one repo's vault mode.
+	const boots = new Map();
 	let mode = "unknown";
+
+	// A session with no directory mapping must not inherit the host process cwd:
+	// that is the exact bug being fixed, and the host cwd is a deployment folder
+	// rather than a repository. Returning undefined makes that session read as
+	// "unknown" instead of asserting a wrong "none".
+	const directoryOf = (agent) => {
+		try {
+			const session = agent?.session;
+			if (session && ctx.workingDirectory?.get) {
+				const dir = ctx.workingDirectory.get(session);
+				if (dir) return dir;
+			}
+		} catch {
+			// Fall through to the configured root.
+		}
+		return config.root || undefined;
+	};
+
+	const bootFor = (dir) => {
+		let entry = boots.get(dir);
+		if (!entry) {
+			entry = { text: "", ready: false };
+			boots.set(dir, entry);
+			if (config.injectVaultBoot !== false) {
+				void loadVaultBoot({ cli, root: dir, log: (m) => ctx.logger?.info?.(m) })
+					.then((result) => {
+						entry.text = result.text;
+						entry.ready = true;
+						mode = result.mode;
+						ctx.logger?.info?.(`harness-vault: mode ${result.mode} for ${dir}`);
+					})
+					.catch((e) => {
+						entry.ready = true;
+						entry.text = `## Agent vault (agent-vault)\nvault boot: ${e instanceof Error ? e.message : String(e)}`;
+					});
+			}
+		}
+		return entry.text;
+	};
 
 	const traceMjs = path.join(skillRoot, "trace.mjs");
 	const runReport = async (trace) => {
 		if (!fs.existsSync(traceMjs)) return { code: 0, skipped: true };
-		return runNode(traceMjs, ["report", "--trace", String(trace ?? "")], root, 60_000);
+		return runNode(traceMjs, ["report", "--trace", String(trace ?? "")], defaultRoot, 60_000);
 	};
 
 	const isOrchestrator = (agent) => {
@@ -43,25 +84,23 @@ export async function apply(ctx, config = {}) {
 		return "BLOCKED by harness-dispatch: vault tools are orchestrator-only; a worker has no vault access.";
 	});
 
-	const disposeTools = registerVaultTools(ctx, { cli, root, runReport, isOrchestrator });
+	const disposeTools = registerVaultTools(ctx, { cli, root: defaultRoot, runReport, isOrchestrator });
 
 	ctx.systemPrompt.section({
 		name: "harness-vault",
 		order: 950,
-		text: () => bootText,
+		// A worker has no vault tools, so handing it the boot text only spends
+		// context on instructions it cannot follow. Give it the one rule instead,
+		// mirroring how harness-projects tailors its section for workers.
+		text: (context) => {
+			const agent = context?.agent;
+			if (agent && !isOrchestrator(agent)) {
+				return "## Agent vault (agent-vault)\nWorkers never read the agent vault; use the task prompt and the repository itself.";
+			}
+			const dir = directoryOf(agent);
+			return dir ? bootFor(dir) : "";
+		},
 	});
-
-	if (config.injectVaultBoot !== false) {
-		void loadVaultBoot({ cli, root, log: (m) => ctx.logger?.info?.(m) })
-			.then((result) => {
-				mode = result.mode;
-				bootText = result.text;
-				ctx.logger?.info?.(`harness-vault: mode ${mode}`);
-			})
-			.catch((e) => {
-				bootText = `## Agent vault (agent-vault)\nvault boot: ${e instanceof Error ? e.message : String(e)}`;
-			});
-	}
 
 	return () => {
 		disposeTools?.();

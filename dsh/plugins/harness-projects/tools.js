@@ -129,8 +129,12 @@ export function registerProjectTools(ctx, { getState, warmText, warmFor, isRoot,
 			async (args, exec) => {
 				guard(exec);
 				const target = dir(args, exec);
-				await warmFor(target, { force: true });
-				return { code: 0, stdout: warmText(target) || `(no warm context for ${target})` };
+				// Return the freshly computed text. Reading the per-agent map here
+				// would only ever describe session directories that `prime` filled,
+				// so asking about any other repository would answer "(no warm
+				// context)" even when the rebuild just succeeded.
+				const { text } = await warmFor(target, { force: true });
+				return { code: 0, stdout: text || warmText(target) || `(no warm context for ${target})` };
 			},
 		),
 	];

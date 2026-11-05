@@ -22,7 +22,7 @@ function readStdin() {
 
 const stdin = await readStdin();
 if (log) {
-	fs.appendFileSync(log, `${JSON.stringify({ argv, stdin })}\n`);
+	fs.appendFileSync(log, `${JSON.stringify({ argv, stdin, cwd: process.cwd() })}\n`);
 }
 
 if (mode === "timeout") {

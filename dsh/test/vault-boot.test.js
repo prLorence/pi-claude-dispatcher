@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { loadVaultBoot } from "../plugins/harness-vault/boot.js";
 import { createVaultCli } from "../plugins/harness-vault/vault-cli.js";
 import { makeLog, makeSkillRoot, readCalls } from "../fixtures/vault-env.js";
@@ -62,5 +64,31 @@ test("a timeout is one plain line, never a rejection", async () => {
 	} finally {
 		fs.rmSync(skill.root, { recursive: true, force: true });
 		fs.rmSync(log.dir, { recursive: true, force: true });
+	}
+});
+
+test("the repo root reaches the CLI as its working directory", async () => {
+	// `vault.mjs repo check` ignores `--root` and derives the slug from its own
+	// cwd, so a boot that does not pass cwd silently reports every repo as
+	// "mode none". Assert the cwd is what carries the root.
+	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-vault-repo-"));
+	const skill = makeSkillRoot();
+	const log = makeLog();
+	const cli = createVaultCli({ skillRoot: skill.root, env: { ...process.env, FAKE_VAULT_MODE: "success", FAKE_VAULT_LOG: log.file }, timeoutMs: 500 });
+	try {
+		await loadVaultBoot({ cli, root: repo, repo: "github.com/a/b" });
+		const calls = readCalls(log.file);
+		assert.ok(calls.length > 0, "the CLI was invoked");
+		for (const call of calls) {
+			assert.equal(call.cwd, fs.realpathSync(repo), `${call.argv.join(" ")} runs inside the repo`);
+		}
+		assert.ok(
+			calls.every((c) => !c.argv.includes("--root")),
+			"--root is not passed because the CLI ignores it",
+		);
+	} finally {
+		fs.rmSync(skill.root, { recursive: true, force: true });
+		fs.rmSync(log.dir, { recursive: true, force: true });
+		fs.rmSync(repo, { recursive: true, force: true });
 	}
 });
