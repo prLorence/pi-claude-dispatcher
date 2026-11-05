@@ -29,6 +29,28 @@ export const DEFAULT_ROLES = {
 		readonly: true,
 		prompt: REVIEW_PROMPT,
 	},
+	/**
+	 * The omp coding role: the same implementer contract as `implement`, run by
+	 * oh-my-pi instead of dsh. Pair it with `pair-omp` for an omp-only loop.
+	 */
+	"implement-omp": {
+		agent: "omp",
+		model: "opencode-go/beam-free",
+		thinking: "low",
+		prompt: [
+			"You implement exactly one task, in the files you own.",
+			"Read every file before you edit it, then change only what the task asks for, run the checks it names, and report what you actually did.",
+			"Do not refactor nearby code, do not add features nobody asked for, and do not touch files outside your list.",
+		].join("\n"),
+	},
+	/** A second omp reviewer on a different model, for an independent second opinion. */
+	"pair-omp-contributor": {
+		agent: "omp",
+		model: "opencode-go/muse-spark-1.3-contributor",
+		thinking: "low",
+		readonly: true,
+		prompt: REVIEW_PROMPT,
+	},
 	security: {
 		model: "opencode-go/glm-5.3-flash",
 		thinking: "high",

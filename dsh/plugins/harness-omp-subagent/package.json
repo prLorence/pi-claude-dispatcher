@@ -1,0 +1,20 @@
+{
+  "name": "@pi-harness/dsh-plugin-harness-omp-subagent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "description": "Registers an omp subagent provider so dsh subagents can run as oh-my-pi processes",
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

@@ -1,0 +1,4 @@
+- insert:
+    - id: harness-omp-subagent
+      name: '@pi-harness/dsh-plugin-harness-omp-subagent'
+      config: {}
