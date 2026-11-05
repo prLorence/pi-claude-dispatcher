@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createOmpProvider, foldOmpLine, ompArgs, promptText } from "../plugins/harness-omp-subagent/index.js";
+import { createOmpProvider, foldOmpLine, ompArgs, promptText, resolveOmpModel } from "../plugins/harness-omp-subagent/index.js";
 
 /** One assistant message_end line, as omp emits it. */
 function messageEnd(text, usage) {
@@ -42,18 +42,24 @@ test("foldOmpLine records tool names and errors", () => {
 	assert.deepEqual(state.errors, ["boom"]);
 });
 
-test("the provider advertises the external shape and no fake capabilities", () => {
+test("the provider advertises only the capabilities it implements", () => {
 	const p = createOmpProvider({ command: "omp" });
 	assert.equal(p.name, "omp");
 	assert.equal(typeof p.start, "function");
 	assert.equal(p.prepareContinuable, undefined, "an external child is one-shot");
 	assert.equal(p.inheritsParentContext, false);
-	assert.deepEqual(p.capabilities, {
-		agentOptions: false,
-		agentPreset: false,
-		outputSchema: false,
-		depthLimit: false,
-	});
+	assert.deepEqual(
+		p.capabilities,
+		{
+			// start() reads request.agentOptions.model/.reasoningEffort on every run.
+			agentOptions: true,
+			// No omp equivalent; claiming these would accept-then-ignore.
+			agentPreset: false,
+			outputSchema: false,
+			depthLimit: false,
+		},
+		"a caller gating on capabilities must not be told omp supports what it cannot",
+	);
 });
 
 test("a failed spawn settles as error instead of throwing", async () => {
@@ -145,4 +151,20 @@ test("start sends the flattened prompt as omp's -p argument", async () => {
 	// The spawn failed, but the failure message must not be a stringified block.
 	assert.equal(result.stopReason, "error");
 	assert.doesNotMatch(result.diagnostic ?? "", /\[object Object\]/);
+});
+
+test("resolveOmpModel rejoins the split route the seam hands the provider", () => {
+	// The dispatcher splits "opencode-go/deepseek-v4.1-flash" into
+	// agentOptions.provider/.model. Handing omp the bare model id makes it fall
+	// back to openrouter, which then dies on a missing key — observed live.
+	assert.equal(
+		resolveOmpModel({ provider: "opencode-go", model: "deepseek-v4.1-flash" }, "fallback/model"),
+		"opencode-go/deepseek-v4.1-flash",
+	);
+	// An already-qualified id must not be double-prefixed.
+	assert.equal(resolveOmpModel({ provider: "opencode-go", model: "openrouter/x" }, "f/m"), "openrouter/x");
+	// A model alone is used as given; only the absent case falls back.
+	assert.equal(resolveOmpModel({ model: "solo-model" }, "f/m"), "solo-model");
+	assert.equal(resolveOmpModel(undefined, "f/m"), "f/m");
+	assert.equal(resolveOmpModel({}, "f/m"), "f/m");
 });

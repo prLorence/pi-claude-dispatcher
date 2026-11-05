@@ -93,12 +93,19 @@ export function createWorkerRunner({ ctx, root, cfgOf, active, log }) {
 		const agent = resolveAgent(cfg, role);
 		const resolved = resolveModel(cfg, plan, task);
 		const thinking = opts.thinking !== undefined ? opts.thinking : resolved.thinking;
+		// omp runs through the managed subagent seam when its provider is
+		// registered, so the dispatcher gets the same admission, parent
+		// ownership, cancellation and tracking as every other child. The direct
+		// CLI path stays as the fallback for a profile without the provider.
+		if (agent === "omp" && ctx.subagents?.getProvider?.("omp") !== undefined) {
+			return runManaged("omp", opts, cfg, resolved, thinking);
+		}
 		if (agent === "pi" || agent === "omp") return runCli(agent, opts, cfg, resolved, thinking);
 		if (agent !== "dsh") return { ok: false, cost: 0, output: "", error: `unknown agent "${agent}" for role "${role}"` };
-		return runDsh(opts, cfg, resolved, thinking);
+		return runManaged("spawn", opts, cfg, resolved, thinking);
 	};
 
-	const runDsh = async (opts, cfg, resolved, thinking) => {
+	const runManaged = async (provider, opts, cfg, resolved, thinking) => {
 		const { plan, task, prompt, signal, onLine } = opts;
 		if (!ctx.subagents) return { ok: false, cost: 0, output: "", error: "the dsh subagent service is not mounted (ctx.subagents missing)" };
 		const parent = opts.parent ?? (await waitForRootAgent(ctx));
@@ -111,23 +118,37 @@ export function createWorkerRunner({ ctx, root, cfgOf, active, log }) {
 		};
 		const readonly = resolveRoleReadonly(cfg, task.role);
 		const policy = { cwd: opts.cwd, files: task.files, bash: true, readonly };
+		// A managed child reports liveness through this callback rather than a
+		// readable stdout; runManaged below feeds it into the stall tracker.
+		const tracker = new StallTracker({ stallMs: cfg.stallMinutes * 60_000 });
+		// The seam rejects a request whose maxDepth is set on a provider without
+		// the depthLimit capability, and omp does not advertise it. Sending 1
+		// there would fail every omp task, so ask only for what is supported:
+		// an external one-shot child cannot delegate again anyway.
+		const depthCapable = ctx.subagents.getProvider?.(provider)?.capabilities?.depthLimit !== false;
 		let activation;
 		try {
 			activation = await ctx.subagents.startActivation({
-				provider: "spawn",
+				provider,
 				label: `${plan.id}/${task.id}`,
 				request: {
 					prompt: [{ type: "text", text: prompt }],
 					parent,
 					cwd: opts.cwd,
 					agentOptions,
-					maxDepth: 1,
+					...(depthCapable ? { maxDepth: 1 } : {}),
+					// Read by the omp provider; ignored by in-process backends,
+					// which get their per-run policy from the child ctx instead.
+					tools: cfg.tools,
+					readonly,
+					timeoutMs: cfg.timeoutMinutes * 60_000,
+					onProgress: () => tracker.touch(),
 				},
 				signal,
 				delivery: "caller",
 			});
 		} catch (e) {
-			return { ok: false, cost: 0, output: "", error: `could not start a dsh subagent: ${e instanceof Error ? e.message : String(e)}` };
+			return { ok: false, cost: 0, output: "", error: `could not start a ${provider} subagent: ${e instanceof Error ? e.message : String(e)}` };
 		}
 
 		const childId = activation.childId ?? activation.subagentId;
@@ -152,7 +173,6 @@ export function createWorkerRunner({ ctx, root, cfgOf, active, log }) {
 			}
 		}
 
-		const tracker = new StallTracker({ stallMs: cfg.stallMinutes * 60_000 });
 		const toolById = new Map();
 		const onSessionEvent = (event) => {
 			tracker.touch();
@@ -230,7 +250,24 @@ export function createWorkerRunner({ ctx, root, cfgOf, active, log }) {
 			active.delete(childId);
 		}
 		const output = (entry.text || textOfContent(result?.output)).trim();
-		const cost = costOf(cfg, resolved.model, entry.usage.input, entry.usage.output) ?? 0;
+		// An in-process child reports usage through session events; an external
+		// one (omp) emits none, so its provider returns accounting on the result.
+		// Merge only what the event stream did not already supply.
+		const usage = result?.usage;
+		if (usage && entry.usage.total === 0) {
+			entry.usage.input = Number(usage.input ?? 0) || 0;
+			entry.usage.output = Number(usage.output ?? 0) || 0;
+			entry.usage.total = Number(usage.total ?? 0) || 0;
+		}
+		if (entry.stopReason === "" && result?.stopReason) entry.stopReason = String(result.stopReason);
+		if (!entry.error && result?.diagnostic) entry.error = String(result.diagnostic);
+		// An external child's tool calls arrive as names only; the process
+		// boundary carries no argument objects to record paths from.
+		if (entry.records.length === 0 && Array.isArray(result?.tools)) {
+			for (const name of result.tools) entry.records.push({ name: String(name) });
+		}
+		const reportedCost = Number(usage?.cost ?? 0) || 0;
+		const cost = costOf(cfg, resolved.model, entry.usage.input, entry.usage.output) ?? reportedCost;
 		const failed = !output || entry.stopReason === "error" || entry.stopReason === "aborted" || Boolean(entry.error);
 		return {
 			ok: !failed,

@@ -116,6 +116,22 @@ export function foldOmpLine(state, line) {
 	return state;
 }
 
+/**
+ * Resolve the single `provider/model` id omp's `--model` takes.
+ *
+ * The seam splits a route into `agentOptions.provider` and `.model`, but omp
+ * wants them joined. Handing it a bare model id makes omp fall back to its
+ * default provider, which for an unconfigured profile is openrouter — the run
+ * then dies on a missing API key instead of routing where the caller asked.
+ */
+export function resolveOmpModel(agentOptions, fallback) {
+	const provider = agentOptions?.provider;
+	const model = agentOptions?.model;
+	if (typeof model === "string" && model.includes("/")) return model;
+	if (provider && model) return `${provider}/${model}`;
+	return model || fallback;
+}
+
 export function createOmpProvider(options = {}) {
 	const providerName = options.providerName || DEFAULT_PROVIDER;
 	const command = options.command || "omp";
@@ -125,9 +141,13 @@ export function createOmpProvider(options = {}) {
 
 	const provider = {
 		name: providerName,
-		// An external child cannot receive follow-up input, and the runtime owns
-		// depth accounting, so neither capability is advertised.
-		capabilities: { agentOptions: false, agentPreset: false, outputSchema: false, depthLimit: false },
+		// agentOptions is honest: start() reads request.agentOptions.model and
+		// .reasoningEffort per run, so a caller may route each child to a
+		// different model without reconfiguring the provider. The rest are not
+		// advertised: an external child cannot receive follow-up input, omp has
+		// no preset selection, and depth is the provider's own business (a
+		// one-shot `-p` child cannot delegate again).
+		capabilities: { agentOptions: true, agentPreset: false, outputSchema: false, depthLimit: false },
 		inheritsParentContext: false,
 
 		async start(request) {
@@ -135,11 +155,24 @@ export function createOmpProvider(options = {}) {
 			const prompt = promptText(request?.prompt);
 			const cwd = request?.cwd || process.cwd();
 			const signal = request?.signal;
-			const model = request?.agentOptions?.model || defaultModel;
+			// Rejoined here: the seam splits the route, omp wants it whole.
+			const model = resolveOmpModel(request?.agentOptions, defaultModel);
 			const thinking = request?.agentOptions?.reasoningEffort ?? request?.agentOptions?.thinking;
-			const args = ompArgs({ model, thinking, prompt, tools: options.tools, readonly: options.readonly });
+			// The dispatcher routes each task to a different role, so the tool set
+			// and its read-only-ness have to be per run, not per provider. These
+			// ride the request object, which the runtime spreads through to `start`
+			// unchanged; an absent value falls back to the configured default.
+			const tools = request?.tools ?? options.tools;
+			const readonly = request?.readonly ?? options.readonly;
+			const runTimeoutMs = Number.isFinite(request?.timeoutMs) ? request.timeoutMs : timeoutMs;
+			const args = ompArgs({ model, thinking, prompt, tools, readonly });
 
 			const state = { text: "", usage: undefined, tools: [], errors: [] };
+			// The dispatcher's stall detector needs a liveness signal, and the
+			// managed path exposes no event stream for an external child. Calling
+			// this on every folded line restores what runCli got from its own
+			// stdout reader.
+			const onProgress = request?.onProgress;
 			let child;
 			let settled = false;
 			let timer;
@@ -159,9 +192,24 @@ export function createOmpProvider(options = {}) {
 					if (onAbort) signal?.removeEventListener("abort", onAbort);
 					const output = state.text ? [{ type: "text", text: state.text }] : [];
 					const note = diagnostic || (state.errors.length > 0 ? state.errors.join("\n") : undefined);
+					// The seam spreads an unknown result through unchanged, so the
+					// dispatcher can read accounting a bare output block would drop.
+					// Normalised here because omp reports input/output/totalTokens
+					// and the runtime's ToolUsage-ish shape is input/output/total.
+					const u = state.usage ?? {};
+					const input = Number(u.input ?? 0) || 0;
+					const outputTokens = Number(u.output ?? 0) || 0;
+					const usage = {
+						input,
+						output: outputTokens,
+						total: Number(u.totalTokens ?? u.total ?? input + outputTokens) || 0,
+						cost: Number(u.cost?.total ?? 0) || 0,
+					};
 					resolve({
 						output,
 						stopReason,
+						usage,
+						tools: [...state.tools],
 						...(note ? { diagnostic: note.slice(0, 4096) } : {}),
 					});
 				};
@@ -184,6 +232,14 @@ export function createOmpProvider(options = {}) {
 						foldOmpLine(state, buffer.slice(0, index));
 						buffer = buffer.slice(index + 1);
 						index = buffer.indexOf("\n");
+					}
+					// Any output is evidence the child is alive, which is all the
+					// stall detector asks. A throwing callback must not tear down
+					// the run, so it is isolated.
+					try {
+						onProgress?.();
+					} catch {
+						// The observer's failure is not the child's.
 					}
 				});
 				child.stderr.setEncoding("utf8");

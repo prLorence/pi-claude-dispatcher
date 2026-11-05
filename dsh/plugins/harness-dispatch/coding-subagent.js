@@ -4,7 +4,7 @@
  * prompt, one child, a model/thinking level and an explicit tool allow-list.
  */
 const DEFAULT_TOOLS = ["read", "write", "edit", "bash", "glob", "grep", "todo_write"];
-export const CODING_TOOL_DENY = ["subagent", "subagent_fork", "subagent_claude_code", "workflow", "coding_subagent", "dispatch_status", "skill"];
+export const CODING_TOOL_DENY = ["subagent", "subagent_fork", "subagent_claude_code", "subagent_omp", "workflow", "coding_subagent", "dispatch_status", "skill"];
 
 export function splitModel(model) {
 	const at = String(model).indexOf("/");
@@ -58,6 +58,7 @@ export function createCodingSubagentTool({ ctx, cfgOf, root, rootFor }) {
 				cwd: { type: "string", description: "Working directory; defaults to the session directory" },
 				model: { type: "string", description: "provider/model override" },
 				thinking: { type: "string", description: "Reasoning effort override; empty means none" },
+				agent: { type: "string", description: "Subagent backend: `dsh` (in-process, the default) or `omp` (external process)" },
 				tools: { type: "array", items: { type: "string" }, description: "Tool allow-list; defaults to read/write/edit/bash/glob/grep/todo_write" },
 			},
 			required: ["prompt"],
@@ -76,10 +77,18 @@ export function createCodingSubagentTool({ ctx, cfgOf, root, rootFor }) {
 			const cfg = cfgOf(cwd);
 			const { model, agentOptions } = buildCodingAgentOptions(cfg, args);
 			const allow = selectCodingTools(args.tools);
+			// `dsh` is the in-process default; `omp` runs the child as an external
+			// process through the managed seam. An unknown or unregistered backend
+			// is refused here rather than surfacing as a start failure.
+			const agent = args.agent === undefined ? "dsh" : String(args.agent);
+			const provider = agent === "dsh" ? "spawn" : agent;
+			if (agent !== "dsh" && ctx.subagents.getProvider?.(provider) === undefined) {
+				return { error: `no subagent provider named "${provider}" is registered`, text: "" };
+			}
 			let activation;
 			try {
 				activation = await ctx.subagents.startActivation({
-					provider: "spawn",
+					provider,
 					label: `coding: ${String(args.prompt).slice(0, 48)}`,
 					request: {
 						prompt: [{ type: "text", text: String(args.prompt) }],
@@ -87,6 +96,9 @@ export function createCodingSubagentTool({ ctx, cfgOf, root, rootFor }) {
 						cwd,
 						agentOptions,
 						maxDepth: 1,
+						// Read by the omp provider; an in-process child scopes its
+						// tools through its own ctx just below.
+						tools: allow,
 					},
 					signal: exec.signal,
 					delivery: "caller",
@@ -112,8 +124,13 @@ export function createCodingSubagentTool({ ctx, cfgOf, root, rootFor }) {
 			return {
 				childId,
 				model,
+				agent,
 				stopReason: result?.stopReason ?? "",
 				text: textOfContent(result?.output).trim(),
+				// Present for an external backend; an in-process child reports
+				// usage through its session instead.
+				...(result?.usage ? { usage: result.usage } : {}),
+				...(result?.diagnostic ? { diagnostic: String(result.diagnostic) } : {}),
 			};
 		},
 	};
