@@ -5,9 +5,15 @@
  *
  *   node preflight.mjs <plan-file> [--root <repo>]
  *
- * It finds pi-plan-dispatch (core.ts, verify.ts) in this order:
- * PI_PLAN_DISPATCH_DIR, <root>/pi-plan-dispatch, the local `packages` of
- * ~/.pi/agent/settings.json, ~/.pi/agent/extensions/pi-plan-dispatch.
+ * It finds a dispatcher in this order, taking the first that exists:
+ *
+ *   dsh:  <root>/dsh/plugins/harness-dispatch  (the plugin's plan.js etc.)
+ *   pi:   PI_PLAN_DISPATCH_DIR, <root>/pi-plan-dispatch, the local `packages`
+ *         of ~/.pi/agent/settings.json, ~/.pi/agent/extensions/pi-plan-dispatch
+ *
+ * The dsh plugin is preferred because it is the dispatcher that runs the plan
+ * in a dsh session; both implement the same format, so either one's rules are
+ * the ones the plan has to satisfy.
  *
  * Exit codes: 0 pass / 1 errors / 2 dispatcher modules not found / 64 usage.
  */
@@ -15,6 +21,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import { PLUGIN_PATH, isPluginDir, loadDispatcherPlugin } from "./preflight-dsh.mjs";
 
 const USAGE = "usage: node preflight.mjs <plan-file> [--root <repo>]";
 
@@ -51,6 +58,7 @@ function dispatcherCandidates(root) {
 	const home = os.homedir();
 	const fromEnv = process.env.PI_PLAN_DISPATCH_DIR;
 	return [
+		path.join(root, PLUGIN_PATH),
 		...(fromEnv ? [path.resolve(expand(fromEnv))] : []),
 		path.join(root, "pi-plan-dispatch"),
 		...settingsPackageDirs(),
@@ -113,14 +121,18 @@ async function main() {
 
 	const root = args.root;
 	const candidates = dispatcherCandidates(root);
-	const dir = candidates.find(isDispatcherDir);
-	if (!dir) {
-		console.error(`ERROR: cannot find the pi-plan-dispatch modules (core.ts, verify.ts). Tried:\n${candidates.map((d) => `  ${d}`).join("\n")}`);
+	const found = candidates.map((dir) => ({ dir, dsh: isPluginDir(dir) })).find((c) => c.dsh || isDispatcherDir(c.dir));
+	if (!found) {
+		console.error(`ERROR: cannot find a dispatcher. Looked for a dsh plugin (plan.js, preflight.js, config.js, roles.js, verify.js) or the pi modules (core.ts, verify.ts) in:\n${candidates.map((d) => `  ${d}`).join("\n")}`);
 		return 2;
 	}
-	console.error(`dispatcher: ${dir}`);
-	const core = await import(pathToFileURL(path.join(dir, "core.ts")).href);
-	const verify = await import(pathToFileURL(path.join(dir, "verify.ts")).href);
+	console.error(`dispatcher: ${found.dir} (${found.dsh ? "dsh plugin" : "pi"})`);
+	const { core, verify } = found.dsh
+		? await loadDispatcherPlugin(found.dir)
+		: {
+			core: await import(pathToFileURL(path.join(found.dir, "core.ts")).href),
+			verify: await import(pathToFileURL(path.join(found.dir, "verify.ts")).href),
+		};
 
 	const file = path.resolve(args.file);
 	let text;

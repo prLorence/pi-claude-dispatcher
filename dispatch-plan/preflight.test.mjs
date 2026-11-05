@@ -162,7 +162,7 @@ test("no dispatcher modules exits 2", () => {
 	const r = run(ctx, [writePlan(ctx, "p-r1.md", cleanPlan())]);
 	assert.equal(r.status, 2, r.stdout + r.stderr);
 	assert.equal(r.stdout, "");
-	assert.ok(r.stderr.includes("cannot find the pi-plan-dispatch modules"), r.stderr);
+	assert.ok(r.stderr.includes("cannot find a dispatcher"), r.stderr);
 });
 
 test("PI_PLAN_DISPATCH_DIR finds the dispatcher outside the repo", () => {
@@ -252,4 +252,52 @@ test("the settings packages list is a fallback and npm: entries are not folders"
 	assert.equal(r.status, 0, r.stdout + r.stderr);
 	assert.ok(r.stderr.includes(`dispatcher: ${pkg}`), r.stderr);
 	assert.equal(r.stderr.includes("npm:"), false);
+});
+
+// ---------------------------------------------------------------------------
+// The dsh dispatcher plugin, which preflight prefers when the repo holds one.
+// Both dispatchers implement the same plan format, so the same plan has to get
+// the same errors; only the keys dsh adds (dshPairDefault) may differ.
+// ---------------------------------------------------------------------------
+
+const dshPlugin = path.resolve(import.meta.dirname, "..", "dsh", "plugins", "harness-dispatch");
+
+/** Link the dsh plugin into a temp repo at the path preflight looks for. */
+function linkDsh(ctx) {
+	fs.mkdirSync(path.join(ctx.root, "dsh", "plugins"), { recursive: true });
+	fs.symlinkSync(dshPlugin, path.join(ctx.root, "dsh", "plugins", "harness-dispatch"), "dir");
+}
+
+test("a repo holding the dsh plugin is preflighted by it, not by pi", () => {
+	const ctx = setup({ link: false });
+	linkDsh(ctx);
+	const r = run(ctx, [writePlan(ctx, "p-r1.md", cleanPlan())]);
+	assert.equal(r.status, 0, r.stdout + r.stderr);
+	assert.ok(r.stderr.includes("(dsh plugin)"), r.stderr);
+});
+
+test("the dsh dispatcher rejects the same bad plan pi rejects", () => {
+	const ctx = setup({ link: false });
+	linkDsh(ctx);
+	const bad = writePlan(ctx, "bad-r1.md", cleanPlan("bad-r1").replace(/^files: .*$/m, "files: /etc/passwd"));
+	const r = run(ctx, [bad]);
+	assert.equal(r.status, 1, r.stdout + r.stderr);
+	assert.ok(r.stdout.includes("is absolute"), r.stdout);
+});
+
+test("dshPairDefault is what the dsh dispatcher reports as the pairing role", () => {
+	const ctx = setup({ link: false });
+	linkDsh(ctx);
+	fs.mkdirSync(path.join(ctx.root, ".plans"), { recursive: true });
+	// pairDefault names the pi-side role; dshPairDefault is what dsh actually uses.
+	fs.writeFileSync(
+		path.join(ctx.root, ".plans", "config.json"),
+		JSON.stringify({ pairDefault: "review", dshPairDefault: "pair-omp" }),
+	);
+	const r = run(ctx, [writePlan(ctx, "p-r1.md", cleanPlan())]);
+	assert.equal(r.status, 0, r.stdout + r.stderr);
+	assert.ok(
+		r.stdout.includes('paired by the default role "pair-omp"'),
+		`dsh resolves dshPairDefault, so that is the role a run would use: ${r.stdout}`,
+	);
 });

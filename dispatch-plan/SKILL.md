@@ -123,7 +123,7 @@ The flip command in section 5 is the only way to make a plan ready. After writin
 
 ## 4. Plan audit
 
-No plan runs before it is audited. Run the preflight CLI first and fix every `ERROR:` before spending an audit round; it runs the dispatcher's own parsing and preflight, so its errors are real rejections, not opinions:
+No plan runs before it is audited. Run the preflight CLI first and fix every `ERROR:` before spending an audit round; it runs the dispatcher's own parsing and preflight, so its errors are real rejections, not opinions. It prefers the repo's dsh plugin (`dsh/plugins/harness-dispatch`) and falls back to pi-plan-dispatch, reporting which one it used on stderr; both implement the same format, so either one's `ERROR:` lines are real. The two differ on `dshPairDefault`, which only dsh resolves, so the pairing role it reports on a repo with both keys is the one a dsh run uses:
 
 ```bash
 node ~/.claude/skills/dispatch-plan/preflight.mjs <plan file>
@@ -282,7 +282,7 @@ The wrong order loses data: `work add` sets the `unmirrored` list that a later `
 ### Install
 
 ```bash
-mkdir -p ~/.claude/skills/dispatch-plan && cp dispatch-plan/SKILL.md dispatch-plan/ORCHESTRATOR.md dispatch-plan/trace.mjs dispatch-plan/preflight.mjs dispatch-plan/config-init.mjs dispatch-plan/decide.mjs dispatch-plan/decide-core.mjs dispatch-plan/decide-stats.mjs dispatch-plan/vault.mjs dispatch-plan/vault-admin.mjs dispatch-plan/vault-events.mjs dispatch-plan/vault-work.mjs dispatch-plan/vault-restore.mjs dispatch-plan/vault-config.mjs dispatch-plan/vault-search.mjs dispatch-plan/vault-eval.mjs ~/.claude/skills/dispatch-plan/
+mkdir -p ~/.claude/skills/dispatch-plan && cp dispatch-plan/SKILL.md dispatch-plan/ORCHESTRATOR.md dispatch-plan/trace.mjs dispatch-plan/preflight.mjs dispatch-plan/preflight-dsh.mjs dispatch-plan/config-init.mjs dispatch-plan/decide.mjs dispatch-plan/decide-core.mjs dispatch-plan/decide-stats.mjs dispatch-plan/vault.mjs dispatch-plan/vault-admin.mjs dispatch-plan/vault-events.mjs dispatch-plan/vault-work.mjs dispatch-plan/vault-restore.mjs dispatch-plan/vault-config.mjs dispatch-plan/vault-search.mjs dispatch-plan/vault-eval.mjs ~/.claude/skills/dispatch-plan/
 mkdir -p ~/.claude/agents && cp dispatch-plan/agents/plan-auditor.md ~/.claude/agents/
 rm -f ~/.claude/agents/planner.md ~/.claude/agents/auditor.md
 go build -C dispatch-plan/vault-search -o ../bin/vault-search .
