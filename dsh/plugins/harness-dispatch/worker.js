@@ -118,6 +118,10 @@ export function createWorkerRunner({ ctx, root, cfgOf, active, log }) {
 		};
 		const readonly = resolveRoleReadonly(cfg, task.role);
 		const policy = { cwd: opts.cwd, files: task.files, bash: true, readonly };
+		// An external provider applies its guard inside the child process from
+		// this value; an in-process child ignores it and gets a scoped
+		// ctx.tools.guard below instead.
+		const guard = cfg.workerGuards ? { files: task.files, bash: true, readonly } : undefined;
 		// A managed child reports liveness through this callback rather than a
 		// readable stdout; runManaged below feeds it into the stall tracker.
 		const tracker = new StallTracker({ stallMs: cfg.stallMinutes * 60_000 });
@@ -141,6 +145,7 @@ export function createWorkerRunner({ ctx, root, cfgOf, active, log }) {
 					// which get their per-run policy from the child ctx instead.
 					tools: cfg.tools,
 					readonly,
+					guard,
 					timeoutMs: cfg.timeoutMinutes * 60_000,
 					onProgress: () => tracker.touch(),
 				},

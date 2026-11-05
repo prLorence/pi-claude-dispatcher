@@ -36,6 +36,10 @@ export const DEFAULT_CONFIG = {
 	thinking: "low",
 	maxParallel: 3,
 	timeoutMinutes: 20,
+	// Bounds one `coding_subagent` call. A plan worker has stall detection and
+	// timeoutMinutes; this ad-hoc tool had neither, so a wedged child held the
+	// calling turn open until the provider's own default expired.
+	codingTimeoutMinutes: 20,
 	retries: 1,
 	tools: [],
 	piCommand: "pi",
@@ -111,6 +115,7 @@ export function loadConfig(d) {
 	cfg.transientRetries = numberOr(raw?.transientRetries, DEFAULT_CONFIG.transientRetries, (n) => Number.isInteger(n) && n >= 0);
 	cfg.backoffSeconds = numbersOr(raw?.backoffSeconds, DEFAULT_CONFIG.backoffSeconds);
 	cfg.stallMinutes = numberOr(raw?.stallMinutes, DEFAULT_CONFIG.stallMinutes, (n) => n >= 0);
+	cfg.codingTimeoutMinutes = numberOr(raw?.codingTimeoutMinutes, DEFAULT_CONFIG.codingTimeoutMinutes, (n) => n > 0);
 	cfg.outagePauseMinutes = numberOr(raw?.outagePauseMinutes, DEFAULT_CONFIG.outagePauseMinutes, (n) => n > 0);
 	cfg.probeSeconds = numberOr(raw?.probeSeconds, DEFAULT_CONFIG.probeSeconds, (n) => n > 0);
 	cfg.probeUrls = stringsOr(raw?.probeUrls, DEFAULT_CONFIG.probeUrls);

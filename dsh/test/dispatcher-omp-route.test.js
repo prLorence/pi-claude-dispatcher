@@ -112,3 +112,34 @@ test("maxDepth is still requested for an in-process provider", async () => {
 	await runner({ cfg: cfgWith("dsh"), plan: PLAN, task: TASK, prompt: "x", cwd: "/repo", parent: { id: "root" }, signal: new AbortController().signal });
 	assert.equal(subagents.seen[0].request.maxDepth, 1, "spawn keeps the recursion guard");
 });
+
+test("the guard policy is forwarded so an external child can enforce it", async () => {
+	// The policy only reaches an omp child through the request: the provider
+	// exports it into that child's environment and passes --hook, whose adapter
+	// reads it. Without this field the run is silently unguarded, which is how
+	// the original hole stayed unnoticed.
+	const subagents = fakeSubagents({ providers: ["omp", "spawn"] });
+	const runner = runnerWith(subagents);
+	await runner({ cfg: cfgWith("omp"), plan: PLAN, task: TASK, prompt: "do it", cwd: "/repo", parent: { id: "root" }, signal: new AbortController().signal });
+	assert.deepEqual(subagents.seen[0].request.guard, { files: ["a.js"], bash: true, readonly: false });
+});
+
+test("workerGuards off sends no policy, so an unguarded run stays unguarded", async () => {
+	const subagents = fakeSubagents({ providers: ["omp", "spawn"] });
+	const runner = runnerWith(subagents);
+	await runner({
+		cfg: cfgWith("omp", { workerGuards: false }),
+		plan: PLAN, task: TASK, prompt: "do it", cwd: "/repo", parent: { id: "root" }, signal: new AbortController().signal,
+	});
+	assert.equal(subagents.seen[0].request.guard, undefined);
+});
+
+test("a readonly role is recorded in the forwarded policy", async () => {
+	const subagents = fakeSubagents({ providers: ["omp", "spawn"] });
+	const runner = runnerWith(subagents);
+	await runner({
+		cfg: cfgWith("omp", { roles: { implement: { agent: "omp", model: "m", readonly: true } } }),
+		plan: PLAN, task: TASK, prompt: "do it", cwd: "/repo", parent: { id: "root" }, signal: new AbortController().signal,
+	});
+	assert.equal(subagents.seen[0].request.guard.readonly, true);
+});

@@ -63,6 +63,7 @@ Read from `.plans/config.json` and never written. The existing keys are read:
 |---|---|---|
 | `dshCommand` | `dsh` | The headless dsh binary the Pi-style adapter would use |
 | `ompCommand` | `omp` | The oh-my-pi binary used by `agent: "omp"` |
+| `codingTimeoutMinutes` | `20` | Wall-clock bound for one `coding_subagent` call |
 | `projectRegistry` | `~/.dsh/harness-projects.json` | Registered repositories whose `.plans/` is ensured |
 | `dshPairDefault` | `pairDefault` | `.plans/config.json` key read only by dsh; lets a dsh plan use `pair-omp` without making the shared Pi preflight reject the role |
 | `prices` | `{}` | `{ "<model>": { "in": <USD/Mtok>, "out": <USD/Mtok> } }`; dsh reports no cost, so cost is computed here or left 0 |
@@ -106,6 +107,16 @@ The worker guard text starts `BLOCKED by harness-dispatch:` and counts as a
 `blocked_action` warning. The guard is an allow-list on top of a shell: shell
 redirects, `sed -i`, `tee`, scripts and `python -c` can still write, so the git
 snapshot and the gate remain the backstop.
+
+The guard follows the worker across a process boundary. An `agent: "omp"` task
+runs in a separate `omp` process that cannot see the parent's tool scope, so
+the policy travels with it: the runner puts it on the request, the provider
+exports it into that child's own environment and passes `--hook`, and
+`plugins/harness-omp-subagent/omp-guard-hook.js` reads it and calls the same
+`guard.js` the parent uses. An unreadable policy blocks every tool call rather
+than allowing the run, and a run with no policy exported stays unguarded. The
+policy is per child, so concurrent tasks with different file scopes cannot
+observe each other's.
 
 ### Orchestrator tools
 
@@ -213,10 +224,10 @@ routes on `ctx.webServer` in a web profile:
 
 - `GET /api/state` (the board: repos, plans, task rows, lanes, gate, decider),
 - `GET /api/events` (SSE `hello`, `change`, ping),
-- `GET /api/session/<repo>/<plan>/<session>?after=<line>` (transcripts),
+- `GET /api/monitor/session/<repo>/<plan>/<session>?after=<line>` (transcripts),
 - `GET /api/agents?scope=added|all` (Pi, omp and dsh sessions),
-- `/plugins/harness-monitor/` (the unchanged built client copied from
-  `monitor/dist`).
+- `/plugins/harness-monitor/` (the built client copied from `monitor/dist`),
+  with `?embed=1&theme=dark|light` for the Dispatcher panel.
 
 It never writes. It answers `GET`/`HEAD` only, checks the `Host` header, rejects
 path traversal, and adds `nosniff` and `no-store` (no CORS headers). In a
@@ -229,7 +240,8 @@ dsh already provides `ctx.webServer`.
 |---|---|---|
 | `root` | session working directory | Repo root |
 | `plansDir` | `<root>/.plans` | Plans tree to read |
-| `repos` | `[{name: "repo", dir: plansDir}]` | Named repositories |
+| `repos` | auto-discovered | Named repositories; when omitted, projects come from `~/.dsh/harness-projects.json` |
+| `registryPath` | `~/.dsh/harness-projects.json` | Project registry used for discovery |
 | `staticDir` | `<plugin>/dist` | Built client |
 | `pollMs` | `500` | Change-poll interval for SSE |
 | `prefix` | `/plugins/harness-monitor` | Client mount path |

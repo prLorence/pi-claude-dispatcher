@@ -14,12 +14,22 @@
  */
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 export const name = "harness-omp-subagent";
 export const inject = ["subagents"];
 
 const DEFAULT_PROVIDER = "omp";
 const DEFAULT_MODEL = "opencode-go/beam-free";
+
+/**
+ * Absolute path to the guard adapter that ships beside this file.
+ *
+ * Resolved from import.meta.url rather than configured, so it follows the
+ * plugin wherever it is installed (the profile symlinks into the repo) and a
+ * deployment cannot point at a stale copy.
+ */
+export const GUARD_HOOK_PATH = fileURLToPath(new URL("./omp-guard-hook.js", import.meta.url));
 const DEFAULT_TIMEOUT_MS = 600_000;
 
 /** The read-only tool set a reviewer child may use. */
@@ -64,9 +74,11 @@ function childId() {
 	return randomUUID();
 }
 
-export function ompArgs({ model, thinking, prompt, tools, readonly }) {
+export function ompArgs({ model, thinking, prompt, tools, readonly, guardHook }) {
 	const args = ["--mode", "json", "-p", "--no-session", "--model", model];
 	if (thinking) args.push("--thinking", thinking);
+	// Loaded before --tools so a reviewer's restricted set and the guard agree.
+	if (guardHook) args.push("--hook", guardHook);
 	const list = readonly ? READONLY_TOOLS : Array.isArray(tools) ? tools : [];
 	if (list.length > 0) args.push("--tools", list.join(","));
 	args.push(prompt);
@@ -165,7 +177,13 @@ export function createOmpProvider(options = {}) {
 			const tools = request?.tools ?? options.tools;
 			const readonly = request?.readonly ?? options.readonly;
 			const runTimeoutMs = Number.isFinite(request?.timeoutMs) ? request.timeoutMs : timeoutMs;
-			const args = ompArgs({ model, thinking, prompt, tools, readonly });
+			// A guard policy can only be applied inside the child, and only a hook
+			// loaded there can apply it. The policy arrives per run rather than on
+			// the parent's environment: two concurrent workers have different
+			// policies, and mutating process.env would make them race.
+			const guard = request?.guard;
+			const guardHook = guard ? (options.guardHook ?? GUARD_HOOK_PATH) : undefined;
+			const args = ompArgs({ model, thinking, prompt, tools, readonly, guardHook });
 
 			const state = { text: "", usage: undefined, tools: [], errors: [] };
 			// The dispatcher's stall detector needs a liveness signal, and the
@@ -216,7 +234,12 @@ export function createOmpProvider(options = {}) {
 				finishRun = finish;
 
 				try {
-					child = spawn(command, args, { cwd, shell: false, stdio: ["ignore", "pipe", "pipe"], env: process.env });
+					// The policy rides this child's own environment, so concurrent
+					// workers with different policies cannot see each other's.
+					const env = { ...process.env };
+					if (guard) env.PI_PLAN_DISPATCH_GUARD = JSON.stringify(guard);
+					else delete env.PI_PLAN_DISPATCH_GUARD;
+					child = spawn(command, args, { cwd, shell: false, stdio: ["ignore", "pipe", "pipe"], env });
 				} catch (error) {
 					finish("error", `omp spawn failed: ${error instanceof Error ? error.message : String(error)}`);
 					return;
@@ -258,8 +281,8 @@ export function createOmpProvider(options = {}) {
 
 				timer = setTimeout(() => {
 					terminate(child);
-					finish("error", `omp timed out after ${timeoutMs} ms`);
-				}, timeoutMs);
+					finish("error", `omp timed out after ${runTimeoutMs} ms`);
+				}, runTimeoutMs);
 				timer.unref?.();
 
 				if (signal) {
