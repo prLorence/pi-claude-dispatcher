@@ -1,6 +1,6 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -62,6 +62,29 @@ test("parseModels reads the canonical table, skips headers, dedupes and keeps on
 	assert.equal(alias.context, "1M");
 });
 
+test("parseModels stops at the Provider table, whose ids look canonical", () => {
+	// A provider row puts a bare model name in the canonical column and may
+	// itself contain a slash. Parsing past the header floods the picker with
+	// ids omp cannot run as a canonical selection.
+	const out = parseModels(`Canonical models
+canonical                   selected                                variants  context  max-out
+claude-opus-4-6             anthropic/claude-opus-4-6               1         1M       128K   
+
+Provider models
+provider     model                       context  max-out  thinking                       images
+openrouter   meta/muse-spark-1.3         1M       944K     minimal,low,medium,high        yes   
+qwen         qwen3-coder                 262K     1M       -                              yes   
+`);
+	assert.deepEqual(
+		out.map((m) => m.id),
+		["anthropic/claude-opus-4-6"],
+	);
+	assert.ok(
+		!out.some((m) => m.maxOut.includes(",")),
+		"no row keeps a thinking-level list in maxOut",
+	);
+});
+
 test("parseModels tolerates empty output", () => {
 	assert.deepEqual(parseModels(""), []);
 	assert.deepEqual(parseModels("\n \n"), []);
@@ -91,6 +114,9 @@ function fakeReact() {
 			return [typeof initial === "function" ? initial() : initial, () => {}];
 		},
 		useEffect() {},
+		useCallback(fn) {
+			return fn;
+		},
 	};
 }
 
@@ -217,7 +243,7 @@ function fakeRequest(method, body) {
 	};
 }
 
-test("apply registers the two exact routes and returns a disposer", async () => {
+test("apply registers the exact routes and returns a disposer that removes all of them", async () => {
 	const routes = [];
 	let disposed = 0;
 	const ctx = {
@@ -234,10 +260,11 @@ test("apply registers the two exact routes and returns a disposer", async () => 
 	assert.deepEqual(routes.map((r) => `${r.kind} ${r.path}`), [
 		"exact /plugins/harness-dispatcher/settings",
 		"exact /plugins/harness-dispatcher/models",
+		"exact /plugins/harness-dispatcher/roles",
 	]);
 	assert.equal(typeof dispose, "function");
 	dispose();
-	assert.equal(disposed, 2);
+	assert.equal(disposed, 3);
 });
 
 test("the models and settings routes reject wrong methods without running omp", async () => {
@@ -319,4 +346,122 @@ test("POST /settings rejects an invalid id without writing modelRoles", async ()
 	assert.equal(res.status, 400);
 	assert.match(res.body.error, /invalid omp model id/);
 	assert.equal(existsSync(SET_FILE), false, "no config set happened");
+});
+
+// ---------------------------------------------------------------------------
+// Roles route: dispatcher role overrides for one registered repository.
+// ---------------------------------------------------------------------------
+
+function rolesCtx(projects) {
+	const routes = [];
+	const registry = join(dir, "projects.json");
+	writeFileSync(registry, JSON.stringify({ version: 1, projects }));
+	return {
+		routes,
+		registry,
+		ctx: {
+			webServer: {
+				register(route) {
+					routes.push(route);
+					return () => {};
+				},
+			},
+		},
+	};
+}
+
+function rolesRoute(handle) {
+	return handle.routes.find((r) => r.path === "/plugins/harness-dispatcher/roles");
+}
+
+test("GET /roles lists projects and the built-in defaults for the first one", async () => {
+	const repo = mkdtempSync(join(tmpdir(), "roles-ui-repo-"));
+	mkdirSync(join(repo, ".plans"), { recursive: true });
+	const handle = rolesCtx({ [repo]: { path: repo, name: "demo" } });
+	await apply(handle.ctx, { ompCommand: FAKE_OMP, projectRegistry: join(dir, "projects.json") });
+	const res = fakeResponse();
+	await rolesRoute(handle).handler({ method: "GET", url: "/plugins/harness-dispatcher/roles" }, res);
+	assert.equal(res.status, 200);
+	assert.equal(res.body.root, repo);
+	assert.deepEqual(res.body.projects, [repo]);
+	assert.deepEqual(
+		res.body.roles.map((r) => r.name),
+		["implement-omp", "pair-omp", "pair-omp-contributor"],
+	);
+	assert.ok(res.body.roles.every((r) => r.overridden === false));
+	rmSync(repo, { recursive: true, force: true });
+});
+
+test("POST /roles writes an override and GET reflects it", async () => {
+	const repo = mkdtempSync(join(tmpdir(), "roles-ui-repo-"));
+	mkdirSync(join(repo, ".plans"), { recursive: true });
+	const handle = rolesCtx({ [repo]: { path: repo, name: "demo" } });
+	await apply(handle.ctx, { ompCommand: FAKE_OMP, projectRegistry: join(dir, "projects.json") });
+
+	const post = fakeResponse();
+	await rolesRoute(handle).handler(
+		fakeRequest("POST", { root: repo, role: "implement-omp", model: "opencode-go/deepseek-v4.1-flash" }),
+		post,
+	);
+	assert.equal(post.status, 200, JSON.stringify(post.body));
+	assert.equal(post.body.role.model, "opencode-go/deepseek-v4.1-flash");
+	assert.equal(post.body.role.overridden, true);
+
+	const res = fakeResponse();
+	await rolesRoute(handle).handler({ method: "GET", url: "/plugins/harness-dispatcher/roles" }, res);
+	const role = res.body.roles.find((r) => r.name === "implement-omp");
+	assert.equal(role.model, "opencode-go/deepseek-v4.1-flash");
+	assert.equal(role.overridden, true);
+	rmSync(repo, { recursive: true, force: true });
+});
+
+test("POST /roles rejects an unregistered root, a bad role and an off-catalog model", async () => {
+	const repo = mkdtempSync(join(tmpdir(), "roles-ui-repo-"));
+	mkdirSync(join(repo, ".plans"), { recursive: true });
+	const handle = rolesCtx({ [repo]: { path: repo, name: "demo" } });
+	await apply(handle.ctx, { ompCommand: FAKE_OMP, projectRegistry: join(dir, "projects.json") });
+	const route = rolesRoute(handle);
+
+	for (const [body, pattern] of [
+		[{ root: "/tmp/not-registered", role: "implement-omp", model: "" }, /not a registered project/],
+		[{ root: repo, role: "nope", model: "" }, /not an omp role/],
+		[{ root: repo, role: "implement-omp", model: "not/a/real/model" }, /not in the omp catalog/],
+		[{ root: "relative/path", role: "implement-omp", model: "" }, /absolute repository path/],
+	]) {
+		const res = fakeResponse();
+		await route.handler(fakeRequest("POST", body), res);
+		assert.equal(res.status, 400, `expected 400 for ${JSON.stringify(body)}`);
+		assert.match(res.body.error, pattern);
+	}
+	// Nothing was written by any rejected request.
+	assert.equal(existsSync(join(repo, ".plans", "config.json")), false);
+	rmSync(repo, { recursive: true, force: true });
+});
+
+test("POST /roles with a null model or thinking resets instead of writing the text \"null\"", async () => {
+	const repo = mkdtempSync(join(tmpdir(), "roles-ui-repo-"));
+	mkdirSync(join(repo, ".plans"), { recursive: true });
+	const handle = rolesCtx({ [repo]: { path: repo, name: "demo" } });
+	await apply(handle.ctx, { ompCommand: FAKE_OMP, projectRegistry: join(dir, "projects.json") });
+	const route = rolesRoute(handle);
+
+	const first = fakeResponse();
+	await route.handler(
+		fakeRequest("POST", { root: repo, role: "pair-omp", model: "opencode-go/deepseek-v4.1-flash", thinking: "high" }),
+		first,
+	);
+	assert.equal(first.status, 200);
+
+	for (const body of [
+		{ root: repo, role: "pair-omp", thinking: null },
+		{ root: repo, role: "pair-omp", model: null },
+	]) {
+		const res = fakeResponse();
+		await route.handler(fakeRequest("POST", body), res);
+		assert.equal(res.status, 200, JSON.stringify(res.body));
+	}
+
+	const written = JSON.parse(readFileSync(join(repo, ".plans", "config.json"), "utf8"));
+	assert.equal(written.roles, undefined, `config must not keep a "null" string: ${JSON.stringify(written.roles)}`);
+	rmSync(repo, { recursive: true, force: true });
 });

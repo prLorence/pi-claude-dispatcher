@@ -54,7 +54,7 @@ test("an omp coding role exists and is writable, so omp can pair with itself", (
 	const coder = DEFAULT_ROLES["implement-omp"];
 	assert.equal(coder.agent, "omp");
 	assert.equal(coder.readonly, undefined, "a coder is not read-only");
-	assert.equal(coder.model, "opencode-go/beam-free");
+	assert.equal(coder.model, "opencode-go/deepseek-v4.1-flash");
 	assert.match(coder.prompt, /implement exactly one task/);
 });
 

@@ -6,6 +6,8 @@ window.__ModuleLoader__.load({
 		const PANEL_ID = 'dispatcher';
 		const SETTINGS_URL = '/plugins/harness-dispatcher/settings';
 		const MODELS_URL = '/plugins/harness-dispatcher/models';
+		const ROLES_URL = '/plugins/harness-dispatcher/roles';
+		const THINKING = ['', 'minimal', 'low', 'medium', 'high', 'xhigh'];
 
 		const ROWS = [
 			{
@@ -85,6 +87,30 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(style);
 		};
 
+
+		function hostTheme() {
+			if (typeof document === 'undefined') return 'light';
+			const declared = document.documentElement.dataset.theme || document.documentElement.getAttribute('data-theme');
+			if (declared === 'dark' || declared === 'light') return declared;
+			const raw = getComputedStyle(document.body).backgroundColor || '';
+			const rgb = raw.match(/rgba?\(([^)]+)\)/);
+			if (rgb) {
+				const [r, g, b, a] = rgb[1].split(',').map((v) => Number.parseFloat(v));
+				if ([r, g, b].every(Number.isFinite) && !(Number.isFinite(a) && a === 0)) {
+					return (r * 299 + g * 587 + b * 114) / 1000 < 128 ? 'dark' : 'light';
+				}
+			}
+			const root = getComputedStyle(document.documentElement).backgroundColor || '';
+			const rootRgb = root.match(/rgba?\(([^)]+)\)/);
+			if (rootRgb) {
+				const [r, g, b, a] = rootRgb[1].split(',').map((v) => Number.parseFloat(v));
+				if ([r, g, b].every(Number.isFinite) && !(Number.isFinite(a) && a === 0)) {
+					return (r * 299 + g * 587 + b * 114) / 1000 < 128 ? 'dark' : 'light';
+				}
+			}
+			return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+		}
+
 		function PanelIcon(props) {
 			const size = props && typeof props.size === 'number' ? props.size : 18;
 			return h(
@@ -104,6 +130,60 @@ window.__ModuleLoader__.load({
 			const [busy, setBusy] = React.useState(false);
 			const [message, setMessage] = React.useState('');
 			const [error, setError] = React.useState('');
+			const [roles, setRoles] = React.useState([]);
+			const [roleRoot, setRoleRoot] = React.useState('');
+			const [projects, setProjects] = React.useState([]);
+			const [roleModels, setRoleModels] = React.useState([]);
+			const [roleMsg, setRoleMsg] = React.useState('');
+			const [roleError, setRoleError] = React.useState('');
+			const [roleBusy, setRoleBusy] = React.useState(false);
+
+			const loadRoles = React.useCallback(
+				(root) => {
+					setRoleBusy(true);
+					const url = root ? `${ROLES_URL}?root=${encodeURIComponent(root)}` : ROLES_URL;
+					window
+						.fetch(url, { headers: { accept: 'application/json' } })
+						.then((r) => (r.ok ? r.json() : r.json().then((d) => Promise.reject(new Error(d.error || `HTTP ${r.status}`)))))
+						.then((data) => {
+							setRoleRoot(data.root || '');
+							setProjects(Array.isArray(data.projects) ? data.projects : []);
+							setRoles(Array.isArray(data.roles) ? data.roles : []);
+							if (Array.isArray(data.models) && data.models.length) setRoleModels(data.models);
+							setRoleError('');
+						})
+						.catch((cause) => setRoleError(cause instanceof Error ? cause.message : String(cause)))
+						.finally(() => setRoleBusy(false));
+				},
+				[],
+			);
+			React.useEffect(() => {
+				loadRoles('');
+			}, [loadRoles]);
+
+			const saveRole = (role, patch) => {
+				setRoleBusy(true);
+				setRoleMsg('');
+				window
+					.fetch(ROLES_URL, {
+						method: 'POST',
+						headers: { 'content-type': 'application/json', accept: 'application/json' },
+						body: JSON.stringify({ root: roleRoot, role, ...patch }),
+					})
+					.then(async (r) => {
+						const data = await r.json().catch(() => ({}));
+						if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+						return data;
+					})
+					.then((data) => {
+						setRoles(Array.isArray(data.roles) ? data.roles : []);
+						const saved = data.role;
+						setRoleMsg(`${role} now ${saved.overridden ? 'overrides the built-in' : 'uses the built-in default'}${saved.model ? ` · ${saved.model}` : ''}.`);
+						setRoleError('');
+					})
+					.catch((cause) => setRoleError(cause instanceof Error ? cause.message : String(cause)))
+					.finally(() => setRoleBusy(false));
+			};
 			React.useEffect(() => {
 				installCss();
 				let alive = true;
@@ -237,7 +317,88 @@ window.__ModuleLoader__.load({
 				),
 				h('p', { className: 'dp-note' }, 'The old Harness settings page was removed; these are the same plugin rows, now in the Dispatcher.'),
 			);
-			const settingsView = h('div', { style: { display: 'grid', gap: 16 } }, modelCard, pluginCard);
+			const roleCard = h(
+				'section',
+				{ className: 'dp-card' },
+				h('div', { className: 'dp-label' }, 'Dispatcher roles'),
+				h(
+					'div',
+					{ className: 'dp-field' },
+					h(
+						'select',
+						{
+							className: 'dp-select',
+							value: roleRoot,
+							onChange: (e) => loadRoles(e.target.value),
+							'aria-label': 'Repository',
+							disabled: roleBusy || !projects.length,
+						},
+						!projects.length ? h('option', { value: '' }, 'No registered projects') : null,
+						projects.map((p) => h('option', { key: p, value: p }, p.replace(/^\/Users\/[^/]+/, '~'))),
+					),
+					h('button', { type: 'button', className: 'dp-btn', onClick: () => loadRoles(roleRoot), disabled: roleBusy }, 'Reload'),
+				),
+				h(
+					'p',
+					{ className: 'dp-note' },
+					'Each repository resolves roles from its own .plans/config.json. A role with no override uses the built-in default; saving writes an override, and Reset removes it.',
+				),
+				...roles.map((role) =>
+					h(
+						'div',
+						{ className: 'dp-row', key: role.name },
+						h(
+							'div',
+							{ style: { display: 'grid', gap: 8 } },
+							h(
+								'div',
+								null,
+								h('div', { className: 'dp-row-title' }, role.name),
+								h(
+									'div',
+									{ className: 'dp-meta' },
+									`agent: ${role.agent}${role.readonly ? ' · read-only' : ' · writable'} · ${role.overridden ? 'override' : 'built-in'}`,
+								),
+							),
+							h(
+								'div',
+								{ className: 'dp-field' },
+								h(
+									'select',
+									{
+										className: 'dp-select',
+										value: role.model,
+										onChange: (e) => saveRole(role.name, { model: e.target.value }),
+										disabled: roleBusy,
+										'aria-label': `${role.name} model`,
+									},
+									role.model && !roleModels.some((m) => m.id === role.model)
+										? h('option', { value: role.model }, `${role.model} (current)`)
+										: null,
+									roleModels.map((m) => h('option', { key: m.id, value: m.id }, m.id)),
+								),
+								h(
+									'select',
+									{
+										className: 'dp-select',
+										style: { minWidth: 130 },
+										value: role.thinking,
+										onChange: (e) => saveRole(role.name, { thinking: e.target.value }),
+										disabled: roleBusy,
+										'aria-label': `${role.name} thinking`,
+									},
+									THINKING.map((t) => h('option', { key: t || 'inherit', value: t }, t || 'inherit')),
+								),
+								h('button', { type: 'button', className: 'dp-btn', onClick: () => saveRole(role.name, { model: null, thinking: null }), disabled: roleBusy || !role.overridden }, 'Reset'),
+							),
+						),
+						h('span', { className: `dp-chip${role.overridden ? ' ok' : ''}` }, role.overridden ? 'Override' : 'Default'),
+					),
+				),
+				h('div', { className: 'dp-msg' }, roleMsg),
+				roleError ? h('div', { className: 'dp-error' }, roleError) : null,
+			);
+			const settingsView = h('div', { style: { display: 'grid', gap: 16 } }, modelCard, roleCard, pluginCard);
 			const monitorView = h(
 				'div',
 				{ className: 'dp-frame-wrap' },
@@ -245,11 +406,11 @@ window.__ModuleLoader__.load({
 					'div',
 					{ className: 'dp-frame-bar' },
 					h('span', null, 'Dispatcher monitor'),
-					h('span', { style: { fontWeight: 400, opacity: 0.55 } }, 'read-only board, lanes, transcripts and agents'),
+					h('span', { style: { fontWeight: 400, opacity: 0.55 } }, 'read-only'),
 				),
 				h('iframe', {
 					className: 'dp-frame',
-					src: '/plugins/harness-monitor/',
+					src: `/plugins/harness-monitor/?embed=1&theme=${hostTheme()}`,
 					title: 'Dispatcher monitor',
 				}),
 			);

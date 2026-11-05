@@ -35,7 +35,7 @@ export const DEFAULT_ROLES = {
 	 */
 	"implement-omp": {
 		agent: "omp",
-		model: "opencode-go/beam-free",
+		model: "opencode-go/deepseek-v4.1-flash",
 		thinking: "low",
 		prompt: [
 			"You implement exactly one task, in the files you own.",
