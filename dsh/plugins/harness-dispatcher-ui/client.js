@@ -134,6 +134,9 @@ window.__ModuleLoader__.load({
 			const [roleRoot, setRoleRoot] = React.useState('');
 			const [projects, setProjects] = React.useState([]);
 			const [roleModels, setRoleModels] = React.useState([]);
+			// Per-role provider filter, keyed by role name. Kept separate from the
+			// role value: filtering the list must not change what is saved.
+			const [roleProvider, setRoleProvider] = React.useState({});
 			const [roleMsg, setRoleMsg] = React.useState('');
 			const [roleError, setRoleError] = React.useState('');
 			const [roleBusy, setRoleBusy] = React.useState(false);
@@ -317,6 +320,14 @@ window.__ModuleLoader__.load({
 				),
 				h('p', { className: 'dp-note' }, 'The old Harness settings page was removed; these are the same plugin rows, now in the Dispatcher.'),
 			);
+			const roleProviders = [...new Set(roleModels.map((m) => m.provider).filter(Boolean))].sort();
+			// Start the filter on the role's current provider so the dropdown opens
+			// on a short, relevant list instead of the whole catalog.
+			const roleProviderOf = (role) => roleProvider[role.name] || (roleModels.some((m) => m.provider === role.model.split('/')[0]) ? role.model.split('/')[0] : 'all');
+			const roleVisible = (role) => {
+				const sel = roleProviderOf(role);
+				return sel === 'all' ? roleModels : roleModels.filter((m) => m.provider === sel);
+			};
 			const roleCard = h(
 				'section',
 				{ className: 'dp-card' },
@@ -367,6 +378,21 @@ window.__ModuleLoader__.load({
 									'select',
 									{
 										className: 'dp-select',
+										style: { minWidth: 150 },
+										value: roleProviderOf(role),
+										onChange: (e) => setRoleProvider((prev) => ({ ...prev, [role.name]: e.target.value })),
+										disabled: roleBusy || !roleModels.length,
+										'aria-label': `${role.name} provider`,
+									},
+									h('option', { value: 'all' }, `All providers (${roleModels.length})`),
+									roleProviders.map((p) =>
+										h('option', { key: p, value: p }, `${p} (${roleModels.filter((m) => m.provider === p).length})`),
+									),
+								),
+								h(
+									'select',
+									{
+										className: 'dp-select',
 										value: role.model,
 										onChange: (e) => saveRole(role.name, { model: e.target.value }),
 										disabled: roleBusy,
@@ -375,7 +401,7 @@ window.__ModuleLoader__.load({
 									role.model && !roleModels.some((m) => m.id === role.model)
 										? h('option', { value: role.model }, `${role.model} (current)`)
 										: null,
-									roleModels.map((m) => h('option', { key: m.id, value: m.id }, m.id)),
+									roleVisible(role).map((m) => h('option', { key: m.id, value: m.id }, m.id)),
 								),
 								h(
 									'select',

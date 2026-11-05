@@ -7,82 +7,101 @@ import { join } from "node:path";
 import { apply, parseModels } from "../plugins/harness-dispatcher-ui/index.js";
 
 // ---------------------------------------------------------------------------
-// parseModels: the real `omp --list-models` output is two tables. The
-// Canonical models table is the one with canonical/selected/variants/context/
-// max-out; the Provider models table must never leak into the result.
+// parseModels: the real `omp --list-models` output is two tables with different
+// columns. Both are usable ids: a Provider row's `<provider>/<model>` is exactly
+// what `--model` takes. Parsing only Canonical hid most of the catalog — a
+// custom provider with 13 models in models.yml surfaced as 2 aliases.
 // ---------------------------------------------------------------------------
 
 const OMP_LIST_MODELS = `Canonical models
 canonical                   selected                                variants  context  max-out
 anthropic/claude-3-opus     anthropic/claude-3-opus-20240229        1         200K     4.1K   
 claude-3-5-haiku            anthropic/claude-3-5-haiku-latest       2         200K     8.2K   
-claude-opus-4-6             anthropic/claude-opus-4-6               1         1M       128K   
 deepseek-v4-1-flash         opencode-go/deepseek-v4.1-flash         1         222K     8.9K   
 anthropic/claude-3-opus     anthropic/claude-3-opus-20240229        1         200K     4.1K   
 fable-latest                ~anthropic/claude-fable-latest          1         1M       128K   
 local-only                  local-only                              1         128K     8K    
 
 Provider models
-provider     model                       context  max-out  thinking                       images
-anthropic    claude-haiku-4-5            200K     64K      minimal,low,medium,high,xhigh  yes   
-opencode-go  kimi-k2.5                   262K     66K      minimal,low,medium,high,xhigh  yes   
+provider          model                       context  max-out  thinking                       images
+anthropic         claude-haiku-4-5            200K     64K      minimal,low,medium,high,xhigh  yes   
+opencode-go       kimi-k2.5                   262K     66K      minimal,low,medium,high,xhigh  yes   
+opendesign-cloud  deepseek-v4.1-flash         1M       128K     minimal,low,medium,high,xhigh  yes   
+opendesign-cloud  claude-haiku-5.5            1M       128K     -                              yes   
 
 `;
 
-test("parseModels reads the canonical table, skips headers, dedupes and keeps only ids with a slash", () => {
+test("parseModels keeps both tables, since a provider row is a valid --model id", () => {
 	const models = parseModels(OMP_LIST_MODELS);
 	const ids = models.map((m) => m.id);
 
-	assert.deepEqual(new Set(ids), new Set([
+	// Canonical aliases the picker already used.
+	for (const id of [
 		"anthropic/claude-3-opus-20240229",
 		"anthropic/claude-3-5-haiku-latest",
-		"anthropic/claude-opus-4-6",
 		"opencode-go/deepseek-v4.1-flash",
 		"~anthropic/claude-fable-latest",
-	]));
-	assert.equal(models.length, 5, "duplicate canonical rows collapse and provider rows/no-slash ids are dropped");
+	]) {
+		assert.ok(ids.includes(id), `${id} survives`);
+	}
+	// Provider rows the old parser dropped.
+	for (const id of [
+		"anthropic/claude-haiku-4-5",
+		"opencode-go/kimi-k2.5",
+		"opendesign-cloud/deepseek-v4.1-flash",
+		"opendesign-cloud/claude-haiku-5.5",
+	]) {
+		assert.ok(ids.includes(id), `${id} is reachable as a model`);
+	}
+
 	assert.equal(ids.includes("selected"), false, "the column header is not a model");
-	assert.equal(ids.includes("claude-haiku-4-5"), false, "Provider models rows are not canonical ids");
+	assert.equal(ids.includes("provider"), false, "the provider header is not a model");
 	assert.equal(ids.includes("local-only"), false, "ids without a slash are dropped");
-	assert.equal(ids.filter((id) => id === "anthropic/claude-3-opus-20240229").length, 1);
+	assert.equal(ids.filter((id) => id === "anthropic/claude-3-opus-20240229").length, 1, "duplicates collapse");
 
 	const deepseek = models.find((m) => m.id === "opencode-go/deepseek-v4.1-flash");
-	assert.deepEqual(deepseek, {
-		id: "opencode-go/deepseek-v4.1-flash",
-		provider: "opencode-go",
-		canonical: "deepseek-v4-1-flash",
-		context: "222K",
-		maxOut: "8.9K",
-		variants: "1",
-	});
+	assert.equal(deepseek.provider, "opencode-go");
+	assert.equal(deepseek.context, "222K");
+	assert.equal(deepseek.maxOut, "8.9K");
 
 	const alias = models.find((m) => m.id === "~anthropic/claude-fable-latest");
 	assert.equal(alias.canonical, "fable-latest");
 	assert.equal(alias.provider, "~anthropic");
 	assert.equal(alias.context, "1M");
+
+	// Provider rows carry their own columns, not the canonical ones.
+	const od = models.find((m) => m.id === "opendesign-cloud/deepseek-v4.1-flash");
+	assert.equal(od.provider, "opendesign-cloud");
+	assert.equal(od.context, "1M");
+	assert.equal(od.maxOut, "128K");
+	assert.match(od.thinking, /minimal,low/);
+	assert.equal(od.images, "yes");
 });
 
-test("parseModels stops at the Provider table, whose ids look canonical", () => {
-	// A provider row puts a bare model name in the canonical column and may
-	// itself contain a slash. Parsing past the header floods the picker with
-	// ids omp cannot run as a canonical selection.
-	const out = parseModels(`Canonical models
-canonical                   selected                                variants  context  max-out
-claude-opus-4-6             anthropic/claude-opus-4-6               1         1M       128K   
+test("parseModels records every model of a custom provider", () => {
+	// Regression: a provider defined only in models.yml used to surface as the
+	// couple of canonical aliases that happened to reference it.
+	const rows = [
+		["claude-haiku-5.5", "1M", "128K", "-", "yes"],
+		["deepseek-v4-flash", "1M", "32K", "minimal,low,medium,high,xhigh", "no"],
+		["deepseek-v4-pro", "1M", "128K", "minimal,low,medium,high,xhigh", "no"],
+		["glm-5.3-flash", "1M", "32K", "minimal,low,medium,high,xhigh", "yes"],
+		["gpt-6-luna", "1.1M", "128K", "-", "yes"],
+	];
+	const out = [
+		"Canonical models",
+		"canonical   selected   variants  context  max-out",
+		"glm-5.3-flashx   opendesign-cloud/glm-5.3-flashx   1   1M   32K",
+		"",
+		"Provider models",
+		"provider          model             context  max-out  thinking                       images",
+		...rows.map((r) => `opendesign-cloud  ${r[0]}  ${r[1]}  ${r[2]}  ${r[3]}  ${r[4]}`),
+	].join("\n");
 
-Provider models
-provider     model                       context  max-out  thinking                       images
-openrouter   meta/muse-spark-1.3         1M       944K     minimal,low,medium,high        yes   
-qwen         qwen3-coder                 262K     1M       -                              yes   
-`);
-	assert.deepEqual(
-		out.map((m) => m.id),
-		["anthropic/claude-opus-4-6"],
-	);
-	assert.ok(
-		!out.some((m) => m.maxOut.includes(",")),
-		"no row keeps a thinking-level list in maxOut",
-	);
+	const models = parseModels(out);
+	const od = models.filter((m) => m.provider === "opendesign-cloud");
+	assert.equal(od.length, 6, "five provider rows plus the canonical alias");
+	assert.ok(od.every((m) => m.id.startsWith("opendesign-cloud/")));
 });
 
 test("parseModels tolerates empty output", () => {

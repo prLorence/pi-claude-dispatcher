@@ -136,3 +136,38 @@ test("validModelId rejects whitespace, quotes and empty ids", () => {
 	assert.equal(validModelId('quo"te'), false);
 	assert.equal(validModelId(42), false);
 });
+
+test("the provider filter derives providers from the model ids", () => {
+	// The role card groups its model dropdown by provider. Providers must come
+	// from the ids themselves, so a custom provider defined only in models.yml
+	// appears as soon as omp lists it.
+	const models = [
+		{ id: "opencode-go/glm-5.3-flash", provider: "opencode-go" },
+		{ id: "opencode-go/beam-free", provider: "opencode-go" },
+		{ id: "opendesign-cloud/claude-haiku-5.5", provider: "opendesign-cloud" },
+		{ id: "opendesign-cloud/deepseek-v4.1-flash", provider: "opendesign-cloud" },
+		{ id: "opendesign-cloud/gpt-6-luna", provider: "opendesign-cloud" },
+	];
+	const providers = [...new Set(models.map((m) => m.provider).filter(Boolean))].sort();
+	assert.deepEqual(providers, ["opencode-go", "opendesign-cloud"]);
+
+	const visible = (sel) => (sel === "all" ? models : models.filter((m) => m.provider === sel));
+	assert.equal(visible("all").length, 5);
+	assert.equal(visible("opendesign-cloud").length, 3);
+	assert.deepEqual(
+		visible("opendesign-cloud").map((m) => m.id),
+		["opendesign-cloud/claude-haiku-5.5", "opendesign-cloud/deepseek-v4.1-flash", "opendesign-cloud/gpt-6-luna"],
+	);
+});
+
+test("a role's current provider is preselected from its model", () => {
+	// roleProviderOf seeds the filter from the saved model so the dropdown opens
+	// on a short list rather than the whole catalog.
+	const providerOf = (role, overrides, models) =>
+		overrides[role.name] || (models.some((m) => m.provider === role.model.split("/")[0]) ? role.model.split("/")[0] : "all");
+	const models = [{ provider: "opendesign-cloud" }, { provider: "opencode-go" }];
+	assert.equal(providerOf({ name: "implement-omp", model: "opendesign-cloud/deepseek-v4.1-flash" }, {}, models), "opendesign-cloud");
+	assert.equal(providerOf({ name: "pair-omp", model: "opencode-go/beam-free" }, {}, models), "opencode-go");
+	assert.equal(providerOf({ name: "pair-omp", model: "gone/provider" }, {}, models), "all");
+	assert.equal(providerOf({ name: "pair-omp", model: "opencode-go/beam-free" }, { "pair-omp": "opendesign-cloud" }, models), "opendesign-cloud");
+});

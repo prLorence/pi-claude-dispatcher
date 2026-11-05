@@ -27,28 +27,67 @@ function ompCommand(config) {
 
 
 /**
- * Parse `omp --list-models` into canonical model ids.
+ * Parse `omp --list-models` into the model ids omp accepts as `--model`.
  *
- * The output is two tables. Only the Canonical table maps a short alias to the
- * id omp accepts, so parsing stops at the Provider table header: those rows put
- * a bare model name in the same column, and ids such as
- * `openrouter/meta/muse-spark-1.3` contain a slash, which would otherwise be
- * accepted as a canonical id and flood the picker with unrunnable entries.
+ * The output is two tables with different columns, and both are usable:
+ *
+ *   Canonical: canonical | selected | variants | context | max-out
+ *   Provider:  provider  | model    | context  | max-out  | thinking | images
+ *
+ * The Canonical table is a short alias list; the Provider table is the full
+ * roster. A provider row's id is `<provider>/<model>`, which is exactly what
+ * `--model` takes — `opendesign-cloud/deepseek-v4.1-flash` runs fine. Parsing
+ * only the Canonical table hid most of the catalog: a custom provider with 13
+ * models in models.yml surfaced as 2 canonical aliases.
+ *
+ * Both tables name the provider in the id, so `provider` is derived from the id
+ * rather than read from a column whose position differs between the two.
  */
 export function parseModels(stdout) {
 	const seen = new Set();
 	const models = [];
+	let table = "canonical";
+	const add = (id, fields) => {
+		const slash = id.indexOf("/");
+		if (slash <= 0) return;
+		const key = id;
+		if (seen.has(key)) return;
+		seen.add(key);
+		models.push({ id, provider: id.slice(0, slash), ...fields });
+	};
 	for (const line of String(stdout).split("\n")) {
 		const trimmed = line.trim();
-		if (/^Provider models$/i.test(trimmed)) break;
-		if (!trimmed || /^canonical\s/i.test(trimmed)) continue;
+		if (/^Provider models$/i.test(trimmed)) {
+			table = "provider";
+			continue;
+		}
+		if (/^Canonical models$/i.test(trimmed)) {
+			table = "canonical";
+			continue;
+		}
+		// Column headers and the thinking/images legend rows carry no id.
+		if (!trimmed || /^canonical\s/i.test(trimmed) || /^provider\s/i.test(trimmed)) continue;
 		const cols = trimmed.split(/\s{2,}/);
-		if (cols.length < 4) continue;
-		const [canonical, selected, variants, context, maxOut] = cols;
-		if (!selected || !selected.includes("/")) continue;
-		if (seen.has(selected)) continue;
-		seen.add(selected);
-		models.push({ id: selected, provider: selected.slice(0, selected.indexOf("/")), canonical, context: context || "", maxOut: maxOut || "", variants: variants || "" });
+		if (table === "canonical") {
+			if (cols.length < 4) continue;
+			const [canonical, selected, variants, context, maxOut] = cols;
+			if (!selected || !selected.includes("/")) continue;
+			add(selected, { canonical, context: context || "", maxOut: maxOut || "", variants: variants || "", thinking: "", images: "" });
+		} else {
+			// provider | model | context | max-out | thinking | images; the trailing
+			// columns are optional because the table is column-aligned, not fixed.
+			if (cols.length < 3) continue;
+			const [provider, model, context, maxOut, thinking, images] = cols;
+			if (!provider || !model) continue;
+			add(`${provider}/${model}`, {
+				canonical: model,
+				context: context || "",
+				maxOut: maxOut || "",
+				variants: "",
+				thinking: thinking || "",
+				images: images || "",
+			});
+		}
 	}
 	return models.sort((a, b) => a.id.localeCompare(b.id));
 }
