@@ -85,7 +85,7 @@ const KNOWLEDGE_TYPES = ["decision", "lesson"];
 const REPO_KEY_RE = /^[a-z0-9.-]+(?:\/[a-z0-9._-]+){2,}$/;
 const SET_KEY_RE = /^[A-Za-z0-9_-]+$/;
 const REPOS_FILE = "repos.json";
-const HARNESS_DIR = "pi-plan-dispatch-phase1";
+const HARNESS_DIR = "agent-dispatcher";
 /** Flags every command accepts; a command adds its own through `flags` in the table. */
 const GLOBAL_FLAGS = new Set(["vault", "trace", "root", "json"]);
 

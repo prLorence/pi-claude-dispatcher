@@ -17,7 +17,7 @@ const DEFAULT_MIN_NODE = 24;
 const COMMAND_TIMEOUT_MS = 10000;
 const SSH_COMMAND = "ssh -o BatchMode=yes -o ConnectTimeout=5";
 const DEFAULT_VAULT_DIR = "agent-vault";
-const HARNESS_DIR = "pi-plan-dispatch-phase1";
+const HARNESS_DIR = "agent-dispatcher";
 const INITIAL_COMMIT = "vault: init";
 const WORK_FOLDERS = ["specs", "ideas", "work", "config"];
 const GITATTRIBUTES_LINE = "work/**/*.jsonl merge=union";

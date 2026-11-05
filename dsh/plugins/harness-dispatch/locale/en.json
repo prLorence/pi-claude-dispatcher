@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Harness Dispatch",
+    "description": "Runs ready plans from .plans/inbox with dsh workers and writes the trace, evidence and gate."
+  }
+}

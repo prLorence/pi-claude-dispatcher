@@ -1,0 +1,4 @@
+- insert:
+    - id: harness-usage
+      name: '@pi-harness/dsh-plugin-harness-usage'
+      config: {}

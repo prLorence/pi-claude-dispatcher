@@ -42,7 +42,7 @@ are documented in the harness at `docs/vault.md`.
 
 1. Clone this vault.
 2. Run `./bootstrap.sh`. It checks Node and git, clones the harness repo into a
-   sibling folder named `pi-plan-dispatch-phase1` when that folder is missing,
+   sibling folder named `agent-dispatcher` when that folder is missing,
    builds the `vault-search` binary when Go is installed, and runs `vault setup`
    from there.
 3. Do the rest by hand, as the script prints:

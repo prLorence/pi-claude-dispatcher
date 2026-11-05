@@ -180,7 +180,7 @@ test(
 		}
 		const toolCli = path.join(tool, "vault.mjs");
 		const home = path.join(root, "home");
-		const candidates = [root, path.join(home, "Documents", "repos", "pi-plan-dispatch-phase1")];
+		const candidates = [root, path.join(home, "Documents", "repos", "agent-dispatcher")];
 		for (const command of ["init", "setup", "doctor"]) {
 			const result = spawnSync(process.execPath, [toolCli, command], {
 				env: cliEnv(root),

@@ -1,0 +1,40 @@
+{
+  "name": "@pi-harness/dsh-plugin-harness-dispatch",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "description": "Runs ready plans from .plans/inbox with dsh workers and writes the trace, evidence and gate",
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "plan.js",
+    "preflight.js",
+    "schedule.js",
+    "trace.js",
+    "verify.js",
+    "roles.js",
+    "review.js",
+    "resilience.js",
+    "config.js",
+    "prompt.js",
+    "output.js",
+    "guard.js",
+    "queue.js",
+    "worker.js",
+    "adapters/*.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "projects.js"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

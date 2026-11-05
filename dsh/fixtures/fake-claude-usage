@@ -1,0 +1,34 @@
+#!/usr/bin/env node
+/** Fake `claude` for harness-usage tests: records argv and prints /usage output. */
+import * as fs from "node:fs";
+
+const args = process.argv.slice(2);
+if (process.env.FAKE_CLAUDE_USAGE_LOG) fs.appendFileSync(process.env.FAKE_CLAUDE_USAGE_LOG, `${JSON.stringify(args)}\n`);
+
+const mode = process.env.FAKE_CLAUDE_USAGE_MODE ?? "ok";
+if (mode === "error") {
+	console.error("Error: not logged in");
+	process.exit(1);
+}
+if (mode === "is-error") {
+	console.log(JSON.stringify({ is_error: true, result: "Please run /login" }));
+	process.exit(0);
+}
+if (mode === "timeout") await new Promise((resolve) => setTimeout(resolve, 5000));
+if (mode === "garbage") {
+	console.log(JSON.stringify({ is_error: false, result: "No usage data available." }));
+	process.exit(0);
+}
+
+console.log(
+	JSON.stringify({
+		is_error: false,
+		type: "result",
+		local_command: "usage",
+		result: [
+			"Current session: 13% used · resets Nov 5 at 8:09pm (Asia/Manila)",
+			"Current week (all models): 50% used · resets 2026-11-09T13:59:00.000Z",
+		].join("\n"),
+	}),
+);
+process.exit(0);

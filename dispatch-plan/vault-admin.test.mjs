@@ -180,13 +180,13 @@ test("findHarnessRoot falls back to the parent of scriptDir, then the folder nex
 		);
 
 		const parent = dir();
-		const sibling = makeFakeHarness(parent, "pi-plan-dispatch-phase1");
+		const sibling = makeFakeHarness(parent, "agent-dispatcher");
 		const vaultPath = path.join(parent, "agent-vault");
 		fs.mkdirSync(vaultPath);
 		assert.equal(findHarnessRoot({ env: {}, scriptDir: undefined, vaultPath, home: "/nonexistent" }), sibling);
 
 		const home = dir();
-		const homeHarness = makeFakeHarness(path.join(home, "Documents", "repos"), "pi-plan-dispatch-phase1");
+		const homeHarness = makeFakeHarness(path.join(home, "Documents", "repos"), "agent-dispatcher");
 		assert.equal(findHarnessRoot({ env: {}, scriptDir: undefined, vaultPath: undefined, home }), homeHarness);
 	}));
 

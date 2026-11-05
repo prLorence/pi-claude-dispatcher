@@ -1,0 +1,29 @@
+{
+  "name": "@pi-harness/dsh-plugin-harness-vault",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "description": "Boots the agent vault and exposes the orchestrator-only vault tools through vault.mjs",
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "vault-cli.js",
+    "boot.js",
+    "record.js",
+    "tools.js",
+    "naming.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

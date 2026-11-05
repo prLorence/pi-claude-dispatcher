@@ -1,0 +1,35 @@
+{
+  "name": "@pi-harness/dsh-plugin-harness-monitor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "description": "Read-only plan, transcript and agent-session monitor served over dsh web routes",
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "server.js",
+    "http.js",
+    "plans.js",
+    "lanes.js",
+    "sessions.js",
+    "repos.js",
+    "state.js",
+    "decider.js",
+    "watch.js",
+    "agents.js",
+    "dist/**",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

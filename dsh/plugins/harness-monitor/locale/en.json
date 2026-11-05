@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Harness Monitor",
+    "description": "Read-only board, task lanes, transcripts and Pi/omp/dsh agent sessions served over dsh web routes."
+  }
+}

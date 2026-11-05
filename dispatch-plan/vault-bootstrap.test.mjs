@@ -89,7 +89,7 @@ function makeVault(parent, env, change = {}) {
 	gitRun(vault, ["init", "-q", "-b", "main"], env);
 	gitRun(vault, ["add", "-A"], env);
 	gitRun(vault, ["commit", "-q", "-m", "vault: init"], env);
-	fs.symlinkSync(repoRoot, path.join(parent, "pi-plan-dispatch-phase1"), "dir");
+	fs.symlinkSync(repoRoot, path.join(parent, "agent-dispatcher"), "dir");
 	return vault;
 }
 

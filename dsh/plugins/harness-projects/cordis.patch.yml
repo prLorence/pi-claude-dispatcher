@@ -1,0 +1,7 @@
+- insert:
+    - id: harness-projects
+      name: '@pi-harness/dsh-plugin-harness-projects'
+      config:
+        warm: true
+        budget: 1200
+        refreshSeconds: 20

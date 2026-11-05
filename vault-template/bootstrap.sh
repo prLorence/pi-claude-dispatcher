@@ -3,7 +3,7 @@
 set -euo pipefail
 
 vault="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-harness="$(dirname "$vault")/pi-plan-dispatch-phase1"
+harness="$(dirname "$vault")/agent-dispatcher"
 
 fail() {
 	echo "bootstrap: $*" >&2

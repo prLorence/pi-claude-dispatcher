@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Harness Vault",
+    "description": "Boots the agent vault at session start and exposes the orchestrator-only vault tools through vault.mjs."
+  }
+}

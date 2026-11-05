@@ -1,0 +1,41 @@
+{
+  "name": "@pi-harness/dsh-plugin-harness-projects",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "description": "Manage local git repositories as projects and keep every session warm with repo-scoped agent-vault context",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "config.js",
+    "git.js",
+    "git-parse.js",
+    "plans.js",
+    "registry.js",
+    "tools.js",
+    "vault-notes.js",
+    "vault-read.js",
+    "vault-sync.js",
+    "warm.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": ["@deepseek-ai/dsh-client-ui-layout", "@deepseek-ai/dsh-client-ui-sidebar"]
+    }
+  }
+}
