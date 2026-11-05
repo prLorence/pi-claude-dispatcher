@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createOmpProvider, foldOmpLine, ompArgs } from "../plugins/harness-omp-subagent/index.js";
+import { createOmpProvider, foldOmpLine, ompArgs, promptText } from "../plugins/harness-omp-subagent/index.js";
 
 /** One assistant message_end line, as omp emits it. */
 function messageEnd(text, usage) {
@@ -113,4 +113,36 @@ test("a settled run removes its abort listener from a shared signal", async () =
 	await run.dispose();
 	assert.equal(added, 1);
 	assert.equal(removed, 1, "the abort listener was removed when the run settled");
+});
+
+test("promptText flattens the ContentBlock[] the contract actually passes", () => {
+	// The runtime passes blocks, not a string. String(blocks) is
+	// "[object Object]", which omp would receive as the entire task.
+	assert.equal(promptText([{ type: "text", text: "hello" }]), "hello");
+	assert.equal(
+		promptText([
+			{ type: "text", text: "one" },
+			{ type: "text", text: "two" },
+		]),
+		"one\ntwo",
+	);
+	// A bare string still works, for direct callers and the old tests.
+	assert.equal(promptText("plain"), "plain");
+	// Non-text blocks cannot ride `-p`; dropping beats stringifying them.
+	assert.equal(promptText([{ type: "image", attachment: { id: "x" } }, { type: "text", text: "keep" }]), "keep");
+	assert.equal(promptText([]), "");
+	assert.equal(promptText(undefined), "");
+});
+
+test("start sends the flattened prompt as omp's -p argument", async () => {
+	const p = createOmpProvider({ command: "definitely-not-a-real-binary-xyz", timeoutMs: 5000 });
+	const run = await p.start({
+		prompt: [{ type: "text", text: "REAL TASK TEXT" }],
+		cwd: "/tmp",
+	});
+	const result = await run.result;
+	await run.dispose();
+	// The spawn failed, but the failure message must not be a stringified block.
+	assert.equal(result.stopReason, "error");
+	assert.doesNotMatch(result.diagnostic ?? "", /\[object Object\]/);
 });

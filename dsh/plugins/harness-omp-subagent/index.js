@@ -40,6 +40,23 @@ function terminate(child) {
 }
 
 /**
+ * Flatten the request's ContentBlock[] into the single string omp's `-p` takes.
+ *
+ * The contract passes blocks, not a string; String() on an array of objects
+ * yields "[object Object]". Only text is meaningful to a one-shot CLI child:
+ * images and files cannot be attached to `-p`, so they are dropped rather than
+ * silently stringified into the prompt.
+ */
+export function promptText(prompt) {
+	if (typeof prompt === "string") return prompt;
+	if (!Array.isArray(prompt)) return "";
+	return prompt
+		.filter((block) => block && block.type === "text" && typeof block.text === "string")
+		.map((block) => block.text)
+		.join("\n");
+}
+
+/**
  * omp has no `--session-id`, so the child id is minted here. It must look like a
  * SessionId to the runtime; a UUID is accepted and is what omp itself prints.
  */
@@ -115,11 +132,11 @@ export function createOmpProvider(options = {}) {
 
 		async start(request) {
 			const id = childId();
-			const prompt = String(request?.prompt ?? "");
+			const prompt = promptText(request?.prompt);
 			const cwd = request?.cwd || process.cwd();
 			const signal = request?.signal;
 			const model = request?.agentOptions?.model || defaultModel;
-			const thinking = request?.agentOptions?.thinking;
+			const thinking = request?.agentOptions?.reasoningEffort ?? request?.agentOptions?.thinking;
 			const args = ompArgs({ model, thinking, prompt, tools: options.tools, readonly: options.readonly });
 
 			const state = { text: "", usage: undefined, tools: [], errors: [] };

@@ -2,3 +2,25 @@
     - id: harness-omp-subagent
       name: '@pi-harness/dsh-plugin-harness-omp-subagent'
       config: {}
+
+    # Registers a fourth delegation tool whose backend is the omp process.
+    #
+    # dsh-base already mounts two of these rows, one per backend:
+    #   tool-subagent       -> provider: spawn  (tool `subagent`)
+    #   tool-subagent-fork  -> provider: fork   (tool `subagent_fork`)
+    # A backend only becomes reachable through this loader row: the tool reads
+    # its provider from its own config, and its `provider`/`model` tool
+    # parameters select the child's LLM route, not the backend. Registering a
+    # provider alone adds no callable path.
+    #
+    # The tool mounts once the provider appears (`subagent/provider-added`), so
+    # row order between this and harness-omp-subagent does not matter.
+    #
+    # Model selection is left off: this provider does not advertise the
+    # agentOptions capability, and the child's model comes from the provider's
+    # own config above.
+    - id: tool-subagent-omp
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: omp
+        toolName: subagent_omp
