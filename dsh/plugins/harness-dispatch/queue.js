@@ -9,7 +9,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { PlanParseError, parsePlan, readStatus, safeId } from "./plan.js";
-import { applyPairDefault, DEFAULT_PAIR_ROUNDS, knownRoles, resolveModel, resolveRole } from "./roles.js";
+import { applyPairDefault, DEFAULT_PAIR_ROUNDS, knownRoles, resolveAgent, resolveModel, resolveRole } from "./roles.js";
 import { preflightPlan } from "./preflight.js";
 import { isPlanFinished, pickRunnable } from "./schedule.js";
 import { buildReviewPrompt, feedbackFromFindings, parseReviewReport } from "./review.js";
@@ -379,6 +379,10 @@ export async function runPlanFile(file, { cwd, runtime, signal: outerSignal, log
 			attempt: t.attempts,
 			data: {
 				role,
+				// `agent` is the runtime that actually runs this task (dsh, pi or
+				// omp). It is recorded so an audit can tell which one executed a
+				// task without having to map the role back through config.
+				agent: resolveAgent(cfg, role),
 				pair: t.pair ?? null,
 				pair_source: t.pairSource ?? null,
 				model,
