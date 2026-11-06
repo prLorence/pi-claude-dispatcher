@@ -61,13 +61,13 @@ test("plan audit renders in the timeline, its own section and the headline", () 
 	const audit = section(out, "Plan audit", "Faults");
 	assert.deepEqual(audit.slice(0, 2), [
 		"## Plan audit",
-		"| plan | audit round | verdict | blockers | majors | minors |",
+		"| plan | audit round | harness | verdict | blockers | majors | minors |",
 	]);
 	assert.deepEqual(audit.slice(2), [
-		"|---|---|---|---|---|---|",
-		"| p2 | 1 | PASS | 0 | 0 | 2 |",
-		"| p1 | 1 | FAIL | 2 | 1 | 0 |",
-		"| p1 | 2 | PASS | 0 | 0 | 1 |",
+		"|---|---|---|---|---|---|---|",
+		"| p2 | 1 | - | PASS | 0 | 0 | 2 |",
+		"| p1 | 1 | - | FAIL | 2 | 1 | 0 |",
+		"| p1 | 2 | - | PASS | 0 | 0 | 1 |",
 	]);
 
 	// p1 keeps round 1: the plan.audit events (round 1 then the wrong-style round 3) do not update it.
@@ -90,4 +90,22 @@ test("Plan audit says None. when no plan.audit event exists", () => {
 	);
 	const audit = section(runReport(dir, trace), "Plan audit", "Faults");
 	assert.deepEqual(audit.slice(1), ["None."]);
+});
+
+test("the Plan audit table names the harness that produced each round", () => {
+	const dir = tmp();
+	const trace = "t-harness";
+	fs.mkdirSync(path.join(dir, ".plans", "traces"), { recursive: true });
+	const lines = [
+		ev(trace, "plan.audit", { plan: "p1", round: 1, actor: "opus-plan-auditor", data: { verdict: "fail", audit_round: 1, blockers: 1, majors: 0, minors: 0 } }),
+		ev(trace, "plan.audit", { plan: "p1", round: 1, actor: "omp-plan-auditor", data: { verdict: "pass", audit_round: 2, blockers: 0, majors: 0, minors: 0, harness: "omp" } }),
+		ev(trace, "plan.audit", { plan: "p1", round: 1, actor: "dsh-plan-auditor", data: { verdict: "pass", audit_round: 3, blockers: 0, majors: 0, minors: 0, harness: "dsh" } }),
+	];
+	fs.writeFileSync(path.join(dir, ".plans", "traces", `${trace}.jsonl`), `${lines.join("\n")}\n`);
+	const out = runReport(dir, trace);
+	const audit = section(out, "Plan audit", "Faults");
+	assert.match(out, /\| p1 \| 1 \| claude \| FAIL \|/);
+	assert.match(out, /\| p1 \| 2 \| omp \| PASS \|/);
+	assert.match(out, /\| p1 \| 3 \| dsh \| PASS \|/);
+	assert.ok(audit.length > 2);
 });

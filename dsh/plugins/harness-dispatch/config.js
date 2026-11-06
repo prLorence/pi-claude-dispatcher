@@ -51,6 +51,11 @@ export const DEFAULT_CONFIG = {
 	requirePlanAudit: false,
 	claudeCommand: "claude",
 	auditTimeoutMinutes: 20,
+	// Which harness runs the plan-auditor: "claude" (default), "omp" or "dsh".
+	// The agent definition is harness-neutral; this only picks the runtime.
+	auditAgent: "claude",
+	// Model for the omp/dsh auditors. Empty means the harness default.
+	auditModel: "",
 	ompCommand: "omp",
 	projectRegistry: "",
 	maxFilesPerTask: 10,

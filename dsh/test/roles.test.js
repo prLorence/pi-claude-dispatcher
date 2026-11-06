@@ -71,10 +71,12 @@ test("pairDefault rejects none, unknown and non-readonly roles", () => {
 	assert.equal(pairDefaultProblem(cfg({ pairDefault: "" })), undefined);
 });
 
-test("agent resolution defaults to dsh and rejects unknown names", () => {
+test("agent resolution defaults to omp for implement and rejects unknown names", () => {
 	const c = cfg();
-	assert.equal(resolveAgent(c, "implement"), "dsh");
+	// The default implementer runs on oh-my-pi; a role with no `agent` runs on dsh.
+	assert.equal(resolveAgent(c, "implement"), "omp");
+	assert.equal(resolveAgent(c, "review"), "dsh");
 	assert.equal(agentProblem(c, "implement"), undefined);
-	assert.equal(agentProblem(cfg({ roles: { implement: { agent: "omp" } } }), "implement"), undefined);
+	assert.equal(agentProblem(cfg({ roles: { implement: { agent: "dsh" } } }), "implement"), undefined);
 	assert.match(agentProblem(cfg({ roles: { implement: { agent: "claude-code" } } }), "implement"), /not available/);
 });

@@ -161,3 +161,70 @@ shows the proposal to the user at the approval step, as advice only.
 
 The decider never blocks anything and never replaces the user's yes. The dispatcher itself is
 unchanged by it. See [decider.md](decider.md) for the contract, config and exit codes.
+
+## The plan-auditor is harness-neutral
+
+The `plan-auditor` is the read-only reviewer that checks a plan before it runs. It is
+not tied to Claude Code. The agent definition at `dispatch-plan/agents/plan-auditor.md`
+carries the checklist, the severity tags, the verdict rule and the output format, and
+it runs unchanged on three harnesses:
+
+| `auditAgent` | How it runs | Actor it logs under |
+|---|---|---|
+| `claude` (default) | `claude -p --agent plan-auditor --output-format json` | `opus-plan-auditor` |
+| `omp` | `omp -p --mode json --tools read,grep,glob,bash` | `omp-plan-auditor` |
+| `dsh` | `dsh --profile headless --json` | `dsh-plan-auditor` |
+
+Two config keys pick the runtime, both in `.plans/config.json`:
+
+- `auditAgent`: `claude`, `omp` or `dsh`. Default `claude`.
+- `auditModel`: the model for the omp and dsh backends. Empty means the harness
+  default. Ignored by the claude backend, which uses the agent file's `model:`.
+
+Only the claude backend reads `~/.claude/agents/plan-auditor.md`, because only Claude
+Code loads agent definitions. The omp and dsh backends get the same checklist inlined
+into the prompt, so the review does not change when the runtime does.
+
+Every backend is read-only by tool grant: `Read,Grep,Glob,Bash` on Claude Code, and
+`read,grep,glob,bash` on omp and dsh. The auditor never edits files and never runs a
+vault write command on any harness.
+
+Each harness logs its `plan.audit` event under its own actor, and the event carries
+`"harness":"<claude|omp|dsh>"` in its data. The trace report's Plan audit table shows
+a harness column, so a plan audited by more than one runtime shows which round came
+from which. A plan may be audited by different harnesses across its rounds; the
+`audit_round` still increments and the earlier rounds stay in the trace.
+
+### Provider keys for the omp and dsh auditors
+
+An app launched from the Dock gets launchd's environment, not your shell's, so a key
+exported in `~/.zshrc` is invisible to the harness the auditor spawns. The bridge
+handles that: when the model's provider key is missing from the process environment,
+it asks the interactive login shell for that one variable and hands it to the child.
+
+- The key variable is picked from the model prefix: `mistral/...` needs
+  `MISTRAL_API_KEY`, `openrouter/...` needs `OPENROUTER_API_KEY`, and so on. An
+  unknown prefix resolves nothing and the harness reports its own missing-key error.
+- The value is never logged, never written to `.plans/`, and never persisted. It
+  exists only in the child process environment for that one audit run.
+- A variable already present in the environment is used as-is and the shell is not
+  consulted.
+- Launching the app from a terminal that has sourced your shell config avoids the
+  lookup entirely.
+
+## The Mistral subscription provider
+
+The Mistral subscription provider is the plugin at `dsh-mistral-subscription/`. It adds a
+Mistral sign-in and a provider route to DSH beside the built-in `mistral` route. It is a
+standalone package the owner links into the DSH profile, so an app update cannot remove it.
+
+It registers the authorization flow `llm-pi-ai/mistral-subscription`, which signs in in a
+browser on `console.mistral.ai` through the Vibe PKCE protocol. The flow stores the key that
+sign-in returns as a credential grant, and the route authenticates from the credential store
+rather than from an environment variable, so no key enters a config file and
+`MISTRAL_API_KEY` is not used by this route.
+
+Usage on this route bills to the plan's Vibe Code quota rather than API credits; confirm that
+in the Mistral admin panel by checking that Vibe Code usage moves and the API credit balance
+does not. The route offers `zai-glm-5-3` with a 1M context window, and no reasoning-effort
+control is assumed for it.

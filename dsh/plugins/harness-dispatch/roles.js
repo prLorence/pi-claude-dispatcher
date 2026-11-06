@@ -9,7 +9,14 @@ const REVIEW_PROMPT = [
 
 
 export const DEFAULT_ROLES = {
+	/**
+	 * The default implementer runs on oh-my-pi. `agent` is what selects the
+	 * runtime: a role without one runs on dsh, the in-process subagent. Set it
+	 * here rather than per plan so every plan gets the same worker by default.
+	 * `implement-omp` is kept as an explicit alias for plans that name it.
+	 */
 	implement: {
+		agent: "omp",
 		prompt: [
 			"You implement exactly one task, in the files you own.",
 			"Read every file before you edit it, then change only what the task asks for, run the checks it names, and report what you actually did.",

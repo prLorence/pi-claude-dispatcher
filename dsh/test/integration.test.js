@@ -73,6 +73,10 @@ function setup() {
 				probeUrls: [],
 				probeSeconds: 1,
 				outagePauseMinutes: 1,
+				// This test exercises the in-process dsh agent against a fake
+				// provider. The default implement role runs on omp, which reads
+				// its own catalog and cannot see the fake route, so pin dsh here.
+				roles: { implement: { agent: "dsh" } },
 			},
 			null,
 			2,

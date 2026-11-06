@@ -562,11 +562,14 @@ function render(trace, events) {
 	out.push("", "## Plan audit", "");
 	if (!planAudits.length) out.push("None.");
 	else {
-		out.push("| plan | audit round | verdict | blockers | majors | minors |", "|---|---|---|---|---|---|");
+		out.push("| plan | audit round | harness | verdict | blockers | majors | minors |", "|---|---|---|---|---|---|---|");
 		for (const e of planAudits) {
 			const d = e.data || {};
+			// The auditor is harness-neutral: the actor names the runtime, and newer
+			// events also carry data.harness. Older traces have neither and show "-".
+			const harness = d.harness ?? (String(e.actor ?? "").includes("omp") ? "omp" : String(e.actor ?? "").includes("dsh") ? "dsh" : String(e.actor ?? "").includes("opus") ? "claude" : "-");
 			out.push(
-				`| ${e.plan ?? "-"} | ${d.audit_round ?? d.round ?? e.round ?? "-"} | ${String(d.verdict ?? "").toUpperCase() || "-"} | ${d.blockers ?? 0} | ${d.majors ?? 0} | ${d.minors ?? 0} |`,
+				`| ${e.plan ?? "-"} | ${d.audit_round ?? d.round ?? e.round ?? "-"} | ${harness} | ${String(d.verdict ?? "").toUpperCase() || "-"} | ${d.blockers ?? 0} | ${d.majors ?? 0} | ${d.minors ?? 0} |`,
 			);
 		}
 	}
