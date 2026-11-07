@@ -83,7 +83,7 @@ Commands inside Pi:
 
 ```json
 {
-  "model": "opencode-go/deepseek-v4.1-flash",
+  "model": "mistral-subscription/deepseek-v4-1-flash-1017",
   "thinking": "low",
   "maxParallel": 3,
   "timeoutMinutes": 20,
@@ -105,7 +105,7 @@ Commands inside Pi:
 
 | Key | Default | Meaning |
 |---|---|---|
-| `model` | `opencode-go/deepseek-v4.1-flash` | Worker model |
+| `model` | `mistral-subscription/deepseek-v4-1-flash-1017` | Worker model |
 | `thinking` | `low` | DeepSeek V4.1 Flash only supports `low`, `high` and `max` |
 | `maxParallel` | `3` | Tasks running at once |
 | `timeoutMinutes` | `20` | Kill a worker after this long |
@@ -128,7 +128,18 @@ Commands inside Pi:
 | `roles` | see [docs/roles.md](../docs/roles.md) | Map of role name to model, thinking, read-only flag, prompt and `agent`. A user entry overrides only the fields it sets |
 | `decider` | `{"effort": "off", "audit": "off", "escalate": false}` | Decider settings: `effort` is `off`, `apply` or `dispatch`; `audit` is `off` or `shadow`; `escalate` steps a retried task's level up in `dispatch` mode. See [docs/decider.md](../docs/decider.md) |
 
-A plan's frontmatter, or an individual task, can override `model` and `thinking`.
+Model and thinking resolve per task in this order — the first one set wins
+(`resolveModel` in `core.ts`):
+1. the task's own `model:` / `thinking:` line, then
+2. its role's entry in `roles` (e.g. `roles.implement.model`), then
+3. the plan's frontmatter `model:` / `thinking:`, then
+4. the top-level `model` / `thinking` here, then
+5. the built-in defaults in `pi-plan-dispatch/core.ts` (`DEFAULT_CONFIG`).
+
+To try a candidate model without burning a run, `/plans roles test` makes a tiny
+real call for every distinct model the roles resolve to and reports PASS/FAIL
+with cost and latency.
+
 A task may name a `role:` (default `implement`), and risky tasks can add a pair
 reviewer with `pair:` and `pair_rounds:`. See [docs/roles.md](../docs/roles.md) for
 the four default roles, their models and prices, pair mode, and the security and QA

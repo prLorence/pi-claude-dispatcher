@@ -40,6 +40,11 @@ export const DEFAULT_ROLES: Record<string, RoleConfig> = {
 			"You implement exactly one task, in the files you own.",
 			"Read every file before you edit it, then change only what the task asks for, run the checks it names, and report what you actually did.",
 			"Do not refactor nearby code, do not add features nobody asked for, and do not touch files outside your list.",
+			// Anti-rabbit-hole leash: some workers spend the whole budget
+			// re-auditing the plan and never write (observed: 28 files read,
+			// 0 written, 20-minute timeout). State the expectation directly.
+			"Make your first file change within your first few tool calls.",
+			"Never audit the plan's claims, re-verify the spec, or explore beyond your task files — the plan was already audited; your job is to implement it.",
 		].join("\n"),
 	},
 	review: {
@@ -106,7 +111,7 @@ function mergeRoles(over: unknown): Record<string, RoleConfig> {
 // ---------- Types ----------
 
 export interface DispatchConfig {
-	/** Worker model, e.g. "opencode-go/deepseek-v4.1-flash" */
+	/** Worker model, "provider/model" (see resolveModel for the full precedence) */
 	model: string;
 	/** Worker thinking level (DeepSeek V4.1 Flash supports low | high | max) */
 	thinking: string;
@@ -160,7 +165,12 @@ function defaultDecider(): DeciderConfig {
 }
 
 export const DEFAULT_CONFIG: DispatchConfig = {
-	model: "opencode-go/deepseek-v4.1-flash",
+	// The Mistral subscription's DeepSeek V4.1 Flash is the default worker
+	// model: bun (omp) passes Mistral's TLS client check, the omp extension
+	// carries the model and its own sign-in key, and the subscription quota
+	// covers it. Requires the omp-mistral-subscription extension signed in;
+	// on a machine without it, override `model` in .plans/config.json.
+	model: "mistral-subscription/deepseek-v4-1-flash-1017",
 	thinking: "low",
 	maxParallel: 3,
 	timeoutMinutes: 20,

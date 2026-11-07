@@ -11,6 +11,7 @@ import extension from "./index.ts";
 import { type Backend, fakeBackend } from "./decider/backend.ts";
 import { BLOCKED_MARKER } from "./guard.ts";
 import { CONTINUE_PROMPT } from "./resilience.ts";
+import { DEFAULT_CONFIG } from "./core.ts";
 import { readEvents } from "./trace.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -1039,7 +1040,9 @@ test("/plans roles lists each role with its resolved model, thinking level and r
 		await x.command("roles");
 
 		assert.equal(x.notes.length, 4, x.notes.join("\n"));
-		assert.match(x.notes[0], /^implement: opencode-go\/deepseek-v4\.1-flash, thinking low, read-write$/);
+		// Derive the implement line from the config default, so changing
+		// DEFAULT_CONFIG.model doesn't break this test.
+		assert.match(x.notes[0], new RegExp(`^implement: ${DEFAULT_CONFIG.model.replace(/\//g, "\\/")}, thinking low, read-write$`));
 		assert.match(x.notes[1], /^review: opencode-go\/minimax-m3\.1-flash-free, thinking low, readonly$/);
 		assert.match(x.notes[2], /^security: opencode-go\/glm-5\.3-flash, thinking high, readonly$/);
 		assert.match(x.notes[3], /^qa: opencode-go\/mimo-v2\.6-flash, thinking none, read-write$/);
@@ -1077,7 +1080,8 @@ test("/plans roles test smoke-tests every distinct model and reports PASS", asyn
 		assert.match(x.notes[0], /^Testing 4 model\(s\) with a tiny call$/);
 		const results = x.notes.slice(1);
 		assert.equal(results.length, 4, x.notes.join("\n"));
-		for (const line of results) assert.match(line, /^PASS opencode-go\/\S+( \(thinking [a-z]+\))?, \$0\.0002, \d+(\.\d)?s$/, line);
+		// Any provider/model passes: the default moves, the format doesn't.
+		for (const line of results) assert.match(line, /^PASS \S+( \(thinking [a-z]+\))?, \$0\.0002, \d+(\.\d)?s$/, line);
 		assert.ok(
 			results.some((l) => /^PASS opencode-go\/glm-5\.3-flash \(thinking high\)/.test(l)),
 			"the security role's model and thinking level are both tested",
@@ -1094,7 +1098,7 @@ test("/plans roles test reports FAIL with the error when a model call fails", as
 
 		const results = x.notes.slice(1);
 		assert.equal(results.length, 4, x.notes.join("\n"));
-		for (const line of results) assert.match(line, /^FAIL opencode-go\/\S+( \(thinking [a-z]+\))?, \$0\.0000, \d+(\.\d)?s, unknown model opencode-go\/nope$/, line);
+		for (const line of results) assert.match(line, /^FAIL \S+( \(thinking [a-z]+\))?, \$0\.0000, \d+(\.\d)?s, unknown model opencode-go\/nope$/, line);
 	});
 });
 
