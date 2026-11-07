@@ -15,8 +15,11 @@ window.__ModuleLoader__.load({
 			checkingLabel: 'Checking\u2026',
 			signInLabel: 'Sign in with console.mistral.ai',
 			signOutLabel: 'Sign out',
+			cancelLabel: 'Cancel sign-in',
+			signInCancelledLabel: 'Sign-in cancelled.',
 			workingLabel: 'Waiting for browser approval\u2026',
 			openTabLabel: 'Opening browser\u2026',
+			pollEndedLabel: 'The sign-in attempt ended without storing a credential. Start again when ready.',
 			copyLinkLabel: 'Copy sign-in link',
 			copiedLinkLabel: 'Link copied \u2014 paste it in your browser',
 			copyFailedLabel: 'Copy failed \u2014 open this URL manually:',
@@ -28,6 +31,10 @@ window.__ModuleLoader__.load({
 		function Card({ t }) {
 			const [state, setState] = React.useState({ loading: true, configured: false, inFlight: false });
 			const [busy, setBusy] = React.useState(false);
+			// An attempt whose URL is shown is still live in the host: Sign in stays
+			// disabled and the outcome poll runs until /state reports it settled.
+			const [pending, setPending] = React.useState(false);
+			const popupRef = React.useRef(null);
 			const [message, setMessage] = React.useState(null);
 			const [authorizeUrl, setAuthorizeUrl] = React.useState(null);
 			const [copyState, setCopyState] = React.useState(null);
@@ -56,8 +63,12 @@ window.__ModuleLoader__.load({
 				// Mirrors the shipped account sign-in dialog.
 				const popup = window.open('about:blank', '_blank');
 				if (popup) popup.opener = null;
+				popupRef.current = popup;
 				try {
-					const res = await fetch('/plugins/mistral-subscription/sign-in', { method: 'POST' });
+					const res = await fetch('/plugins/mistral-subscription/sign-in', {
+						method: 'POST',
+						headers: { 'content-type': 'application/json' },
+					});
 					const body = await res.json().catch(() => ({}));
 					if (!body.started || typeof body.url !== 'string') {
 						if (popup && !popup.closed) popup.close();
@@ -65,6 +76,9 @@ window.__ModuleLoader__.load({
 						return;
 					}
 					setAuthorizeUrl(body.url);
+					// The URL is up, but the key is not stored yet: keep the attempt
+					// marked as in flight so Cancel is offered and the poll runs.
+					setPending(true);
 					if (popup && !popup.closed) {
 						popup.location.replace(body.url);
 						setMessage({ ok: true, text: t('openTabLabel') });
@@ -76,6 +90,8 @@ window.__ModuleLoader__.load({
 					if (popup && !popup.closed) popup.close();
 					setMessage({ ok: false, text: `${t('errorPrefix')}: ${String((error && error.message) || error)}` });
 				} finally {
+					// busy clears; pending does NOT — the attempt stays live past
+					// this response, and the poll below settles it.
 					setBusy(false);
 					void refresh();
 				}
@@ -95,7 +111,10 @@ window.__ModuleLoader__.load({
 				setMessage(null);
 				setCopyState(null);
 				try {
-					await fetch('/plugins/mistral-subscription/sign-out', { method: 'POST' });
+					await fetch('/plugins/mistral-subscription/sign-out', {
+						method: 'POST',
+						headers: { 'content-type': 'application/json' },
+					});
 					setMessage({ ok: true, text: 'Signed out. The stored credential was deleted.' });
 				} catch (error) {
 					setMessage({ ok: false, text: String((error && error.message) || error) });
@@ -105,9 +124,38 @@ window.__ModuleLoader__.load({
 				}
 			}, [refresh]);
 
+			const cancelSignIn = React.useCallback(async () => {
+				const popup = popupRef.current;
+				popupRef.current = null;
+				try {
+					const res = await fetch('/plugins/mistral-subscription/cancel', {
+						method: 'POST',
+						headers: { 'content-type': 'application/json' },
+					});
+					const body = await res.json().catch(() => ({}));
+					if (body.cancelled !== true) {
+						if (res.status !== 200 || body.error) {
+							setMessage({ ok: false, text: `${t('errorPrefix')}: ${body.error || res.status}` });
+							return;
+						}
+						setMessage({ ok: true, text: t('pollEndedLabel') });
+						return;
+					}
+					if (popup && !popup.closed) popup.close();
+					setMessage({ ok: true, text: t('signInCancelledLabel') });
+				} catch (error) {
+					setMessage({ ok: false, text: String((error && error.message) || error) });
+				} finally {
+					setPending(false);
+					setBusy(false);
+					void refresh();
+				}
+			}, [refresh, t]);
+
 			const pollOutcome = React.useCallback(async () => {
 				// After the tab navigates away, the attempt settles in the host.
-				// Poll /state briefly so the card flips to Signed in when it does.
+				// Poll /state until it no longer reports inFlight, then render how
+				// the attempt ended (stored credential, or error/outcome code).
 				try {
 					const res = await fetch('/plugins/mistral-subscription/state', { headers: { accept: 'application/json' } });
 					if (!res.ok) return;
@@ -116,19 +164,35 @@ window.__ModuleLoader__.load({
 					if (body.configured === true) {
 						setMessage({ ok: true, text: 'Signed in. Mistral requests now bill to the subscription.' });
 						setAuthorizeUrl(null);
+						setPending(false);
+						return;
+					}
+					if (body.inFlight !== true) {
+						// The attempt ended with nothing stored: show the outcome the
+						// host reported (fixed code only — never token material).
+						setMessage(
+							body.error || body.outcome
+								? { ok: false, text: `${t('errorPrefix')}: ${body.error || body.outcome}` }
+								: { ok: true, text: t('pollEndedLabel') },
+						);
+						setAuthorizeUrl(null);
+						setPending(false);
 					}
 				} catch {}
-			}, []);
+			}, [t]);
 
 			React.useEffect(() => {
-				if (!busy || !message || message.text !== t('openTabLabel')) return;
+				// Runs while the attempt is pending, NOT while busy: busy clears as
+				// soon as the sign-in response answers, the attempt stays in flight.
+				if (!pending) return;
 				const id = setInterval(() => void pollOutcome(), 2000);
-				const stop = setTimeout(() => clearInterval(id), 180000);
+				void pollOutcome();
+				const stop = setTimeout(() => setPending(false), 180000);
 				return () => {
 					clearInterval(id);
 					clearTimeout(stop);
 				};
-			}, [busy, message, pollOutcome, t]);
+			}, [pending, pollOutcome]);
   			const buttonStyle = {
 				fontSize: 12,
 				padding: '6px 12px',
@@ -173,6 +237,12 @@ window.__ModuleLoader__.load({
 							'button',
 							{ style: buttonStyle, disabled: busy || state.inFlight, onClick: signIn },
 							busy ? t('workingLabel') : t('signInLabel'),
+						),
+					(state.inFlight || pending) &&
+						h(
+							'button',
+							{ style: buttonStyle, ariaLabel: t('cancelLabel'), onClick: () => void cancelSignIn() },
+							t('cancelLabel'),
 						),
 					state.configured &&
 						h(

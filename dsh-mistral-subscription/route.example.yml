@@ -1,24 +1,137 @@
-llm-pi-ai:
-  providers:
-    mistral-subscription:
-      api: openai-completions
-      baseURL: https://api.mistral.ai/v1
-      # Mistral's API rejects OpenAI-only body fields with 422 extra_forbidden:
-      # store, the developer role, and reasoning_effort (except none/high on
-      # some models). Disable all three at the route level.
-      compat:
-        supportsStore: false
-        supportsDeveloperRole: false
-        supportsReasoningEffort: false
-      models:
-        - id: zai-glm-5-3
-          contextWindow: 1048576
-          maxTokens: 32768
-        - id: mistral-medium-2604
-          contextWindow: 262144
-          maxTokens: 32768
-        - id: mistral-small-latest
-          contextWindow: 262144
-          maxTokens: 32768
+# Example route for the Mistral subscription (Vibe Code quota).
+#
+# Single YAML document: a top-level LIST of settings entries, matching the
+# shape of ~/.dsh/profiles/*/cordis.patch.yml. Merge the entries you need.
+#
+# The model list is deliberately narrower than the reference `mistral`
+# provider (audit minor: uncommented divergence). With `api:
+# openai-completions`, pi-ai's delta parser reads only STRING content;
+# Mistral streams typed-array content blocks as soon as thinking is engaged.
+# No compat flag, model override or body field teaches that parser to read
+# arrays — the parser that can (`mistral-conversations`) is not reachable
+# from a hand-declared route. The complete inventory and the stream-shape
+# evidence are at the bottom of this file.
+- id: llm-pi-ai
+  config:
+    providers:
+      mistral-subscription:
+        api: openai-completions
+        baseURL: https://api.mistral.ai/v1
+        # Mistral's API rejects OpenAI-only body fields with 422
+        # extra_forbidden: `store` and the `developer` role. Both are
+        # disabled here.
+        #
+        # supportsReasoningEffort: false is load-bearing for a second reason:
+        # sending reasoning_effort makes mistral-medium-2604 and
+        # mistral-small-latest stream typed-array content, which fails as
+        # `text-delta text must be a string`. Every model below therefore
+        # also declares `reasoningEfforts: false`, so no picker offers a
+        # level that would break the route.
+        compat:
+          supportsStore: false
+          supportsDeveloperRole: false
+          supportsReasoningEffort: false
+        # ACTIVE set. deepseek-v4-1-flash-1017 is the primary model: this
+        # route exists to serve it. Ordered, first model wins the picker
+        # default in some surfaces.
+        models:
+          - id: deepseek-v4-1-flash-1017
+            contextWindow: 1048576
+            maxTokens: 32768
+            input:
+              - text
+              - image
+            reasoningEfforts: false
+          - id: mistral-medium-2604
+            contextWindow: 262144
+            maxTokens: 32768
+            input:
+              - text
+              - image
+            reasoningEfforts: false
+          - id: mistral-small-latest
+            contextWindow: 262144
+            maxTokens: 32768
+            input:
+              - text
+              - image
+            reasoningEfforts: false
+          - id: ministral-14b-2512
+            contextWindow: 262144
+            maxTokens: 32768
+            input:
+              - text
+              - image
+            reasoningEfforts: false
+          - id: ministral-8b-2512
+            contextWindow: 262144
+            maxTokens: 32768
+            input:
+              - text
+              - image
+            reasoningEfforts: false
+          - id: ministral-3b-2512
+            contextWindow: 131072
+            maxTokens: 32768
+            input:
+              - text
+              - image
+            reasoningEfforts: false
+          - id: codestral-2508
+            contextWindow: 256000
+            maxTokens: 32768
+            input:
+              - text
+            reasoningEfforts: false
+- id: subagent-model-selection-settings
+  config:
+    enabled: true
+    # One entry: the primary model of this route. Add more from the ACTIVE
+    # set above only if the subagent workflow needs them.
+    allowedModels:
       - provider: mistral-subscription
-        model: zai-glm-5-3
+        model: deepseek-v4-1-flash-1017
+
+# =========================================================================
+# INVENTORY — complete chat-capable model set of the subscription.
+# Catalog snapshot 2026-11-08 (GET /v1/models, collapsed by the `name` field
+# to canonical ids; aliases listed where the route pins one). Stream verdicts
+# are live probes: a "strings" model streams delta.content as strings and
+# works here; an "arrays" model streams typed-array blocks and fails with
+# `text-delta text must be a string` on this protocol.
+#
+# canonical                  | verdict
+# ---------------------------+--------------------------------------------
+# deepseek-v4-1-flash-1017   | strings without thinking, arrays with thinking
+#                            |   -> ACTIVE, primary
+# mistral-medium-latest      | strings without thinking, arrays with thinking
+#                            |   -> ACTIVE as pinned alias mistral-medium-2604
+# mistral-small-2603         | strings without thinking, arrays with thinking
+#                            |   -> ACTIVE as pinned alias mistral-small-latest
+# ministral-14b-2512         | non-reasoning -> ACTIVE
+# ministral-8b-2512          | non-reasoning -> ACTIVE
+# ministral-3b-2512          | non-reasoning -> ACTIVE
+# codestral-2508             | non-reasoning -> ACTIVE (text-only input)
+# mistral-large-2512         | UNVERIFIED -> held out until its stream shape
+#                            |   is probed
+# mistral-large-4            | arrays -> excluded; returns when
+#                            |   mistral-conversations is reachable
+# glm-5-2                    | arrays (GLM family) -> excluded; same return path
+# zai-glm-5-3                | arrays -> excluded; same return path
+# zai-glm-5-3-flash          | arrays -> excluded; same return path
+# labs-leanstral-1-5-1       | org-admin gated -> excluded
+# Voxtral Small Transcribe   | transcription model behind the chat flag
+#                            |   -> excluded
+#
+# Embed / OCR / TTS / moderation models also exist in the catalog and are
+# excluded wholesale (not chat-completion models).
+#
+# Two follow-ups unlock the excluded families:
+#   1. DSH exposing the `mistral-conversations` protocol to hand-declared
+#      routes: switch `api`, drop the compat block, declare real reasoning
+#      ladders, and re-add the GLM / large-4 family.
+#   2. A stream-shape probe of mistral-large-2512; add it if it streams
+#      strings without a ladder.
+# Aliases deliberately not pinned (medium-3, small-2603, ministral-*-latest,
+# codestral-latest, ...) resolve through the canonical ids above; pin an
+# alias only when a caller already names it.

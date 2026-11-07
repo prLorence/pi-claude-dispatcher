@@ -9,6 +9,7 @@
 
 import { challengeFor, createVerifier } from "./pkce.js";
 import { exchangeForKey, startSignIn, waitForSignIn } from "./vibe.js";
+import { registerWebRoutes } from "./web.js";
 
 /** Credential record this flow writes. `<scope>/<id>`, id lowercase-hyphenated. */
 const FLOW_KEY = "llm-pi-ai/mistral-subscription";
@@ -67,8 +68,9 @@ export function createFlow({
 
     const started = await start({ codeChallenge, signal: session.signal });
 
-    // Only this call is guarded: a declined notify is a human "no", while a
-    // failed exchange or commit must still surface as an error.
+    // The real seam wraps `notify` so it never rejects; a rejection can only
+    // come from a hand-written stub or a future seam change. Keep the guard so a
+    // human "no" still settles as cancelled rather than failing the attempt.
     try {
       await session.notify({ message: NOTIFY_MESSAGE, url: started.signInUrl });
     } catch (error) {
@@ -95,7 +97,17 @@ export function createFlow({
     // `{ type: "api_key", key }`, which the harness auth resolver reads into the
     // Authorization header. A `grant` record would reach pi-ai as a raw payload
     // with no `type`, resolving to no auth at all.
-    await credentials.modifyRecord(key, () => ({ kind: "api-key", key: token }));
+    const record = { kind: "api-key", key: token };
+
+    // The exchange can outlive a cancel; writing after an abort would leave a
+    // credential behind for an attempt the person was told did not happen.
+    session.signal.throwIfAborted();
+
+    // `session.commit` is the seam's guarded write: it re-checks the signal and
+    // refuses a second write, so cancel-during-commit cannot report cancelled for
+    // a record that landed. Call it as a method — it needs its `this`. Fall back
+    // to the raw store for a session without it (older seam, tests).
+    await (typeof session.commit === "function" ? session.commit(record) : credentials.modifyRecord(key, () => record));
   }
 
   return {
@@ -107,15 +119,41 @@ export function createFlow({
 }
 
 export const name = "mistral-subscription";
-export const inject = ["authorization", "credentials", "webServer"];
+// `connection` belongs to the route-registration scope, not here: a Cordis
+// `inject` entry is a hard requirement, and the sign-in flow works without the
+// fence. Requiring it would make the plugin inert in compositions lacking it.
+export const inject = ["authorization", "credentials"];
 
 /**
- * Registers the flow plus the settings surface (state / sign-in / sign-out
- * routes for the Client card). Returns the disposer so everything unregisters
- * with the plugin and no attempt outlives it.
+ * Registers the flow (here, exactly once — web.js never does) plus the
+ * settings surface (state / sign-in / sign-out / cancel routes for the Client
+ * card), and returns ONE disposer covering flow + routes.
+ *
+ * The routes are scoped on `["webServer", "connection"]`: the fence reads the
+ * connection service from the injected scope, and a composition without it
+ * fails closed (the scope resolves nothing, so no route registers). The
+ * top-level `inject` stays `["authorization", "credentials"]` — `connection`
+ * must not be a hard requirement of the whole plugin.
  */
 export async function apply(ctx, config = {}) {
   void config;
-  const { registerWebRoutes } = await import("./web.js");
-  return registerWebRoutes(ctx);
+  const flow = createFlow({ key: FLOW_KEY, credentials: ctx.credentials });
+  const disposeFlow = ctx.authorization.registerFlow(flow);
+  const disposeRoutes = ctx.inject(["webServer", "connection"], (scoped) =>
+    registerWebRoutes(scoped),
+  );
+  return () => {
+    let failure;
+    try {
+      if (typeof disposeRoutes === "function") disposeRoutes();
+    } catch (error) {
+      failure ??= error;
+    }
+    try {
+      if (typeof disposeFlow === "function") disposeFlow();
+    } catch (error) {
+      failure ??= error;
+    }
+    if (failure !== undefined) throw failure;
+  };
 }

@@ -66,6 +66,21 @@ function realFlowWithFetch(credentials, fetchImpl) {
   });
 }
 
+/** A flow whose start/poll/exchange resolve without the network. */
+function stubbedFlow(credentials, exchangeForKey) {
+  return createFlow({
+    credentials,
+    startSignIn: async () => ({
+      processId: "proc-1",
+      signInUrl: SIGN_IN_URL,
+      pollUrl: POLL_URL,
+      expiresAt: Date.now() + 60_000,
+    }),
+    waitForSignIn: async () => "exchange-1",
+    exchangeForKey,
+  });
+}
+
 test("the entry module imports no harness package", async () => {
   // The import above threw if the module reached for one; assert the source too,
   // because a dynamic import inside a function would not run at load time.
@@ -76,8 +91,9 @@ test("the entry module imports no harness package", async () => {
 
 test("the module exports the cordis contract and no Config", () => {
   assert.equal(name, "mistral-subscription");
-  // webServer is the settings surface: state / sign-in / sign-out routes.
-  assert.deepEqual(inject, ["authorization", "credentials", "webServer"]);
+  // `connection` is a route-registration scope, never a hard inject entry: a
+  // required entry would make the whole plugin inert without that service.
+  assert.deepEqual(inject, ["authorization", "credentials"]);
   assert.equal(typeof apply, "function");
   assert.equal("Config" in entry, false);
 });
@@ -151,6 +167,47 @@ test("a completed sign-in commits the exchanged key as an api-key record", async
   assert.equal(credentials.commits.length, 1);
   assert.equal(credentials.commits[0].key, KEY);
   assert.deepEqual(credentials.commits[0].record, { kind: "api-key", key: "minted-key-123" });
+});
+
+test("a completed sign-in writes through the session's guarded commit when present", async () => {
+  const credentials = stubCredentials();
+  const flow = stubbedFlow(credentials, async () => "minted-key-123");
+
+  // `commit` is a method on the session: the seam needs its `this`, so prove the
+  // flow calls it rather than detaching it into a local.
+  const session = stubSession();
+  const written = [];
+  session.commit = function commit(record) {
+    written.push({ record, self: this });
+  };
+
+  await flow.run(session);
+
+  assert.equal(written.length, 1);
+  assert.deepEqual(written[0].record, { kind: "api-key", key: "minted-key-123" });
+  assert.equal(written[0].self, session);
+  // The guarded write owns the record; the raw store must not be touched too.
+  assert.equal(credentials.commits.length, 0);
+});
+
+test("a cancel during the write aborts instead of storing the key", async () => {
+  const credentials = stubCredentials();
+  const controller = new AbortController();
+  const flow = stubbedFlow(credentials, async () => {
+    // The exchange lands, then the person cancels before the record is written.
+    controller.abort();
+    return "minted-key-123";
+  });
+
+  const session = stubSession({ signal: controller.signal });
+  let committed = false;
+  session.commit = () => {
+    committed = true;
+  };
+
+  await assert.rejects(flow.run(session), (error) => error.name === "AbortError");
+  assert.equal(committed, false);
+  assert.equal(credentials.commits.length, 0);
 });
 
 test("the exchanged key is passed to the PKCE verifier's matching challenge", async () => {
@@ -276,43 +333,128 @@ test("a poll rejection propagates and commits nothing", async () => {
   assert.equal(credentials.commits.length, 0);
 });
 
-test("apply registers exactly one flow with the literal key and returns its disposer", async () => {
+/**
+ * The plugin ctx cordis builds, stubbed offline: `effect` runs the callback
+ * immediately, `inject(["webServer", "connection"], …)` resolves a scoped ctx
+ * that carries the same services plus the connection (taken from this stub,
+ * never required by the plugin's own inject list).
+ */
+function stubPluginCtx({ withConnection = true } = {}) {
   const registered = [];
-  const disposer = () => {};
   const routes = [];
+  let flowDisposed = false;
+  let routeDisposals = 0;
   const ctx = {
     credentials: stubCredentials(),
     authorization: {
       registerFlow(flow) {
         registered.push(flow);
-        return disposer;
+        return () => {
+          flowDisposed = true;
+        };
       },
     },
     webServer: {
       register(route) {
-        routes.push(route.path);
-        return () => {};
+        routes.push(route);
+        return () => {
+          routeDisposals += 1;
+        };
       },
     },
+    effect(fn) {
+      fn();
+      return () => {};
+    },
+    inject(entries, fn) {
+      assert.deepEqual(entries, ["webServer", "connection"]);
+      const scoped = { ...ctx };
+      if (withConnection) {
+        // The real connection service's own fence: loopback only.
+        scoped.connection = {
+          requestRejection(req) {
+            return req.headers.host === "127.0.0.1:51306" ? undefined : 403;
+          },
+        };
+      }
+      return fn(scoped);
+    },
   };
+  return { ctx, registered, routes, flowDisposed: () => flowDisposed, routeDisposals: () => routeDisposals };
+}
 
-  const returned = await apply(ctx);
+function stubRequest(headers, method) {
+  return { method: method ?? "POST", headers, socket: { localAddress: "127.0.0.1" } };
+}
 
-  assert.equal(registered.length, 1);
-  // The settings surface: state, sign-in, sign-out.
-  assert.deepEqual(routes.sort(), [
-    "/plugins/mistral-subscription/sign-in",
-    "/plugins/mistral-subscription/sign-out",
-    "/plugins/mistral-subscription/state",
-  ]);
-  assert.equal(registered[0].key, KEY);
-  assert.equal(registered[0].label, "Mistral subscription");
-  assert.deepEqual(registered[0].methods, [{ id: "oauth", label: "Sign in with console.mistral.ai" }]);
-  assert.equal(typeof registered[0].run, "function");
-  // apply returns the combined disposer from registerWebRoutes, which calls
-  // the flow's own disposer; assert it disposes rather than identity.
+function stubResponse() {
+  const writes = [];
+  return {
+    writes,
+    writeHead(status, headers) {
+      writes.push({ kind: "head", status, headers });
+      return this;
+    },
+    end(body) {
+      writes.push({ kind: "end", body });
+      return this;
+    },
+  };
+}
+
+test("apply registers exactly one flow with the literal key and returns its disposer", async () => {
+  const surface = stubPluginCtx({ withConnection: true });
+
+  const returned = await apply(surface.ctx);
+
+  assert.equal(surface.registered.length, 1);
+  // The settings surface: state, sign-in, sign-out, cancel.
+  assert.deepEqual(
+    surface.routes.map((route) => route.path).sort(),
+    [
+      "/plugins/mistral-subscription/cancel",
+      "/plugins/mistral-subscription/sign-in",
+      "/plugins/mistral-subscription/sign-out",
+      "/plugins/mistral-subscription/state",
+    ],
+  );
+  assert.equal(surface.registered[0].key, KEY);
+  assert.equal(surface.registered[0].label, "Mistral subscription");
+  assert.deepEqual(surface.registered[0].methods, [{ id: "oauth", label: "Sign in with console.mistral.ai" }]);
+  assert.equal(typeof surface.registered[0].run, "function");
+
+  // The scoped connection stands in the fence: a forged Host is refused
+  // before the body gate, so nothing was begun or deleted.
+  const signIn = surface.routes.find((route) => route.path === "/plugins/mistral-subscription/sign-in");
+  const forged = stubResponse();
+  await signIn.handler(stubRequest({ host: "attacker.example:51306" }), forged);
+  assert.equal(forged.writes[0].status, 403);
+
   assert.equal(typeof returned, "function");
+  assert.equal(surface.flowDisposed(), false);
   returned();
+  // ONE disposer covering flow + routes.
+  assert.equal(surface.flowDisposed(), true);
+  assert.equal(surface.routeDisposals(), 4);
+});
+
+test("a composition without the connection service still registers fenced routes", async () => {
+  const surface = stubPluginCtx({ withConnection: false });
+  const returned = await apply(surface.ctx);
+
+  assert.equal(surface.registered.length, 1);
+  assert.equal(surface.routes.length, 4);
+  // Fallback fence: a loopback /state passes, a forged Host is refused.
+  const state = surface.routes.find((route) => route.path === "/plugins/mistral-subscription/state");
+  const passed = stubResponse();
+  await state.handler(stubRequest({ host: "127.0.0.1:51306" }, "GET"), passed);
+  assert.equal(passed.writes[0].status, 200);
+  assert.equal(JSON.parse(passed.writes[1].body).configured, false);
+  const forged = stubResponse();
+  const signIn = surface.routes.find((route) => route.path === "/plugins/mistral-subscription/sign-in");
+  await signIn.handler(stubRequest({ host: "attacker.example:51306" }), forged);
+  assert.equal(forged.writes[0].status, 403);
+  assert.equal(typeof returned, "function");
 });
 
 test("the flow apply registers commits the minted key through ctx.credentials", async (t) => {
@@ -333,21 +475,10 @@ test("the flow apply registers commits the minted key through ctx.credentials", 
   });
 
   const credentials = stubCredentials();
-  let flow;
-  await apply({
-    credentials,
-    authorization: {
-      registerFlow(registered) {
-        flow = registered;
-        return () => {};
-      },
-    },
-    webServer: {
-      register() {
-        return () => {};
-      },
-    },
-  });
+  const surface = stubPluginCtx();
+  surface.ctx.credentials = credentials;
+  await apply(surface.ctx);
+  const flow = surface.registered[0];
 
   const session = stubSession();
   await flow.run(session);

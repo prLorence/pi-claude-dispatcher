@@ -55,7 +55,11 @@ duplicate it.
 
 ## Sign in
 
-The flow appears in the harness's own sign-in surface as provider
+The plugin ships its own settings card in the DSH web UI (lower settings
+section: **Mistral subscription**). The card's **Sign in** button starts the
+flow; if the browser popup is blocked, use the **Copy link** fallback and open
+the URL manually — the card keeps polling for the outcome either way. The same
+flow also appears in the harness's own sign-in surface as provider
 **Mistral subscription**, with one method: **Sign in with console.mistral.ai**.
 
 1. Starting it opens (or asks you to open) a URL the Mistral server issues,
@@ -87,28 +91,56 @@ is unaffected.
 
 ## Models offered
 
-| id | context window | max tokens |
-|---|---|---|
-| `zai-glm-5-3` | 1048576 | 32768 |
-| `mistral-medium-2604` | 262144 | 32768 |
-| `mistral-small-latest` | 262144 | 32768 |
+The active route (authoritative form in `route.example.yml`) declares seven
+models. **`deepseek-v4-1-flash-1017` is the primary model — this route exists
+to serve it** (1M context window, vision input). The rest:
 
-These are the only models the route declares. Mistral offers more on the Vibe
-Code surface; they are not exposed here, and adding one means adding it to the
-route and its context limits explicitly.
+| id | context window | max tokens | stream verdict |
+|---|---|---|---|
+| `deepseek-v4-1-flash-1017` | 1048576 | 32768 | strings without thinking; arrays once thinking engages |
+| `mistral-medium-2604` | 262144 | 32768 | strings without thinking; arrays with thinking (pinned alias of `mistral-medium-latest`) |
+| `mistral-small-latest` | 262144 | 32768 | strings without thinking; arrays with thinking |
+| `ministral-14b-2512` | 131072 | 32768 | strings (non-reasoning) |
+| `ministral-8b-2512` | 131072 | 32768 | strings (non-reasoning) |
+| `ministral-3b-2512` | 131072 | 32768 | strings (non-reasoning) |
+| `codestral-2508` | 256000 | 32768 | strings (non-reasoning) |
+
+Mistral's catalog carries more chat-capable models than the route exposes. The
+complete inventory, with per-model stream verdicts, lives at the bottom of
+`route.example.yml`. `mistral-large-2512` is held out pending a stream-shape
+probe; `mistral-large-4` and the `zai-glm-*` models stream typed-array blocks
+and are excluded.
+
+### No reasoning picker, by design
+
+Every model above declares `reasoningEfforts: false`. Sending a
+`reasoning_effort` parameter makes even the string-verdict models stream
+typed-array content blocks, which pi-ai's `openai-completions` parser rejects
+with `text-delta text must be a string` — and that parser reads only STRING
+content; no compat flag, model override or body field can teach it to read
+arrays. The parser that can (`mistral-conversations`) is not reachable from a
+hand-declared route: DSH's `PROTOCOLS` registry only maps
+`openai-completions`, `openai-responses` and `anthropic-messages`. When
+`mistral-conversations` becomes reachable upstream, the per-model
+`reasoningEfforts` entries go and a picker returns.
 
 ## Signing out
 
-Sign the **Mistral subscription** provider out through the harness's credential
-UI. That removes the stored `llm-pi-ai/mistral-subscription` record; signing out
-of the browser session as well is optional but revokes nothing on its own.
+Sign out through the **plugin's own settings card** (the **Sign out** button
+next to Sign in), not the harness's credential UI. That removes the stored
+`llm-pi-ai/mistral-subscription` record; signing out of the browser session as
+well is optional but revokes nothing on its own.
 
 After a sign-out, the route has no auth to resolve. Requests on
-`mistral-subscription` fail closed with the harness's missing-credential error
-rather than silently falling back to `MISTRAL_API_KEY` or to an unauthenticated
-call — so a signed-out route is noisy, not quietly billed. Restore service by
-running the sign-in flow again. The built-in `mistral` route is untouched by
-either action.
+`mistral-subscription` fail closed with `No API key for provider:
+mistral-subscription` — there is no `MISTRAL_API_KEY` fallback, by design, so a
+signed-out route is noisy, not quietly billed. Restore service by running the
+sign-in flow again. The built-in `mistral` route is untouched by either action.
+
+One consequence to know: if the profile's `agent-default-model` points at this
+route (the owner's choice — see the rollback doc), a signed-out default model
+fails too, and every session that starts without picking another model sees
+the error until you sign in again.
 
 ## Confirming billing
 
@@ -129,10 +161,9 @@ authenticate with the subscription's key; nothing in it reports spend.
 
 ## Limitations
 
-- **No reasoning-effort control is assumed for `zai-glm-5-3`.** Do not send a
-  reasoning-effort parameter on this route and do not rely on one being honored.
-  Behavior that depends on a specific effort level (cost, latency, thinking
-  depth) is unverified here.
+- **No reasoning-effort control on this route, enforced.** Every model declares
+  `reasoningEfforts: false` and the route's compat disables
+  `supportsReasoningEffort`; see "No reasoning picker, by design" above.
 - **Partner-purchased plans cannot enable pay-as-you-go.** With such a plan, when
   the included quota is exhausted there is no overflow billing to fall back on:
   it is a hard stop, not a slower path. Requests fail until the quota resets or
@@ -143,3 +174,19 @@ authenticate with the subscription's key; nothing in it reports spend.
 - Sign-in is interactive. There is no headless credential provisioning in this
   package, by design: the key can only be minted by a human completing the
   browser step.
+
+## Deliberate divergences from the omp reference extension
+
+The sign-in protocol is modeled on the reference `omp-mistral-subscription`
+extension. Where this package diverges, the divergence is deliberate and
+annotated in code; the model-list divergence is annotated in
+`route.example.yml`:
+
+- **A denial settles as cancelled**, not as a failed attempt — you said no, so
+  nothing failed.
+- **`encodeURIComponent(processId)`** on every URL that carries the process id;
+  the reference interpolates it raw.
+- **A path-boundary check** on the returned sign-in URL (origin AND path prefix)
+  where the reference checks the origin only.
+- **The model list is narrower than the reference provider's** — see "Models
+  offered" above for why.
