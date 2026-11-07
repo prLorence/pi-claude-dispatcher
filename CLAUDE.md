@@ -221,6 +221,8 @@ sha1 of the fingerprint. Compute it like this, with the fingerprint in single qu
 
 Claude models, Sonnet and Opus included, never write code, tests, scripts, config or docs in the repository. The orchestrator writes only artifacts under `.plans/` (spec, plans, traces) and never commits. The one exception is the agent vault: it writes that too, but only through `vault.mjs`, and there it never writes the `work/` or `config/` folders by hand: only `work add` and `config push` write them. There is no break-glass switch yet; an enforcing hook is planned, so for now it is a rule.
 
+Creator-mode sessions (the dsh box) write only under `dsh/`, `docs/dsh-setup.md`, `docs/roadmap-dsh-frontend.md` and this file. Claude models still write no code, tests, scripts or config anywhere else.
+
 ## Layout
 
 | Path                                   | What it is                                                                                                                                                                                                     |
@@ -268,6 +270,8 @@ Claude models, Sonnet and Opus included, never write code, tests, scripts, confi
 | `docs/dsh-probe.md`                    | The dated read-only probe of the DeepSeek Harness (`dsh`): package names and versions, the CLI, the configuration, the tools, what was not measured and the checks that would settle it                        |
 | `docs/roadmap-agent-abstraction.md`    | The roadmap for agent-agnostic workers and the long-term dev box: coupling inventory, agent adapter, phases, risks, measurement plan                                                                           |
 | `docs/roadmap-dsh-frontend.md`         | The roadmap for `dsh` as a second front end, a worker agent and a monitor host: target design, phases, risks, open questions and measurement plan                                                              |
+| `dsh/`                                 | The dsh plugins and their tests: `harness-dispatch` (dispatcher, trace, gate, `dispatch_status`, `coding_subagent`, `audit_plan`), `harness-vault` (the `vault.mjs` wrapper, `vault_record_run`, `vault_project`), `harness-projects` (git repos as projects, the Projects page and the warm repo-scoped vault context), `harness-monitor` (read-only web monitor), `harness-usage` (provider usage widget) and `harness-dispatcher-ui` (the Dispatcher sidebar panel below Projects: omp default model, plugin rows and the embedded monitor); run `cd dsh && node --test` |
+| `docs/dsh-setup.md`                    | Install and use the dsh plugins in a `harness` profile, the APIs confirmed with the Cordis tools, and the known limits (decider not ported, the guard is not a sandbox)                                                                  |
 
 Targets `@earendil-works/pi-coding-agent >=1.3.0`. Extensions load through jiti, so there's no build step.
 

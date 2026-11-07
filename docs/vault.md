@@ -75,7 +75,7 @@ A note's `repo` is a slug like `github.com/owner/name`, built from the repo's `o
 | `meta` | `run`, `decision`, `lesson` and `idea` notes only; a run body is generated from its fields, the other bodies carry no fenced code and no tracked file names |
 | `full` | Every note type, `spec` and `plan` included |
 
-`vault.mjs repo allow <slug-or-uri> --mode <full\|meta\|none>` is the only way to change a mode. It accepts a slug or an origin URL, and applies the `aliases` map to host names. `repo list` prints `<slug>\t<mode>`; `repo check` prints the current checkout's mode and exits 3 when it is `none`.
+`vault.mjs repo allow <slug-or-uri> --mode <full\|meta\|none>` is the only way to change a mode. It accepts a slug or an origin URL, and applies the `aliases` map to host names. `repo rm <slug-or-uri>` drops an entry only while no note, log line, index entry or work file still names the slug — and a GitHub *web* URL such as `https://github.com/o/n/tree/main` is not a repo slug: `allow` turns it into `github.com/o/n/tree/main`, so pass the slug or the origin URL instead. `repo list` prints `<slug>\t<mode>`; `repo check` prints the current checkout's mode and exits 3 when it is `none`.
 
 ## The CLI contract
 
@@ -100,6 +100,7 @@ node ~/.claude/skills/dispatch-plan/vault.mjs <command> [arguments] [flags]
 | `log append --repo <slug\|-> [--trace <id>] <text...>` | Appends one log line | yes |
 | `index rebuild` | Rewrites `index.md` | yes |
 | `repo allow <slug-or-uri> --mode <mode>` | Sets a repo's mode | yes |
+| `repo rm <slug-or-uri>` | Removes an allowlist entry; refused while any note, log, index or work file still names the repo | yes |
 | `repo list`, `repo check` | Reads the modes | |
 | `sync pull` | Pulls with rebase and autostash, then rebuilds the index | yes |
 | `sync push [--summary <text>]` | Lints, commits the managed files, pulls and pushes | yes |
