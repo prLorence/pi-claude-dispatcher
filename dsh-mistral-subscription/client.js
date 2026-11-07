@@ -129,21 +129,7 @@ window.__ModuleLoader__.load({
 					clearTimeout(stop);
 				};
 			}, [busy, message, pollOutcome, t]);
-			const signOut = React.useCallback(async () => {
-				setBusy(true);
-				setMessage(null);
-				try {
-					await fetch('/plugins/mistral-subscription/sign-out', { method: 'POST' });
-					setMessage({ ok: true, text: 'Signed out. The stored credential was deleted.' });
-				} catch (error) {
-					setMessage({ ok: false, text: String(error && error.message || error) });
-				} finally {
-					setBusy(false);
-					void refresh();
-				}
-			}, [refresh]);
-
-			const buttonStyle = {
+  			const buttonStyle = {
 				fontSize: 12,
 				padding: '6px 12px',
 				borderRadius: 8,
