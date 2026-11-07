@@ -568,6 +568,30 @@ test(
 );
 
 test(
+	"repo rm drops the entry and refuses while notes name it",
+	withVault(async ({ root, vault }) => {
+		// Normalisation accepts an origin URL with a .git suffix.
+		assert.equal(run(root, ["repo", "rm", "git@github.com:o/M.git"], { vault }).code, 0);
+		assert.equal(JSON.parse(read(path.join(vault, "repos.json"))).repos["github.com/o/m"], undefined);
+		// A note that still names the slug blocks its removal, and names the file.
+		write(vault, path.join("decisions", "decision-x.md"), "---\ntype: decision\ncreated: 2026-01-01\nrepo: github.com/o/n\n---\nNames github.com/o/n.\n");
+		const refused = run(root, ["repo", "rm", "github.com/o/n"], { vault });
+		assert.equal(refused.code, 2);
+		assert.match(refused.err, /still named by vault files/);
+		assert.match(refused.err, /decision-x\.md/);
+		assert.deepEqual(JSON.parse(read(path.join(vault, "repos.json"))).repos["github.com/o/n"], { mode: "full" });
+		// Once the note is gone the removal goes through.
+		fs.rmSync(path.join(vault, "decisions", "decision-x.md"));
+		assert.equal(run(root, ["repo", "rm", "github.com/o/n"], { vault }).code, 0);
+		assert.equal(JSON.parse(read(path.join(vault, "repos.json"))).repos["github.com/o/n"], undefined);
+		// Unknown and unusable keys are usage errors.
+		assert.equal(run(root, ["repo", "rm", "github.com/o/zzz"], { vault }).code, 2);
+		assert.match(run(root, ["repo", "rm", "github.com/o/zzz"], { vault }).err, /not on the allowlist/);
+		assert.equal(run(root, ["repo", "rm", "just-a-name"], { vault }).code, 2);
+	}),
+);
+
+test(
 	"repo check reads the working directory's repo",
 	withVault(async ({ root, vault }) => {
 		const full = makeProject(root, "full", "git@github.com:o/n.git");

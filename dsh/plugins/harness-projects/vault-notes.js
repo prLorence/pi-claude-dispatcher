@@ -57,6 +57,7 @@ export function noteRecord({ basename, type, path, data, body, mtimeMs }) {
 		gate: data.gate,
 		trace: data.trace,
 		plan: data.plan,
+		commit: data.commit,
 		updated: data.updated || data.created || "",
 		created: data.created || data.updated || "",
 		body,
@@ -85,7 +86,7 @@ export function projectFor(projects, slug) {
  * useful facts survive a tight budget: identity + git, project intent, open
  * findings, recent runs, then the newest log line.
  */
-export function composeWarm({ slug, mode, git, project, findings = [], runs = [], decisions = [], logLines = [], budget = 1200 } = {}) {
+export function composeWarm({ slug, mode, git, project, codebase, findings = [], runs = [], decisions = [], logLines = [], budget = 1200 } = {}) {
 	if (!slug) return "";
 	const lines = [];
 	const where = git?.root ? truncate(git.root.replace(/^\/Users\/[^/]+/, "~"), 80) : "";
@@ -103,6 +104,12 @@ export function composeWarm({ slug, mode, git, project, findings = [], runs = []
 			.filter((line) => line && !line.startsWith("#"))
 			.slice(0, 3);
 		for (const line of bodyLines) lines.push(`- ${truncate(line.replace(/^[-*]\s*/, ""), 140)}`);
+	}
+
+	if (codebase) {
+		const at = codebase.commit ? ` @ ${String(codebase.commit).slice(0, 8)}` : "";
+		const when = codebase.updated ? ` (${codebase.updated})` : "";
+		lines.push(`Codebase map [[${codebase.basename}]]${at}${when} — read it before exploring the tree.`);
 	}
 
 	const recent = sortRecent(runs, 2);

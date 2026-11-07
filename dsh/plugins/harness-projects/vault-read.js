@@ -8,9 +8,9 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { noteRecord, parseNote, projectFor, composeWarm } from "./vault-notes.js";
+import { noteRecord, parseNote, projectFor, sortRecent, composeWarm } from "./vault-notes.js";
 
-export const NOTE_DIRS = ["projects", "findings", "runs", "decisions", "lessons", "plans", "specs", "ideas"];
+export const NOTE_DIRS = ["projects", "codebases", "findings", "runs", "decisions", "lessons", "plans", "specs", "ideas"];
 const MAX_NOTE_BYTES = 128 * 1024;
 
 export function defaultSkillRoot(home = os.homedir()) {
@@ -53,7 +53,7 @@ export function readRepoModes(vaultPath) {
 
 /** Every note file under the vault's note folders, newest mtime first. */
 export async function readNotes(vaultPath) {
-	const notes = { projects: [], findings: [], runs: [], decisions: [], lessons: [], plans: [], specs: [], ideas: [] };
+	const notes = { projects: [], codebases: [], findings: [], runs: [], decisions: [], lessons: [], plans: [], specs: [], ideas: [] };
 	await Promise.all(
 		NOTE_DIRS.map(async (dir) => {
 			const full = path.join(vaultPath, dir);
@@ -154,6 +154,7 @@ export function createVaultReader({ skillRoot, ttlMs = 15_000, log } = {}) {
 				mode,
 				git: repo.git,
 				project: projectFor(notes.projects, slug),
+				codebase: sortRecent(notes.codebases.filter(matches), 1)[0],
 				findings: notes.findings.filter(matches),
 				runs: notes.runs.filter(matches),
 				decisions: [...notes.decisions.filter(matches), ...notes.lessons.filter(matches)],

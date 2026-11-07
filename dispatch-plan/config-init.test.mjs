@@ -186,3 +186,65 @@ test("--root without a directory exits 64", () => {
 	assert.equal(r.status, 64, r.stdout + r.stderr);
 	assert.ok(r.stderr.includes("--root needs a directory"), r.stderr);
 });
+
+// --- --dsh and --merge -------------------------------------------------------
+
+const dshPlugin = path.resolve(import.meta.dirname, "..", "dsh", "plugins", "harness-dispatch");
+const dshConfig = await import(pathToFileURL(path.join(dshPlugin, "config.js")).href);
+const realDsh = { DSH_DISPATCH_DIR: dshPlugin };
+
+test("--dsh writes the dsh plugin's keys, which the Pi core does not have", async () => {
+	const ctx = setup();
+	try {
+		const r = run(ctx, ["--dsh", "--force"], realDsh);
+		assert.equal(r.status, 0, r.stderr);
+		const written = JSON.parse(fs.readFileSync(configPath(ctx), "utf8"));
+		for (const key of ["codingTimeoutMinutes", "ompCommand", "dshCommand", "auditTimeoutMinutes", "claudeCommand", "requirePlanAudit", "projectRegistry", "prices"]) {
+			assert.ok(key in written, `expected ${key} in the dsh config`);
+		}
+		assert.equal(written.codingTimeoutMinutes, dshConfig.DEFAULT_CONFIG.codingTimeoutMinutes);
+	} finally {
+		fs.rmSync(ctx.root, { recursive: true, force: true });
+		fs.rmSync(ctx.home, { recursive: true, force: true });
+	}
+});
+
+test("--merge adds missing keys, keeps every user value, and backs the file up", async () => {
+	const ctx = setup();
+	try {
+		fs.mkdirSync(plansDir(ctx), { recursive: true });
+		const mine = { autoReady: false, timeoutMinutes: 5, roles: { review: { model: "mine/model", thinking: "high" } } };
+		fs.writeFileSync(configPath(ctx), `${JSON.stringify(mine, null, 2)}\n`);
+
+		const r = run(ctx, ["--dsh", "--merge"], realDsh);
+		assert.equal(r.status, 0, r.stderr);
+		const merged = JSON.parse(fs.readFileSync(configPath(ctx), "utf8"));
+		assert.equal(merged.timeoutMinutes, 5, "a user value must survive the merge");
+		assert.equal(merged.roles.review.model, "mine/model", "a configured role must survive");
+		assert.equal(merged.roles.review.thinking, "high");
+		assert.ok("codingTimeoutMinutes" in merged, "a missing key must be added");
+		assert.ok(merged.roles.implement !== undefined, "a role only in the defaults must be added");
+		const backups = fs.readdirSync(plansDir(ctx)).filter((n) => n.startsWith("config.json.bak-"));
+		assert.equal(backups.length, 1);
+	} finally {
+		fs.rmSync(ctx.root, { recursive: true, force: true });
+		fs.rmSync(ctx.home, { recursive: true, force: true });
+	}
+});
+
+test("--merge refuses a missing or invalid file instead of creating one", async () => {
+	const ctx = setup();
+	try {
+		const missing = run(ctx, ["--dsh", "--merge"], realDsh);
+		assert.equal(missing.status, 1);
+		assert.match(missing.stderr, /does not exist/);
+		fs.mkdirSync(plansDir(ctx), { recursive: true });
+		fs.writeFileSync(configPath(ctx), "{ not json");
+		const invalid = run(ctx, ["--dsh", "--merge"], realDsh);
+		assert.equal(invalid.status, 1);
+		assert.match(invalid.stderr, /not valid JSON/);
+	} finally {
+		fs.rmSync(ctx.root, { recursive: true, force: true });
+		fs.rmSync(ctx.home, { recursive: true, force: true });
+	}
+});

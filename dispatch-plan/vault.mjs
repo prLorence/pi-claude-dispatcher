@@ -53,6 +53,7 @@ const USAGE = [
 	"  log append --repo <slug|-> [--trace <id>] <text...>",
 	"  index rebuild",
 	"  repo allow <slug-or-uri> --mode <full|meta|none>",
+	"  repo rm <slug-or-uri>                          remove one allowlist entry; refused while notes still name it",
 	"  repo list",
 	"  repo check",
 	"  sync pull",
@@ -255,6 +256,7 @@ const COMMANDS = {
 	repo: {
 		subcommands: {
 			allow: { write: true, target: (call) => rootFile(call.ctx.vaultPath, REPOS_FILE), args: [1, 1], requiredFlags: ["mode"], run: cmdRepoAllow },
+			rm: { write: true, target: (call) => rootFile(call.ctx.vaultPath, REPOS_FILE), args: [1, 1], run: cmdRepoRemove },
 			list: { args: [0, 0], run: cmdRepoList },
 			check: { args: [0, 0], run: cmdRepoCheck },
 		},
@@ -941,6 +943,71 @@ function cmdRepoAllow(call) {
 	if (!writeTargetAllowed(ctx, target)) return 2;
 	writeReposFile(ctx.vaultPath, { repos: { ...repos.repos, [slug]: { mode } }, aliases: repos.aliases });
 	call.emit("vault.write", { type: "repos", id: slug, op: "allow" });
+	return 0;
+}
+
+/** Every note, log, index or work file that still names one slug, so `repo rm` can refuse. */
+function vaultFilesNaming(vault, needle) {
+	const hits = [];
+	const walk = (dir) => {
+		let entries;
+		try {
+			entries = fs.readdirSync(dir, { withFileTypes: true });
+		} catch {
+			return;
+		}
+		for (const entry of entries) {
+			const full = path.join(dir, entry.name);
+			if (entry.isDirectory()) {
+				if (entry.name === ".git") continue;
+				walk(full);
+				continue;
+			}
+			// repos.json is the entry being removed; every other text file is evidence.
+			if (entry.name === REPOS_FILE) continue;
+			if (!entry.name.endsWith(".md") && entry.name !== "harness.json") continue;
+			try {
+				if (fs.readFileSync(full, "utf8").includes(needle)) hits.push(full);
+			} catch {
+				// An unreadable file cannot be scanned; the removal still proceeds.
+			}
+		}
+	};
+	walk(vault);
+	return hits;
+}
+
+function cmdRepoRemove(call) {
+	const { ctx, args, modules } = call;
+	const repos = modules.notes.readRepos(ctx.vaultPath);
+	if (repos.malformed === true) {
+		ctx.err(`${REPOS_FILE} is malformed; fix it by hand before removing a repo`);
+		return 2;
+	}
+	const slug = repoKey(args[0], repos.aliases, modules.url);
+	if (slug === undefined) {
+		ctx.err(`cannot read ${args[0]} as a repo slug: ${args[0]}`);
+		return 2;
+	}
+	if (!(slug in repos.repos)) {
+		ctx.err(`repo ${slug} is not on the allowlist`);
+		return 2;
+	}
+	// Privacy text that names the slug expects a mode; dropping the entry while
+	// notes still name it would strand them as unowned and unlintable.
+	const hits = vaultFilesNaming(ctx.vaultPath, slug);
+	if (hits.length > 0) {
+		ctx.err(`repo ${slug} is still named by vault files; clean them first:`);
+		for (const hit of hits.slice(0, 5)) ctx.err(`  ${path.relative(ctx.vaultPath, hit)}`);
+		if (hits.length > 5) ctx.err(`  and ${hits.length - 5} more`);
+		return 2;
+	}
+	const remaining = { ...repos.repos };
+	delete remaining[slug];
+	const target = rootFile(ctx.vaultPath, REPOS_FILE);
+	if (!writeTargetAllowed(ctx, target)) return 2;
+	writeReposFile(ctx.vaultPath, { repos: remaining, aliases: repos.aliases });
+	call.emit("vault.write", { type: "repos", id: slug, op: "remove" });
 	return 0;
 }
 

@@ -18,7 +18,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 
-const USAGE = "usage: node config-init.mjs [--root <repo>] [--minimal] [--force] [--print]";
+const USAGE = "usage: node config-init.mjs [--root <repo>] [--minimal] [--force] [--print] [--dsh] [--merge]";
 
 /** The role fields written for each role; prompts stay in the code. */
 const ROLE_FIELDS = ["model", "thinking", "readonly"];
@@ -32,6 +32,22 @@ function expand(p) {
 
 function isDispatcherDir(dir) {
 	return fs.existsSync(path.join(dir, "core.ts")) && fs.existsSync(path.join(dir, "verify.ts"));
+}
+
+/** The dsh dispatcher's config module: it owns the keys the Pi core does not have. */
+function isDshConfigDir(dir) {
+	return fs.existsSync(path.join(dir, "config.js")) && fs.existsSync(path.join(dir, "queue.js"));
+}
+
+/** Where the dsh harness-dispatch plugin may live, nearest first. */
+function dshConfigCandidates(root) {
+	const fromEnv = process.env.DSH_DISPATCH_DIR;
+	return [
+		...(fromEnv ? [path.resolve(expand(fromEnv))] : []),
+		path.join(root, "dsh", "plugins", "harness-dispatch"),
+		path.join(root, "plugins", "harness-dispatch"),
+		path.join(os.homedir(), "Documents", "repos", "agent-dispatcher", "dsh", "plugins", "harness-dispatch"),
+	];
 }
 
 /** Local package folders from the `packages` array, resolved against that file. */
@@ -68,7 +84,7 @@ function dispatcherCandidates(root) {
 }
 
 function parseArgs(argv) {
-	const args = { root: process.cwd(), minimal: false, force: false, print: false };
+	const args = { root: process.cwd(), minimal: false, force: false, print: false, dsh: false, merge: false };
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		if (arg === "--root") {
@@ -81,6 +97,10 @@ function parseArgs(argv) {
 			args.force = true;
 		} else if (arg === "--print") {
 			args.print = true;
+		} else if (arg === "--dsh") {
+			args.dsh = true;
+		} else if (arg === "--merge") {
+			args.merge = true;
 		} else {
 			return { error: `unknown option: ${arg}\n${USAGE}` };
 		}
@@ -120,6 +140,21 @@ function minimalConfig(defaults) {
 	};
 }
 
+/** Add the keys an existing file lacks, keeping every value the user set. */
+function mergeConfig(existing, defaults) {
+	const full = fullConfig(defaults);
+	const out = { ...full };
+	for (const [key, value] of Object.entries(existing)) {
+		if (key === "roles" && value && typeof value === "object") {
+			// A role the user configured wins; roles only in the defaults survive.
+			out.roles = { ...full.roles, ...value };
+		} else {
+			out[key] = value;
+		}
+	}
+	return out;
+}
+
 function serialize(config) {
 	return `${JSON.stringify(config, null, 2)}\n`;
 }
@@ -156,7 +191,16 @@ function writeConfig(file, text, force) {
 	return { ok: true };
 }
 
-async function loadDefaults(root) {
+async function loadDefaults(root, dsh = false) {
+	if (dsh) {
+		const dir = dshConfigCandidates(root).find(isDshConfigDir);
+		if (!dir) {
+			const tried = dshConfigCandidates(root).map((d) => `  ${d}`).join("\n");
+			throw new Error(`cannot find the dsh dispatcher config (harness-dispatch/config.js). Tried:\n${tried}`);
+		}
+		const mod = await import(pathToFileURL(path.join(dir, "config.js")).href);
+		return mod.DEFAULT_CONFIG;
+	}
 	const candidates = dispatcherCandidates(root);
 	const dir = candidates.find(isDispatcherDir);
 	if (!dir) {
@@ -176,7 +220,7 @@ async function main(argv) {
 
 	let defaults;
 	try {
-		defaults = await loadDefaults(args.root);
+		defaults = await loadDefaults(args.root, args.dsh);
 	} catch (e) {
 		console.error(`ERROR: ${e?.message ?? e}`);
 		return 2;
@@ -191,6 +235,36 @@ async function main(argv) {
 	}
 
 	const file = path.join(args.root, ".plans", "config.json");
+	if (args.merge) {
+		// Merge never destroys the user's values: it only adds keys the file lacks.
+		if (!fs.existsSync(file)) {
+			console.error(`ERROR: ${file} does not exist; run without --merge to create it`);
+			return 1;
+		}
+		let existing;
+		try {
+			existing = JSON.parse(fs.readFileSync(file, "utf8"));
+		} catch {
+			console.error(`ERROR: ${file} is not valid JSON; fix it before merging`);
+			return 1;
+		}
+		const merged = mergeConfig(existing, defaults);
+		const added = Object.keys(merged).filter((k) => !(k in existing));
+		const text = serialize(merged);
+		if (args.print) {
+			process.stdout.write(text);
+			return 0;
+		}
+		if (added.length === 0) {
+			console.log(`${file} already has every current key; nothing to add`);
+			return 0;
+		}
+		const copy = backupConfig(file);
+		writeAtomic(file, text);
+		console.error(`backup: ${copy}`);
+		console.log(`added ${added.length} key(s) to ${file}: ${added.join(", ")}`);
+		return 0;
+	}
 	const result = writeConfig(file, text, args.force);
 	if (!result.ok) {
 		console.error(`ERROR: ${file} already exists; pass --force to replace it`);
@@ -205,4 +279,4 @@ async function main(argv) {
 const isMain = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
 if (isMain) process.exitCode = await main(process.argv.slice(2));
 
-export { dispatcherCandidates, fullConfig, minimalConfig, parseArgs, serialize, writeConfig };
+export { dispatcherCandidates, dshConfigCandidates, fullConfig, mergeConfig, minimalConfig, parseArgs, serialize, writeConfig };

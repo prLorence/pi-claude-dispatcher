@@ -80,6 +80,17 @@ test("composeWarm renders identity, git, project, findings and runs", () => {
 	assert.match(text, /Last log: 2026-11-01/);
 });
 
+test("composeWarm points at the codebase map when one is mapped", () => {
+	const text = composeWarm({
+		slug: "github.com/contentlab-dev/cl-gate",
+		mode: "full",
+		git: { root: "/Users/paul/work/CL-Gate", branch: "main", dirty: 0, untracked: 0 },
+		codebase: { basename: "codebase-contentlab-dev-cl-gate", commit: "e92d8b17866248602acb370dc05609b59a7ed7c3", updated: "2026-11-06" },
+		budget: 4000,
+	});
+	assert.match(text, /Codebase map \[\[codebase-contentlab-dev-cl-gate\]\] @ e92d8b17 \(2026-11-06\)/);
+});
+
 test("composeWarm never exceeds a tight budget and marks the trim", () => {
 	const text = composeWarm({
 		slug: "local-x",

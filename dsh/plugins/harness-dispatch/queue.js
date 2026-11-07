@@ -604,6 +604,13 @@ export async function runPlanFile(file, { cwd, runtime, signal: outerSignal, log
 	const line = `Plan ${plan.id} finished: ${plan.tasks.length - failed}/${plan.tasks.length} done, cost $${cost.toFixed(4)}, gate ${gate.pass ? "PASS" : "FAIL"}. Results: ${path.relative(cwd, outDir)}/_summary.md`;
 	log?.(line);
 	runtime.onPlan?.(null);
+	// An observer (the vault sync) must never fail a finished plan: a throw here
+	// would hide the result after the plan already moved to done/ or failed/.
+	try {
+		await runtime.onFinish?.({ plan, gate, faults, outDir, cwd });
+	} catch (error) {
+		log?.(`onFinish observer failed: ${error instanceof Error ? error.message : String(error)}`);
+	}
 	return { plan, gate, faults, outDir };
 }
 

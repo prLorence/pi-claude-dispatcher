@@ -95,6 +95,16 @@ export async function apply(ctx, config = {}) {
 				onPlan: (plan) => {
 					entry.currentPlan = plan;
 				},
+				// Loose coupling: the vault plugin observes this and writes the run
+				// record, so dispatch does not import it and still works without it.
+				onFinish: (result) => {
+					try {
+						const slug = projects.find((p) => path.resolve(p.path) === path.resolve(root))?.slug;
+						ctx.emit("dispatch/plan-finished", { root, slug, ...result });
+					} catch (error) {
+						log(`harness-dispatch: plan-finished notify failed: ${error instanceof Error ? error.message : String(error)}`);
+					}
+				},
 			},
 			log,
 			pollMs: config.pollMs ?? 500,

@@ -10,6 +10,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { loadVaultBoot } from "./boot.js";
+import { recordRun } from "./record.js";
 import { createVaultCli, defaultSkillRoot } from "./vault-cli.js";
 import { registerVaultTools } from "./tools.js";
 
@@ -102,8 +103,42 @@ export async function apply(ctx, config = {}) {
 		},
 	});
 
+	// A finished dispatch plan mirrors itself into the vault: run note, work
+	// copy, plan status, log line. Only `full` repos may carry those writes, and
+	// the emitter is optional so harness-vault works without harness-dispatch.
+	const onPlanFinished = (event) => {
+		void (async () => {
+			try {
+				const { root, slug, plan, gate } = event ?? {};
+				if (!root || !plan?.trace) return;
+				const check = await cli.run(["repo", "check"], { cwd: root, timeoutMs: 8000 });
+				if (check.code !== 0 || String(check.stdout ?? "").trim() !== "full") return;
+				const done = plan.tasks.filter((t) => t.state === "done").length;
+				const pass = gate?.pass === true;
+				await recordRun({
+					cli,
+					args: {
+						trace: plan.trace,
+						root,
+						repo: slug || "-",
+						plan: plan.id,
+						gate: pass ? "pass" : "fail",
+						summary: `Plan ${plan.id} finished via harness-dispatch: ${done}/${plan.tasks.length} tasks done, gate ${pass ? "PASS" : "FAIL"}.`,
+					},
+					runReport,
+					log: (line) => ctx.logger?.info?.(line),
+				});
+				ctx.logger?.info?.(`harness-vault: recorded ${plan.trace} after ${plan.id} (${pass ? "pass" : "fail"})`);
+			} catch (error) {
+				ctx.logger?.warn?.(`harness-vault: could not record the finished plan: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		})();
+	};
+	const offPlanFinished = ctx.on("dispatch/plan-finished", onPlanFinished);
+
 	return () => {
 		disposeTools?.();
+		offPlanFinished?.();
 	};
 }
 

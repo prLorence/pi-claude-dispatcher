@@ -173,3 +173,29 @@ test("requirePlanAudit accepts a passing plan.audit and runs the plan", async ()
 		fs.rmSync(root, { recursive: true, force: true });
 	}
 });
+
+test("onFinish sees the finished plan and a throwing observer cannot fail it", async () => {
+	const { root, d } = repo();
+	const file = path.join(d.inbox, "fin.md");
+	fs.writeFileSync(file, "---\nid: fin\ntrace: fin\nstatus: ready\n---\n## task: a\nfiles:\nbody\n");
+	let seen;
+	const result = await runPlanFile(file, {
+		cwd: root,
+		runtime: {
+			dirs: d,
+			cfg: loadConfig(d),
+			async runWorker() {
+				return { ok: true, cost: 0, output: "STATUS: done\nCHANGED: (none)\nTESTS: none\nNOTES:\nNEEDS:", tools: [] };
+			},
+			onFinish(value) {
+				seen = value;
+				throw new Error("observer exploded");
+			},
+		},
+	});
+	assert.equal(seen.plan.id, "fin");
+	assert.equal(seen.gate.pass, true);
+	assert.equal(seen.cwd, root);
+	assert.equal(result.gate.pass, true);
+	fs.rmSync(root, { recursive: true, force: true });
+});

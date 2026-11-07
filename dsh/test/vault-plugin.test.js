@@ -10,6 +10,7 @@ function fakeCtx(root) {
 	const guards = [];
 	const sections = [];
 	const disposers = [];
+	const handlers = new Map();
 	const ctx = {
 		tools: {
 			register(def) {
@@ -35,8 +36,12 @@ function fakeCtx(root) {
 		agents: { roots: () => [rootAgent] },
 		workingDirectory: { defaultDirectory: root },
 		logger: { info: () => {} },
+		on(event, handler) {
+			handlers.set(event, handler);
+			return () => handlers.delete(event);
+		},
 	};
-	return { ctx, rootAgent, tools, guards, sections, disposers };
+	return { ctx, rootAgent, tools, guards, sections, disposers, handlers };
 }
 
 test("the vault plugin registers the orchestrator tools and a boot section", async () => {
@@ -55,6 +60,19 @@ test("the vault plugin registers the orchestrator tools and a boot section", asy
 		assert.match(h.guards[0]({ name: "vault_search", agent: { id: "child" } }), /orchestrator-only/);
 		dispose();
 		assert.equal(h.tools.size, 0);
+	} finally {
+		fs.rmSync(skill.root, { recursive: true, force: true });
+	}
+});
+
+test("the vault plugin observes finished dispatch plans and stops on dispose", async () => {
+	const skill = makeSkillRoot();
+	const h = fakeCtx(process.cwd());
+	try {
+		const dispose = await apply(h.ctx, { skillRoot: skill.root, injectVaultBoot: false });
+		assert.equal(typeof h.handlers.get("dispatch/plan-finished"), "function");
+		dispose();
+		assert.equal(h.handlers.has("dispatch/plan-finished"), false);
 	} finally {
 		fs.rmSync(skill.root, { recursive: true, force: true });
 	}
