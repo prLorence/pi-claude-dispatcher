@@ -112,12 +112,16 @@ window.__ModuleLoader__.load({
 			return `${Math.round(hours / 24)}d ago`;
 		}
 
-		function Donut({ percent, size = 60, thickness = 6, color = OK, showCenter = true }) {
+		// Every donut is the same size: only the arc encodes utilization, so a
+		// small plan limit can never look like a bigger problem than a large one.
+		const DONUT_SIZE = 56;
+		const DONUT_THICKNESS = 6;
+
+		function Donut({ percent, size = DONUT_SIZE, thickness = DONUT_THICKNESS, color = OK, center = null }) {
 			const pct = clampPercent(percent);
 			const radius = (size - thickness) / 2;
 			const circumference = 2 * Math.PI * radius;
 			const arc = pct === null ? 0 : (pct / 100) * circumference;
-			const centerFont = size >= 56 ? 13 : size >= 40 ? 11 : 9;
 			return h(
 				'div',
 				{ style: { position: 'relative', width: size, height: size, flex: '0 0 auto' } },
@@ -140,7 +144,7 @@ window.__ModuleLoader__.load({
 							})
 						: null,
 				),
-				showCenter
+				center
 					? h(
 							'div',
 							{
@@ -153,16 +157,110 @@ window.__ModuleLoader__.load({
 									display: 'flex',
 									alignItems: 'center',
 									justifyContent: 'center',
-									fontSize: centerFont,
-									fontWeight: 600,
-									fontVariantNumeric: 'tabular-nums',
-									letterSpacing: '-.02em',
-									opacity: pct === null ? 0.4 : 0.92,
+									pointerEvents: 'none',
+									opacity: pct === null ? 0.4 : 1,
 								},
 							},
-							pct === null ? '—' : `${Math.round(pct)}%`,
+							center,
 						)
 					: null,
+			);
+		}
+
+		const BRAND = { claude: '#D97757', mistral: '#FA520F', opencode: '#A8C7FA', opendesign: '#8B5CF6' };
+
+		function brandId(provider) {
+			const name = String((provider && (provider.id || provider.label)) || '').toLowerCase();
+			if (name.includes('claude')) return 'claude';
+			if (name.includes('mistral')) return 'mistral';
+			if (name.includes('opencode')) return 'opencode';
+			if (name.includes('opendesign')) return 'opendesign';
+			return 'generic';
+		}
+
+		// Inline brand marks, drawn from primitives so the plugin never fetches an
+		// image or ships a font. The mark sits in the donut hole, the window label
+		// (and its unit) sits underneath.
+		function ProviderMark({ provider, size = 18 }) {
+			const brand = brandId(provider);
+			const svg = { width: size, height: size, viewBox: '0 0 24 24', 'aria-hidden': true, focusable: 'false', style: { display: 'block' } };
+			if (brand === 'claude') {
+				// Anthropic-style starburst.
+				return h(
+					'svg',
+					svg,
+					h(
+						'g',
+						{ stroke: BRAND.claude, strokeWidth: 2.1, strokeLinecap: 'round' },
+						h('path', { d: 'M12 2.8v6.4' }),
+						h('path', { d: 'M12 14.8v6.4' }),
+						h('path', { d: 'M2.8 12h6.4' }),
+						h('path', { d: 'M14.8 12h6.4' }),
+						h('path', { d: 'M5.5 5.5l4.5 4.5' }),
+						h('path', { d: 'M14 14l4.5 4.5' }),
+						h('path', { d: 'M18.5 5.5L14 10' }),
+						h('path', { d: 'M10 14l-4.5 4.5' }),
+					),
+				);
+			}
+			if (brand === 'mistral') {
+				// Blocky M, warm vertical gradient.
+				return h(
+					'svg',
+					svg,
+					h(
+						'defs',
+						null,
+						h(
+							'linearGradient',
+							{ id: 'harness-usage-mistral', x1: '0', y1: '0', x2: '0', y2: '1' },
+							h('stop', { offset: '0', stopColor: '#FFD800' }),
+							h('stop', { offset: '.55', stopColor: '#FF9D00' }),
+							h('stop', { offset: '1', stopColor: '#FA520F' }),
+						),
+					),
+					h('path', {
+						d: 'M3 20V4h3.8v8.9L12 18l5.2-5.1V4H21v16h-3.8v-8.4L12 16.6l-5.2-5V20z',
+						fill: 'url(#harness-usage-mistral)',
+					}),
+				);
+			}
+			if (brand === 'opencode') {
+				return h(
+					'svg',
+					svg,
+					h(
+						'g',
+						{ fill: 'none', stroke: BRAND.opencode, strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' },
+						h('path', { d: 'M5.5 7l5 5-5 5' }),
+						h('path', { d: 'M13 17.5h5.5' }),
+					),
+				);
+			}
+			if (brand === 'opendesign') {
+				return h(
+					'svg',
+					svg,
+					h('path', { d: 'M12 2.8l2 5.2 5.2 2-5.2 2-2 5.2-2-5.2-5.2-2 5.2-2z', fill: BRAND.opendesign }),
+					h('circle', { cx: 18.5, cy: 5.5, r: 1.4, fill: BRAND.opendesign, opacity: 0.7 }),
+				);
+			}
+			const label = String((provider && (provider.label || provider.id)) || '?').replace(/[^A-Za-z0-9]/g, '');
+			return h(
+				'span',
+				{ style: { fontSize: Math.max(7, Math.round(size * 0.4)), fontWeight: 700, letterSpacing: '.02em', color: MUTED } },
+				(label.slice(0, 2) || '?').toUpperCase(),
+			);
+		}
+
+		function isPercentWindow(item) {
+			if (!item || typeof item !== 'object') return false;
+			if (item.unit === '%') return true;
+			return (
+				typeof item.percent === 'number' &&
+				typeof item.used !== 'number' &&
+				typeof item.limit !== 'number' &&
+				typeof item.remaining !== 'number'
 			);
 		}
 
@@ -201,31 +299,69 @@ window.__ModuleLoader__.load({
 			});
 		}
 
-		function windowCell(item, now) {
+		function windowCell(item, now, provider) {
 			const percent = windowPercent(item);
 			const color = percentColor(percent);
 			const label = item.label || item.key || 'Window';
+			const percentOnly = isPercentWindow(item);
+			const unit = typeof item.unit === 'string' && item.unit.trim() !== '' ? item.unit.trim() : percentOnly ? '%' : '';
+			const used = typeof item.used === 'number' && Number.isFinite(item.used) ? item.used : null;
+			const limit = typeof item.limit === 'number' && Number.isFinite(item.limit) ? item.limit : null;
 			const resetsAt = typeof item.resetsAt === 'number' && Number.isFinite(item.resetsAt) ? item.resetsAt : null;
 			const remaining = typeof item.remaining === 'number' && Number.isFinite(item.remaining) ? item.remaining : null;
 			const resetText = !resetsAt && typeof item.resetText === 'string' && item.resetText.trim() !== '' ? item.resetText.trim() : null;
 			const tooltip = [`${label}: ${percent === null ? 'no data' : `${Math.round(percent)}%`}`];
-			if (typeof item.used === 'number' && typeof item.limit === 'number') {
-				tooltip.push(`${money(item.used, item.unit)} / ${money(item.limit, item.unit)}`);
-			}
-			if (remaining !== null) tooltip.push(`remaining ${money(remaining, item.unit)}`);
+			if (percentOnly) tooltip.push('percent-only plan window');
+			else if (used !== null && limit !== null) tooltip.push(`${money(used, item.unit)} / ${money(limit, item.unit)}`);
+			if (!percentOnly && remaining !== null) tooltip.push(`remaining ${money(remaining, item.unit)}`);
 			if (resetsAt) tooltip.push(`resets ${formatAbsolute(resetsAt)}`);
+			// Same anatomy for both classes, but the figures read differently so a
+			// percent of plan ("42%") is never mistaken for an absolute amount.
+			let value = percent === null ? '—' : `${Math.round(percent)}%`;
+			let detail = null;
+			if (!percentOnly) {
+				if (used !== null && limit !== null) {
+					value = money(used, item.unit);
+					detail = `/ ${money(limit, item.unit)}`;
+				} else if (used !== null) {
+					value = money(used, item.unit);
+					detail = 'used';
+				} else if (limit !== null) {
+					value = money(limit, item.unit);
+					detail = 'limit';
+				} else if (remaining !== null) {
+					value = money(remaining, item.unit);
+					detail = 'left';
+				}
+			}
 			return h(
 				'div',
 				{
 					key: item.key || label,
 					title: tooltip.join(' · '),
-					style: { display: 'grid', justifyItems: 'center', gap: 4, minWidth: 0, padding: '2px 0 0' },
+					style: { display: 'grid', justifyItems: 'center', gap: 3, width: 84, minWidth: 0, padding: '2px 0 0' },
 				},
-				h(Donut, { percent, size: 60, thickness: 6.5, color }),
-				h('span', { style: { fontSize: 10, fontWeight: 600, opacity: 0.78, whiteSpace: 'nowrap' } }, label),
-				remaining !== null && percent === null
-					? h('span', { style: { fontSize: 10, opacity: 0.72, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' } }, money(remaining, item.unit))
-					: null,
+				h(Donut, { percent, color, center: h(ProviderMark, { provider, size: 17 }) }),
+				h(
+					'span',
+					{ style: { display: 'inline-flex', alignItems: 'baseline', gap: 3, maxWidth: '100%' } },
+					h('span', { style: { fontSize: 10, fontWeight: 600, opacity: 0.8, whiteSpace: 'nowrap' } }, label),
+					unit ? h('span', { style: { fontSize: 8.5, fontWeight: 600, letterSpacing: '.04em', opacity: 0.5 } }, unit) : null,
+				),
+				h(
+					'span',
+					{
+						style: {
+							fontSize: percentOnly ? 12.5 : 11,
+							fontWeight: 600,
+							fontVariantNumeric: 'tabular-nums',
+							letterSpacing: '-.01em',
+							whiteSpace: 'nowrap',
+						},
+					},
+					value,
+				),
+				detail ? h('span', { style: { fontSize: 9, opacity: 0.5, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' } }, detail) : null,
 				resetsAt
 					? h(
 							'span',
@@ -298,13 +434,14 @@ window.__ModuleLoader__.load({
 						{
 							key: 'windows',
 							style: {
-								display: 'grid',
-								gridTemplateColumns: 'repeat(auto-fit, minmax(72px, 1fr))',
+								display: 'flex',
+								flexWrap: 'wrap',
+								justifyContent: 'center',
 								gap: 6,
 								marginTop: 2,
 							},
 						},
-						windows.map((item) => windowCell(item, now)),
+						windows.map((item) => windowCell(item, now, provider)),
 					),
 				);
 			}
@@ -341,6 +478,17 @@ window.__ModuleLoader__.load({
 						},
 						provider.label || provider.id || 'Provider',
 					),
+					provider.detail
+						? h(
+								'span',
+								{
+									key: 'detail',
+									style: { fontSize: 9.5, color: MUTED, whiteSpace: 'nowrap' },
+									title: 'Plan reported by the sign-in identity',
+								},
+								provider.detail,
+							)
+						: null,
 					h(
 						'span',
 						{
@@ -415,17 +563,20 @@ window.__ModuleLoader__.load({
 					? data.providers.filter((provider) => provider && typeof provider === 'object')
 					: [];
 			const now = Date.now();
-			let worst = null;
+			const perProvider = [];
 			for (const provider of providers) {
-				const candidate = provider && typeof provider === 'object' ? worstOf(provider.windows) : null;
-				if (candidate && (worst === null || candidate.percent > worst.percent)) worst = candidate;
+				const candidate = worstOf(provider.windows);
+				if (candidate) perProvider.push({ provider, worst: candidate });
 			}
-			const worstColor = percentColor(worst ? worst.percent : null);
+			// Worst first, so the row reads left-to-right by urgency.
+			perProvider.sort((a, b) => b.worst.percent - a.worst.percent);
+			const summary = perProvider
+				.map(({ provider, worst }) =>
+					`${String((provider && (provider.label || provider.id)) || 'provider')} ${Math.round(worst.percent)}%`)
+				.join(' · ');
 			const generatedAt = data && typeof data.generatedAt === 'string' ? Date.parse(data.generatedAt) : NaN;
 
-			const footerTitle = worst
-				? `Provider usage · worst window ${worst.label} ${Math.round(worst.percent)}%${worst.resetsAt ? ` · resets ${formatAbsolute(worst.resetsAt)}` : ''}`
-				: 'Provider usage';
+			const footerTitle = summary ? `Provider usage · ${summary}` : 'Provider usage';
 
 			const toggle = (event) => {
 				const rect = event.currentTarget.getBoundingClientRect();
@@ -448,8 +599,8 @@ window.__ModuleLoader__.load({
 						onClick: toggle,
 						'aria-haspopup': 'dialog',
 						'aria-expanded': open,
-						'aria-label': worst
-							? `Provider usage, worst window ${Math.round(worst.percent)} percent`
+						'aria-label': summary
+							? `Provider usage, ${summary}`
 							: 'Provider usage, no data',
 						title: footerTitle,
 						onMouseEnter: () => setHover(true),
@@ -474,14 +625,23 @@ window.__ModuleLoader__.load({
 							transition: 'background .12s ease',
 						},
 					},
-					worst
-						? h(Donut, {
-								percent: worst.percent,
-								size: 16,
-								thickness: 2.5,
-								color: worstColor,
-								showCenter: false,
-							})
+					perProvider.length
+						? h(
+								// One donut per provider, worst first. Each keeps the same
+								// fixed anatomy and carries its brand mark in the hole, so
+								// the strip identifies as well as measures. The collapsed
+								// sidebar only has room for the single worst donut.
+								'div',
+								{ style: { display: 'flex', alignItems: 'center', gap: 5 } },
+								(wide ? perProvider : perProvider.slice(0, 1)).map(({ provider, worst }) =>
+									h(Donut, {
+										percent: worst.percent,
+										size: 20,
+										thickness: 3,
+										color: percentColor(worst.percent),
+										center: h(ProviderMark, { provider, size: 10 }),
+									})),
+							)
 						: h('span', {
 								style: {
 									width: 7,
@@ -651,32 +811,60 @@ window.__ModuleLoader__.load({
 					...(config.providers || []).map((provider, index) => {
 						const current = live.get(provider.id);
 						const status = STATUS[current?.status] || { text: 'Not polled', color: MUTED };
+						const keyField = provider.credentialRecord
+							? field(
+									'Credential',
+									h(
+										'span',
+										{ style: { display: 'inline-flex', gap: 7, alignItems: 'center', flexWrap: 'wrap' } },
+										h(
+											'code',
+											{ style: { fontSize: 10.5, padding: '1px 5px', borderRadius: 4, background: 'rgba(127,127,127,.14)' } },
+											provider.credentialRecord,
+										),
+										h(
+											'span',
+											{ style: chipStyle(provider.configured ? OK : MUTED, 0.11) },
+											provider.configured ? 'Configured' : 'Missing',
+										),
+										provider.source && provider.source !== 'none'
+											? h('span', { style: { fontSize: 10, opacity: 0.45 } }, provider.source)
+											: null,
+									),
+								)
+							: field(
+									'API key',
+									h(
+										'span',
+										{ style: { display: 'inline-flex', gap: 7, alignItems: 'center', flexWrap: 'wrap' } },
+										h(
+											'code',
+											{ style: { fontSize: 10.5, padding: '1px 5px', borderRadius: 4, background: 'rgba(127,127,127,.14)' } },
+											provider.apiKeyEnv || 'none',
+										),
+										h(
+											'span',
+											{ style: chipStyle(provider.configured ? OK : MUTED, 0.11) },
+											provider.configured ? 'Configured' : 'Missing',
+										),
+										provider.source && provider.source !== 'none'
+											? h('span', { style: { fontSize: 10, opacity: 0.45 } }, provider.source)
+											: null,
+									),
+								);
 						const details = provider.kind === 'claude-usage'
 							? [
 									field('Command', h('code', { style: { fontSize: 10.5, padding: '1px 5px', borderRadius: 4, background: 'rgba(127,127,127,.14)' } }, provider.claudeCommand || 'claude')),
 									field('Source', 'local CLI; no token access'),
 									field('Timeout', `${Math.round((provider.timeoutMs ?? 30000) / 1000)} s`),
 								]
-							: [
-									field('Endpoint', provider.usageUrl || 'Not configured'),
-									field(
-										'API key',
-										h(
-											'span',
-											{ style: { display: 'inline-flex', gap: 7, alignItems: 'center', flexWrap: 'wrap' } },
-											h('code', { style: { fontSize: 10.5, padding: '1px 5px', borderRadius: 4, background: 'rgba(127,127,127,.14)' } }, provider.apiKeyEnv || 'none'),
-											h(
-												'span',
-												{ style: chipStyle(provider.configured ? OK : MUTED, 0.11) },
-												provider.configured ? 'Configured' : 'Missing',
-											),
-											provider.source && provider.source !== 'none'
-												? h('span', { style: { fontSize: 10, opacity: 0.45 } }, provider.source)
-												: null,
-										),
-									),
-									field('Unit', provider.unit || '—'),
-								];
+							: provider.kind === 'mistral-subscription'
+								? [
+										field('Probe', provider.usageUrl || 'POST /v1/chat/completions · max_tokens 1'),
+										keyField,
+										field('Plan detail', 'console whoami (best-effort)'),
+									]
+								: [field('Endpoint', provider.usageUrl || 'Not configured'), keyField, field('Unit', provider.unit || '—')];
 						return h(
 							'div',
 							{

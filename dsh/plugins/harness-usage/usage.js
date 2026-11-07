@@ -11,6 +11,13 @@
  * the user's own CLI (`claude -p /usage --output-format json`) and parses the
  * session/week lines out of its `result` text. The CLI authenticates itself;
  * this module never reads ~/.claude or stores a token.
+ *
+ * The `mistral-subscription` provider reads the API key from the credential
+ * record written by the Vibe sign-in flow. That key cannot read a plan-usage
+ * route; its limits are the per-minute rate-limit headers returned by a
+ * minimal chat completion, and its plan identity comes from the console
+ * `whoami` route. It never consults the environment: the record is the
+ * subscription identity.
  */
 import { spawn } from "node:child_process";
 
@@ -395,7 +402,186 @@ async function resolveKey(provider, env, credentials) {
 }
 
 
-/** Parse the human `result` text of `claude -p /usage`. */
+/**
+ * Read the API key from a credential record. Records are the sole source for
+ * record-backed providers: an environment variable with the same value is not
+ * consulted, because the record is what the sign-in flow owns and rotates.
+ */
+async function resolveRecordKey(provider, credentials) {
+	if (!provider.credentialRecord) return undefined;
+	if (!credentials || typeof credentials.readRecord !== "function") return undefined;
+	try {
+		const record = await credentials.readRecord(provider.credentialRecord);
+		if (!record || record.kind !== "api-key") return undefined;
+		if (typeof record.key !== "string" || record.key.trim() === "") return undefined;
+		return record.key;
+	} catch {
+		return undefined;
+	}
+}
+
+const MISTRAL_INFERENCE_URL = "https://api.mistral.ai/v1/chat/completions";
+const MISTRAL_WHOAMI_URL = "https://console.mistral.ai/api/vibe/whoami";
+// A one-token completion is the only call that returns the subscription's
+// rate-limit headers. It costs a few tokens per interval (the response reports
+// the exact cost in x-ratelimit-tokens-query-cost), so the 60s default cadence
+// is this source's floor.
+const MISTRAL_PROBE_BODY = { model: "mistral-small-latest", messages: [{ role: "user", content: "ping" }], max_tokens: 1 };
+
+/**
+ * A per-minute rate-limit window from the `x-ratelimit-*` response headers.
+ * A missing or non-numeric header returns null so the caller can fall back to
+ * a single "unknown" window instead of inventing numbers.
+ */
+function rateLimitWindow(key, label, limitRaw, remainingRaw, unit) {
+	// Number(null) is 0, so a stripped header must be rejected before parsing.
+	const parse = (raw) => {
+		if (raw === null || raw === undefined || String(raw).trim() === "") return null;
+		const value = Number(raw);
+		return Number.isFinite(value) ? value : null;
+	};
+	const limit = parse(limitRaw);
+	const remaining = parse(remainingRaw);
+	if (limit === null || remaining === null || limit <= 0) return null;
+	const used = Math.max(0, limit - Math.max(0, remaining));
+	return {
+		key,
+		label,
+		used,
+		limit,
+		remaining: Math.max(0, remaining),
+		percent: Math.min(100, (used / limit) * 100),
+		resetsAt: null,
+		resetText: null,
+		unit,
+	};
+}
+
+function unknownRateWindow() {
+	return {
+		key: "unknown",
+		label: "Limits",
+		used: null,
+		limit: null,
+		remaining: null,
+		percent: null,
+		resetsAt: null,
+		resetText: null,
+		unit: "",
+	};
+}
+
+/**
+ * Best-effort plan identity: the only `/api/vibe/*` path this key can read.
+ * Any failure (network, 401, odd shape) degrades to no detail and never fails
+ * the poll.
+ */
+async function mistralPlanDetail(fetchImpl, key, timeoutMs) {
+	try {
+		const res = await fetchImpl(MISTRAL_WHOAMI_URL, {
+			method: "GET",
+			headers: { accept: "application/json", authorization: `Bearer ${key}`, "user-agent": "harness-usage/0.1" },
+			signal: AbortSignal.timeout(timeoutMs),
+		});
+		if (!res.ok) return undefined;
+		const payload = await res.json();
+		const name = payload?.plan_name ?? payload?.plan_type;
+		return typeof name === "string" && name.trim() !== "" ? `${name.trim()} plan` : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Mistral subscription plan usage.
+ *
+ * Mistral exposes no plan-usage route for this key: `api.mistral.ai/v1/usage`,
+ * `/v1/usage_limits` and friends are 404, `/v1/admin/usage` is admin-scoped
+ * (401), and `console.mistral.ai/api/v1/usage` does not exist. What the
+ * subscription does expose is its per-minute rate-limit headers on any
+ * successful inference call, so the poller sends the cheapest possible
+ * completion (`max_tokens: 1`) and reads the two limit/remaining pairs. Plan
+ * identity (`EDU plan`) comes from the console `whoami` route.
+ */
+async function pollMistralSubscription(provider, { credentials, fetchImpl, timeoutMs, now }) {
+	const base = { id: provider.id, label: provider.label, windows: [], polledAt: now() };
+	const recordKey = provider.credentialRecord;
+	if (!recordKey) return { ...base, status: "no-key", message: "No credential record is configured for this provider." };
+	if (!credentials || typeof credentials.readRecord !== "function") {
+		return { ...base, status: "no-key", message: `The credential store is unavailable; cannot read ${recordKey}.` };
+	}
+	const key = await resolveRecordKey(provider, credentials);
+	if (!key) {
+		return { ...base, status: "no-key", message: `No API key in the credential record ${recordKey}. Sign in from the Mistral subscription plugin.` };
+	}
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), timeoutMs);
+	let res;
+	try {
+		res = await fetchImpl(provider.usageUrl || MISTRAL_INFERENCE_URL, {
+			method: "POST",
+			headers: {
+				accept: "application/json",
+				"content-type": "application/json",
+				authorization: `Bearer ${key}`,
+				"user-agent": "harness-usage/0.1",
+			},
+			body: JSON.stringify(MISTRAL_PROBE_BODY),
+			signal: controller.signal,
+		});
+	} catch (e) {
+		return { ...base, status: "unreachable", message: e instanceof Error ? e.message : String(e) };
+	} finally {
+		clearTimeout(timer);
+	}
+	if (res.status === 401 || res.status === 403) {
+		return {
+			...base,
+			status: "unauthorized",
+			message: `HTTP ${res.status}: the Mistral API rejected this subscription key. Re-run the Sign in flow to refresh it.`,
+		};
+	}
+	if (res.status === 429) {
+		const retryAfter = res.headers?.get?.("retry-after");
+		return {
+			...base,
+			status: "rate-limited",
+			message: `HTTP 429: the Mistral inference probe is rate limited${retryAfter ? `; retry after ${retryAfter}` : ""}.`,
+		};
+	}
+	if (!res.ok) {
+		return {
+			...base,
+			status: res.status >= 500 ? "unreachable" : "error",
+			message: `HTTP ${res.status} from the Mistral inference probe.`,
+		};
+	}
+	if (typeof res.text === "function") await res.text().catch(() => "");
+	const headers = res.headers;
+	const windows = [
+		rateLimitWindow(
+			"tokens-minute",
+			"Tokens",
+			headers?.get?.("x-ratelimit-limit-tokens-minute"),
+			headers?.get?.("x-ratelimit-remaining-tokens-minute"),
+			"tok/min",
+		),
+		rateLimitWindow(
+			"req-minute",
+			"Requests",
+			headers?.get?.("x-ratelimit-limit-req-minute"),
+			headers?.get?.("x-ratelimit-remaining-req-minute"),
+			"req/min",
+		),
+	].filter(Boolean);
+	const message = windows.length
+		? undefined
+		: "The inference probe succeeded, but the response carried no rate-limit headers.";
+	if (!windows.length) windows.push(unknownRateWindow());
+	const detail = await mistralPlanDetail(fetchImpl, key, timeoutMs);
+	return { ...base, status: "ok", message, windows, ...(detail ? { detail } : {}) };
+}
+
 async function pollHttp(provider, { env, credentials, fetchImpl, timeoutMs, now }) {
 	if (!provider.usageUrl) {
 		return {
@@ -623,6 +809,7 @@ async function pollClaude(provider, { spawnImpl = spawn, timeoutMs, env, now }) 
 
 function pollProvider(provider, deps) {
 	if (provider.kind === "claude-usage") return pollClaude(provider, { ...deps, timeoutMs: provider.timeoutMs ?? 30_000 });
+	if (provider.kind === "mistral-subscription") return pollMistralSubscription(provider, deps);
 	return pollHttp(provider, deps);
 }
 

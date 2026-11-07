@@ -366,3 +366,215 @@ test("the claude-usage provider fails cleanly when the claude command is missing
 	assert.match(result.message, /failed/);
 	assert.deepEqual(result.windows, []);
 });
+
+// --- Mistral subscription ------------------------------------------------------
+
+function responseHeaders(map = {}) {
+	const lower = {};
+	for (const [key, value] of Object.entries(map)) lower[key.toLowerCase()] = String(value);
+	return { get: (name) => lower[String(name).toLowerCase()] ?? null };
+}
+
+function httpResponse(status, payload, headerMap = {}) {
+	const body = typeof payload === "string" ? payload : JSON.stringify(payload);
+	return {
+		ok: status >= 200 && status < 300,
+		status,
+		headers: responseHeaders(headerMap),
+		text: async () => body,
+		json: async () => (typeof payload === "string" ? JSON.parse(payload) : payload),
+	};
+}
+
+const RATE_HEADERS = {
+	"x-ratelimit-limit-tokens-minute": "500000",
+	"x-ratelimit-remaining-tokens-minute": "499980",
+	"x-ratelimit-tokens-query-cost": "17",
+	"x-ratelimit-limit-req-minute": "1000",
+	"x-ratelimit-remaining-req-minute": "990",
+};
+const MISTRAL_CHAT_URL = "https://api.mistral.ai/v1/chat/completions";
+const MISTRAL_WHOAMI_URL = "https://console.mistral.ai/api/vibe/whoami";
+
+function subscriptionProvider() {
+	return DEFAULT_PROVIDERS.find((p) => p.id === "mistral-subscription");
+}
+
+function subscriptionCredentials(key = "record-secret") {
+	return { readRecord: async () => ({ kind: "api-key", key }) };
+}
+
+test("Mistral subscription is a record-backed provider with no usage URL default", () => {
+	const provider = subscriptionProvider();
+	assert.ok(provider, "mistral-subscription must be a default provider");
+	assert.equal(provider.kind, "mistral-subscription");
+	assert.equal(provider.usageUrl, undefined);
+	assert.equal(provider.credentialRecord, "llm-pi-ai/mistral-subscription");
+	assert.equal(provider.apiKeyEnv, undefined);
+	assert.equal(DEFAULT_PROVIDERS.some((p) => p.kind === "mistral-usage"), false);
+});
+
+test("the subscription poller maps rate-limit headers to windows and keeps the key out of state", async () => {
+	let seenRecord;
+	let method;
+	let authorization;
+	let body;
+	const poller = createUsagePoller({
+		providers: [subscriptionProvider()],
+		// A decoy in the environment must never be used for a record provider.
+		env: { MISTRAL_ADMIN_API_KEY: "env-decoy", MISTRAL_API_KEY: "env-decoy" },
+		credentials: {
+			readRecord: async (ref) => {
+				seenRecord = ref;
+				return { kind: "api-key", key: "record-secret" };
+			},
+		},
+		fetchImpl: async (url, opts) => {
+			if (url === MISTRAL_CHAT_URL) {
+				method = opts.method;
+				authorization = opts.headers.authorization;
+				body = JSON.parse(opts.body);
+				return httpResponse(200, { choices: [] }, RATE_HEADERS);
+			}
+			assert.equal(url, MISTRAL_WHOAMI_URL);
+			return httpResponse(200, { plan_name: "EDU" });
+		},
+	});
+	const result = (await poller.poll()).providers[0];
+	assert.equal(seenRecord, "llm-pi-ai/mistral-subscription");
+	assert.equal(method, "POST");
+	assert.equal(authorization, "Bearer record-secret");
+	assert.equal(body.model, "mistral-small-latest");
+	assert.equal(body.max_tokens, 1);
+	assert.deepEqual(body.messages, [{ role: "user", content: "ping" }]);
+	assert.equal(result.status, "ok");
+	assert.equal(result.detail, "EDU plan");
+	const tokens = result.windows.find((w) => w.key === "tokens-minute");
+	const requests = result.windows.find((w) => w.key === "req-minute");
+	assert.ok(tokens && requests, "both rate-limit windows must be built");
+	assert.equal(tokens.label, "Tokens");
+	assert.equal(tokens.limit, 500000);
+	assert.equal(tokens.used, 20);
+	assert.equal(tokens.unit, "tok/min");
+	assert.ok(Math.abs(tokens.percent - 0.004) < 1e-9);
+	assert.equal(requests.label, "Requests");
+	assert.equal(requests.limit, 1000);
+	assert.equal(requests.used, 10);
+	assert.equal(requests.unit, "req/min");
+	assert.ok(Math.abs(requests.percent - 1) < 1e-9);
+	const state = JSON.stringify(poller.state());
+	assert.equal(state.includes("record-secret"), false);
+	assert.equal(state.includes("env-decoy"), false);
+});
+
+test("the subscription poller tolerates a failing whoami call", async () => {
+	const poller = createUsagePoller({
+		providers: [subscriptionProvider()],
+		credentials: subscriptionCredentials(),
+		fetchImpl: async (url) => {
+			if (url === MISTRAL_CHAT_URL) return httpResponse(200, { choices: [] }, RATE_HEADERS);
+			throw new Error("whoami is down");
+		},
+	});
+	const result = (await poller.poll()).providers[0];
+	assert.equal(result.status, "ok");
+	assert.equal(result.windows.length, 2);
+	assert.equal(result.detail, undefined);
+});
+
+test("missing rate-limit headers fall back to one unknown window", async () => {
+	const poller = createUsagePoller({
+		providers: [subscriptionProvider()],
+		credentials: subscriptionCredentials(),
+		fetchImpl: async (url) => {
+			if (url === MISTRAL_CHAT_URL) return httpResponse(200, { choices: [] });
+			return httpResponse(200, { plan_name: "EDU" });
+		},
+	});
+	const result = (await poller.poll()).providers[0];
+	assert.equal(result.status, "ok");
+	assert.equal(result.windows.length, 1);
+	assert.equal(result.windows[0].key, "unknown");
+	assert.equal(result.windows[0].used, null);
+	assert.equal(result.windows[0].percent, null);
+	assert.match(result.message, /no rate-limit headers/);
+});
+
+test("a partially stripped header set keeps only the complete window", async () => {
+	const poller = createUsagePoller({
+		providers: [subscriptionProvider()],
+		credentials: subscriptionCredentials(),
+		fetchImpl: async (url) => {
+			if (url === MISTRAL_CHAT_URL) {
+				return httpResponse(200, {}, { "x-ratelimit-limit-tokens-minute": "500000", "x-ratelimit-remaining-tokens-minute": "499980" });
+			}
+			return httpResponse(200, { plan_name: "EDU" });
+		},
+	});
+	const result = (await poller.poll()).providers[0];
+	assert.equal(result.status, "ok");
+	assert.equal(result.windows.length, 1);
+	assert.equal(result.windows[0].key, "tokens-minute");
+	assert.equal(result.windows[0].used, 20);
+});
+
+test("a rejected subscription key is reported as unauthorized", async () => {
+	let calls = 0;
+	const poller = createUsagePoller({
+		providers: [subscriptionProvider()],
+		credentials: subscriptionCredentials(),
+		fetchImpl: async () => {
+			calls += 1;
+			return httpResponse(401, { detail: "Invalid API Key" });
+		},
+	});
+	const result = (await poller.poll()).providers[0];
+	assert.equal(result.status, "unauthorized");
+	assert.match(result.message, /rejected/);
+	assert.match(result.message, /Sign in flow/);
+	assert.equal(calls, 1, "whoami must not run after a rejected key");
+});
+
+test("a rate-limited probe reports the Retry-After value", async () => {
+	const poller = createUsagePoller({
+		providers: [subscriptionProvider()],
+		credentials: subscriptionCredentials(),
+		fetchImpl: async () => httpResponse(429, {}, { "retry-after": "7" }),
+	});
+	const result = (await poller.poll()).providers[0];
+	assert.equal(result.status, "rate-limited");
+	assert.match(result.message, /retry after 7/);
+});
+
+test("a 5xx inference probe is reported as unreachable", async () => {
+	const poller = createUsagePoller({
+		providers: [subscriptionProvider()],
+		credentials: subscriptionCredentials(),
+		fetchImpl: async () => httpResponse(503, {}),
+	});
+	const result = (await poller.poll()).providers[0];
+	assert.equal(result.status, "unreachable");
+	assert.match(result.message, /503/);
+});
+
+test("a subscription key in the environment alone is ignored", async () => {
+	const poller = createUsagePoller({
+		providers: [subscriptionProvider()],
+		env: { MISTRAL_ADMIN_API_KEY: "env-only", MISTRAL_API_KEY: "env-only" },
+		credentials: { readRecord: async () => undefined },
+		fetchImpl: async () => {
+			throw new Error("must not fetch without a record key");
+		},
+	});
+	const result = (await poller.poll()).providers[0];
+	assert.equal(result.status, "no-key");
+	assert.match(result.message, /llm-pi-ai\/mistral-subscription/);
+	assert.match(result.message, /Sign in/);
+});
+
+test("the subscription poller reports no-key when the credential store is unavailable", async () => {
+	const poller = createUsagePoller({ providers: [subscriptionProvider()], env: {}, fetchImpl: async () => { throw new Error("must not fetch"); } });
+	const result = (await poller.poll()).providers[0];
+	assert.equal(result.status, "no-key");
+	assert.match(result.message, /credential store is unavailable/);
+});

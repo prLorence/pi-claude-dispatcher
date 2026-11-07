@@ -3,7 +3,9 @@
  * `/plugins/harness-usage/state` to the Client half.
  *
  * Credentials come from the named environment variable or the dsh credential
- * store; the key is never logged, returned, or written anywhere.
+ * store. A record-backed provider (the Mistral subscription) reads its
+ * `credentialRecord` only and never falls back to the environment. The key is
+ * never logged, returned, or written anywhere.
  */
 import * as os from "node:os";
 import * as path from "node:path";
@@ -12,7 +14,22 @@ import { mergeProviders } from "./provider-defaults.js";
 
 export const name = "harness-usage";
 
-async function credentialState(credentials, ref) {
+async function credentialState(credentials, provider) {
+	const recordRef = provider.credentialRecord;
+	if (recordRef) {
+		// A record is the whole identity for this provider: the environment is
+		// never consulted, and a missing store reads as unconfigured.
+		if (credentials && typeof credentials.describeRecord === "function") {
+			try {
+				const info = await credentials.describeRecord(recordRef);
+				return { configured: info?.configured === true, source: info?.configured ? "credential record" : "none" };
+			} catch {
+				// Fall through to the missing state below.
+			}
+		}
+		return { configured: false, source: "none" };
+	}
+	const ref = provider.apiKeyEnv;
 	if (!ref) return { configured: false, source: "none" };
 	if (process.env[ref]) return { configured: true, source: "environment" };
 	if (credentials && typeof credentials.describe === "function") {
@@ -92,10 +109,11 @@ export async function apply(ctx, config = {}) {
 					kind: provider.kind,
 					usageUrl: provider.usageUrl ?? "",
 					apiKeyEnv: provider.apiKeyEnv ?? "",
+					credentialRecord: provider.credentialRecord ?? "",
 					unit: provider.unit ?? "",
 					claudeCommand: provider.claudeCommand ?? "",
 					timeoutMs: provider.timeoutMs ?? config.timeoutMs ?? 10_000,
-					...(await credentialState(ctx.credentials, provider.apiKeyEnv)),
+					...(await credentialState(ctx.credentials, provider)),
 				})),
 			);
 			const body = JSON.stringify({

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "main": "index.js",
-  "description": "Provider usage/quota widget: polls OpenCode Go and configurable provider usage URLs",
+  "description": "Provider usage/quota widget: OpenCode Go, Claude Code plan windows, Mistral subscription and configurable usage URLs",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
