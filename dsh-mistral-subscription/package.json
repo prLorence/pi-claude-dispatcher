@@ -1,0 +1,14 @@
+{
+  "name": "dsh-mistral-subscription",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "description": "Adds a Mistral subscription sign-in and provider route to DSH, so usage bills the plan's Vibe Code quota instead of API credits.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}

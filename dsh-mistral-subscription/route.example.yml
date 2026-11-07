@@ -1,0 +1,17 @@
+llm-pi-ai:
+  providers:
+    mistral-subscription:
+      api: openai-completions
+      baseURL: https://api.mistral.ai/v1
+      models:
+        - id: zai-glm-5-3
+          contextWindow: 1048576
+          maxTokens: 32768
+        - id: mistral-medium-2604
+          contextWindow: 262144
+          maxTokens: 32768
+        - id: mistral-small-latest
+          contextWindow: 262144
+          maxTokens: 32768
+      - provider: mistral-subscription
+        model: zai-glm-5-3
