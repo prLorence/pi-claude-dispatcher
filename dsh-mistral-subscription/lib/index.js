@@ -107,18 +107,15 @@ export function createFlow({
 }
 
 export const name = "mistral-subscription";
-export const inject = ["authorization", "credentials"];
+export const inject = ["authorization", "credentials", "webServer"];
 
 /**
- * Registers the flow. Returns the disposer so the flow unregisters with the
- * plugin and no attempt outlives it.
+ * Registers the flow plus the settings surface (state / sign-in / sign-out
+ * routes for the Client card). Returns the disposer so everything unregisters
+ * with the plugin and no attempt outlives it.
  */
 export async function apply(ctx, config = {}) {
   void config;
-  return ctx.authorization.registerFlow(
-    createFlow({
-      key: FLOW_KEY,
-      credentials: ctx.credentials,
-    }),
-  );
+  const { registerWebRoutes } = await import("./web.js");
+  return registerWebRoutes(ctx);
 }

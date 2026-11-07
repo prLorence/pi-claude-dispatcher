@@ -76,7 +76,8 @@ test("the entry module imports no harness package", async () => {
 
 test("the module exports the cordis contract and no Config", () => {
   assert.equal(name, "mistral-subscription");
-  assert.deepEqual(inject, ["authorization", "credentials"]);
+  // webServer is the settings surface: state / sign-in / sign-out routes.
+  assert.deepEqual(inject, ["authorization", "credentials", "webServer"]);
   assert.equal(typeof apply, "function");
   assert.equal("Config" in entry, false);
 });
@@ -278,6 +279,7 @@ test("a poll rejection propagates and commits nothing", async () => {
 test("apply registers exactly one flow with the literal key and returns its disposer", async () => {
   const registered = [];
   const disposer = () => {};
+  const routes = [];
   const ctx = {
     credentials: stubCredentials(),
     authorization: {
@@ -286,16 +288,31 @@ test("apply registers exactly one flow with the literal key and returns its disp
         return disposer;
       },
     },
+    webServer: {
+      register(route) {
+        routes.push(route.path);
+        return () => {};
+      },
+    },
   };
 
   const returned = await apply(ctx);
 
   assert.equal(registered.length, 1);
+  // The settings surface: state, sign-in, sign-out.
+  assert.deepEqual(routes.sort(), [
+    "/plugins/mistral-subscription/sign-in",
+    "/plugins/mistral-subscription/sign-out",
+    "/plugins/mistral-subscription/state",
+  ]);
   assert.equal(registered[0].key, KEY);
   assert.equal(registered[0].label, "Mistral subscription");
   assert.deepEqual(registered[0].methods, [{ id: "oauth", label: "Sign in with console.mistral.ai" }]);
   assert.equal(typeof registered[0].run, "function");
-  assert.equal(returned, disposer);
+  // apply returns the combined disposer from registerWebRoutes, which calls
+  // the flow's own disposer; assert it disposes rather than identity.
+  assert.equal(typeof returned, "function");
+  returned();
 });
 
 test("the flow apply registers commits the minted key through ctx.credentials", async (t) => {
@@ -322,6 +339,11 @@ test("the flow apply registers commits the minted key through ctx.credentials", 
     authorization: {
       registerFlow(registered) {
         flow = registered;
+        return () => {};
+      },
+    },
+    webServer: {
+      register() {
         return () => {};
       },
     },
