@@ -3,6 +3,13 @@ llm-pi-ai:
     mistral-subscription:
       api: openai-completions
       baseURL: https://api.mistral.ai/v1
+      # Mistral's API rejects OpenAI-only body fields with 422 extra_forbidden:
+      # store, the developer role, and reasoning_effort (except none/high on
+      # some models). Disable all three at the route level.
+      compat:
+        supportsStore: false
+        supportsDeveloperRole: false
+        supportsReasoningEffort: false
       models:
         - id: zai-glm-5-3
           contextWindow: 1048576
