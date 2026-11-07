@@ -37,7 +37,7 @@ test("fetchSession asks the repo's route and encodes every segment", async () =>
   try {
     const page = await fetchSession("dfph-app", "plan/1", "a 1", 4);
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toBe("/api/session/dfph-app/plan%2F1/a%201?after=4");
+    expect(calls[0]).toBe("/api/monitor/session/dfph-app/plan%2F1/a%201?after=4");
     expect(page.id).toBe("s1");
     expect(page.next).toBe(4);
   } finally {
@@ -82,7 +82,7 @@ test("renders a tool call with the tool name and args", () => {
 test("renders a tool result as a pre without the error class", () => {
   const html = render([makeEntry("tool_result", { text: "ok" })]);
   expect(html).toContain("entry entry-tool_result");
-  expect(html).toContain("<pre>ok</pre>");
+  expect(html).toContain('<pre><code class="hljs">ok</code></pre>');
   expect(html).not.toContain('class="error"');
 });
 

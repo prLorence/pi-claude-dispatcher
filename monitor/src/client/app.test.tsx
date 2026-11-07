@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { Attempt, Lane, MonitorState, PlanView, RepoView, TaskRow } from "../shared/types";
-import { AppView } from "./App";
+import type { AgentSession, Attempt, Lane, MonitorState, PlanView, RepoView, TaskRow } from "../shared/types";
+import { AppView, isEmbedded } from "./App";
 
 function attempt(over: Partial<Attempt> = {}): Attempt {
   return {
@@ -212,4 +212,65 @@ test("a repo with no plan shows its message", () => {
   });
   expect(html).toContain("folder cannot be read");
   expect(html).not.toContain('class="board"');
+});
+
+test("an error before the first state does not also render the skeleton", () => {
+  const html = render({ state: null, error: "Cannot reach the monitor server" });
+  expect(html).toContain("banner-error");
+  expect(html).not.toContain("skeleton");
+});
+
+test("embed mode requires the exact ?embed=1 value", () => {
+  expect(isEmbedded("?embed=1")).toBe(true);
+  expect(isEmbedded("?embed=0")).toBe(false);
+  expect(isEmbedded("?theme=dark")).toBe(false);
+});
+
+test("previews the newest idle plan when nothing is running", () => {
+  const html = render({
+    state: state({
+      repos: [
+        repo({ name: "alpha", active: false, plan: plan({ state: "done", gate: "pass" }) }),
+        repo({ name: "beta", active: false, plan: plan({ id: "20261024-0900-other-r1" }) }),
+      ],
+    }),
+  });
+  expect(count(html, 'class="board"')).toBe(1);
+  expect(html).toContain('aria-expanded="true"');
+  expect(html.indexOf("alpha")).toBeLessThan(html.indexOf("beta"));
+});
+
+function agent(over: Partial<AgentSession> = {}): AgentSession {
+  return {
+    id: "omp-1",
+    file: "/tmp/omp-1.jsonl",
+    mtimeMs: Date.now(),
+    live: true,
+    ended: false,
+    model: "opencode-go/beam-free",
+    prompt: "Review the monitor change",
+    tokens: 1200,
+    cost: 0.01,
+    agent: "omp",
+    ...over,
+  };
+}
+
+test("shows a running omp agent", () => {
+  const html = render({
+    state: state(),
+    agents: { groups: [{ agent: "omp", sessions: [agent()] }], scope: "all", now: new Date().toISOString() },
+  });
+  expect(html).toContain("Agents");
+  expect(html).toContain("omp");
+  expect(html).toContain("1 running");
+  expect(html).toContain("Review the monitor change");
+});
+
+test("does not show ended agents as running", () => {
+  const html = render({
+    state: state(),
+    agents: { groups: [{ agent: "omp", sessions: [agent({ live: false, ended: true })] }], scope: "all", now: new Date().toISOString() },
+  });
+  expect(html).not.toContain("1 running");
 });

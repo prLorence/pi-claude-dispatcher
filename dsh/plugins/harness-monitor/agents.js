@@ -87,7 +87,10 @@ function summarisePiLike(file, mtimeMs, nowMs) {
 		} catch {
 			continue;
 		}
-		if (obj.type === "model_change" && typeof obj.modelId === "string") model = obj.modelId;
+		if (obj.type === "model_change") {
+			const changed = typeof obj.modelId === "string" ? obj.modelId : typeof obj.model === "string" ? obj.model : null;
+			if (changed !== null) model = changed;
+		}
 		if (obj.type === "message" && obj.message && typeof obj.message === "object") {
 			const msg = obj.message;
 			if (msg.role === "user" && prompt === null && Array.isArray(msg.content)) prompt = msg.content.find((p) => p?.type === "text")?.text ?? null;

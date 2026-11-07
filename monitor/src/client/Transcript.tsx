@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Entry } from "../shared/types";
 import { fetchSession, subscribe } from "./api";
+import { highlightCode, languageFromPath, splitFences } from "./code";
 
 const FOLLOW_SLACK = 24;
 
@@ -10,6 +11,44 @@ function summaryFor(entry: Entry): string {
   return entry.kind;
 }
 
+function CodeBlock(props: { code: string; language?: string | null; preClassName?: string }) {
+  const highlighted = highlightCode(props.code, props.language);
+  return (
+    <pre className={props.preClassName}>
+      <code
+        className={highlighted.language === null ? "hljs" : `hljs language-${highlighted.language}`}
+        dangerouslySetInnerHTML={{ __html: highlighted.html }}
+      />
+    </pre>
+  );
+}
+
+function RichText(props: { text: string }) {
+  const parts = splitFences(props.text);
+  if (parts.length === 1 && parts[0].code === null) {
+    return <p>{props.text}</p>;
+  }
+  return (
+    <div className="rich-text">
+      {parts.map((part, index) =>
+        part.code === null ? (
+          <p className="entry-text" key={`text-${index}`}>
+            {part.text}
+          </p>
+        ) : (
+          <CodeBlock code={part.code.code} language={part.code.language} key={`code-${index}`} />
+        ),
+      )}
+    </div>
+  );
+}
+
+function argsLanguage(args: string): string | null {
+  const trimmed = args.trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) return "json";
+  return languageFromPath(args);
+}
+
 function EntryBlock(props: { entry: Entry }) {
   const entry = props.entry;
 
@@ -17,7 +56,7 @@ function EntryBlock(props: { entry: Entry }) {
     return (
       <details className={`entry entry-${entry.kind}`}>
         <summary>{summaryFor(entry)}</summary>
-        <p>{entry.text}</p>
+        <RichText text={entry.text} />
       </details>
     );
   }
@@ -26,14 +65,14 @@ function EntryBlock(props: { entry: Entry }) {
     case "assistant":
       return (
         <div className="entry entry-assistant">
-          <p>{entry.text}</p>
+          <RichText text={entry.text} />
         </div>
       );
     case "user":
     case "thinking":
       return (
         <div className={`entry entry-${entry.kind}`}>
-          <p>{entry.text}</p>
+          <RichText text={entry.text} />
         </div>
       );
     case "tool_call": {
@@ -42,14 +81,18 @@ function EntryBlock(props: { entry: Entry }) {
       return (
         <div className="entry entry-tool_call">
           <span className="tool-name">{name}</span>
-          {args ? <span className="tool-args">{args}</span> : null}
+          {args ? <CodeBlock code={args} language={argsLanguage(args)} preClassName="tool-args" /> : null}
         </div>
       );
     }
     case "tool_result":
       return (
         <div className="entry entry-tool_result">
-          <pre className={entry.isError ? "error" : undefined}>{entry.text}</pre>
+          <CodeBlock
+            code={entry.text}
+            language={entry.tool ? languageFromPath(entry.tool.args) : null}
+            preClassName={entry.isError ? "error" : undefined}
+          />
         </div>
       );
     case "note":
@@ -182,7 +225,12 @@ export function Transcript(props: { repo: string; planId: string; attemptId: str
       ) : null}
       <div className="transcript" ref={scrollRef} onScroll={onScroll}>
         {attemptId === null ? (
-          <p className="muted">Select a lane to read its transcript</p>
+          <div className="transcript-empty">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true">
+              <path d="M5 6.5h14M5 12h9M5 17.5h11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+            <span>Select a lane to read its transcript</span>
+          </div>
         ) : status === "error" ? (
           <p className="muted">Session not available</p>
         ) : (

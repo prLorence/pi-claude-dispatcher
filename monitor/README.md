@@ -67,8 +67,10 @@ Each repo shows its plan in `running/`, else its latest finished plan. Active re
 
 ## What the screen shows
 
+- Transcript code blocks and tool output are syntax-highlighted with `highlight.js` using the active aurora palette; unknown text stays plain rather than getting random token colors.
+- A compact **Agents** strip above the projects while any Pi, omp or dsh session is live: agent kind, model, prompt, tokens and cost. It refreshes every five seconds and disappears when nothing is running.
 - Every active repo as a stacked section: a header with the repo name, an `active` marker and the plan header, then its board.
-- Every idle repo as a one-line strip with its name, latest plan id, state and gate. Clicking the strip expands it into the same section; clicking again collapses it. Active repos start expanded and idle repos collapsed, and the choice is kept while the page is open.
+- Every idle repo as a one-line strip with its name, latest plan id, state and gate. Clicking the strip expands it into the same section; clicking again collapses it. Active repos start expanded. When nothing is running, the newest idle plan is previewed open; other idle repos stay collapsed, and every choice is kept while the page is open.
 - A plan header with the plan id, the plan state, the done and total task count, and the gate.
 - One row per task in plan order: the task id, the role, a `waits for X` note while a dependency is not done, and a `skipped` badge when the plan is no longer running and the task has no events.
 - Two lane cells per row: the implementer on the left and the pair reviewer on the right. A task without `pair:` shows a dash in the reviewer cell.

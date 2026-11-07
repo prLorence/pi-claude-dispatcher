@@ -36,3 +36,22 @@ export function formatTokens(n: number | null): string {
 export function stateLabel(s: LaneState): string {
   return s;
 }
+
+export function formatClock(iso: string | null): string {
+  if (iso === null) return "-";
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return "-";
+  return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+export function formatAgo(iso: string | null, nowIso: string | null): string {
+  if (iso === null) return "-";
+  const at = Date.parse(iso);
+  const now = nowIso === null ? Date.now() : Date.parse(nowIso);
+  if (!Number.isFinite(at) || !Number.isFinite(now)) return "-";
+  const s = Math.max(0, Math.floor((now - at) / 1000));
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}

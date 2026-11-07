@@ -32,40 +32,58 @@ export function Board(props: BoardProps) {
 
   return (
     <section className="board">
-      <header className="plan-header">
-        <span className="plan-id">{plan.id}</span>
-        <span className="plan-state">{plan.state}</span>
-        <span className="plan-count">
-          {plan.done}/{plan.total} tasks
-        </span>
-        <span className="plan-gate">{gateText(plan)}</span>
-        {plan.audit === null ? null : <Audit audit={plan.audit} />}
-      </header>
-      {plan.tasks.map((task) => (
-        <div className="task-row" key={task.id}>
-          <div className="task-name">
-            <span className="task-id">{task.id}</span>
-            <span className="task-role">{task.role}</span>
-            {task.waitsFor.length > 0 ? (
-              <span className="task-waits">waits for {task.waitsFor.join(", ")}</span>
-            ) : null}
-            {task.skipped ? <span className="badge badge-skipped">skipped</span> : null}
-          </div>
-          <LaneCell
-            lane={task.implementer}
-            kind="implementer"
-            selectedId={selectedId}
-            decider={task.decider}
-            onSelect={(attemptId) => onSelect(plan.id, attemptId)}
-          />
-          <LaneCell
-            lane={task.reviewer}
-            kind="reviewer"
-            selectedId={selectedId}
-            onSelect={(attemptId) => onSelect(plan.id, attemptId)}
-          />
+      <header className={`plan-header plan-${plan.state}`}>
+        <div className="plan-heading">
+          <span className="plan-id">{plan.id}</span>
+          <span className={`state-pill state-${plan.state}`}>{plan.state}</span>
         </div>
-      ))}
+        <div className="plan-meta">
+          <span className="plan-count">
+            {plan.done}/{plan.total} tasks
+          </span>
+          <span className={plan.gate === "fail" ? "plan-gate gate-fail" : "plan-gate"}>{gateText(plan)}</span>
+          {plan.audit === null ? null : <Audit audit={plan.audit} />}
+        </div>
+      </header>
+
+      {plan.tasks.length === 0 ? (
+        <p className="board-empty">No tasks in this plan.</p>
+      ) : (
+        <>
+          <div className="lane-columns" aria-hidden="true">
+            <span>Task</span>
+            <span>Implementer</span>
+            <span>Pair reviewer</span>
+          </div>
+          {plan.tasks.map((task) => (
+            <div className="task-row" key={task.id}>
+              <div className="task-info">
+                <div className="task-name">
+                  <span className="task-id">{task.id}</span>
+                  <span className="task-role">{task.role}</span>
+                  {task.skipped ? <span className="badge badge-skipped">skipped</span> : null}
+                </div>
+                {task.waitsFor.length > 0 ? (
+                  <span className="task-waits">waits for {task.waitsFor.join(", ")}</span>
+                ) : null}
+              </div>
+              <LaneCell
+                lane={task.implementer}
+                kind="implementer"
+                selectedId={selectedId}
+                decider={task.decider}
+                onSelect={(attemptId) => onSelect(plan.id, attemptId)}
+              />
+              <LaneCell
+                lane={task.reviewer}
+                kind="reviewer"
+                selectedId={selectedId}
+                onSelect={(attemptId) => onSelect(plan.id, attemptId)}
+              />
+            </div>
+          ))}
+        </>
+      )}
     </section>
   );
 }

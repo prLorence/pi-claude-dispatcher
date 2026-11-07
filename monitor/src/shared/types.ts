@@ -92,3 +92,27 @@ export interface SessionPage {
   entries: Entry[];
   next: number;
 }
+
+export interface AgentSession {
+  id: string;
+  file: string;
+  mtimeMs: number;
+  live: boolean;
+  ended: boolean;
+  model: string | null;
+  prompt: string | null;
+  tokens: number;
+  cost: number | null;
+  agent: string;
+}
+
+export interface AgentGroup {
+  agent: string;
+  sessions: AgentSession[];
+}
+
+export interface AgentsState {
+  groups: AgentGroup[];
+  scope: string;
+  now: string;
+}

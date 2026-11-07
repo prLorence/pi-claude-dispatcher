@@ -1,4 +1,4 @@
-import type { MonitorState, SessionPage } from "../shared/types";
+import type { AgentsState, MonitorState, SessionPage } from "../shared/types";
 
 export async function fetchState(): Promise<MonitorState> {
   const res = await fetch("/api/state");
@@ -14,7 +14,7 @@ export async function fetchSession(
   id: string,
   after: number,
 ): Promise<SessionPage> {
-  const url = `/api/session/${encodeURIComponent(repo)}/${encodeURIComponent(plan)}/${encodeURIComponent(id)}?after=${after}`;
+  const url = `/api/monitor/session/${encodeURIComponent(repo)}/${encodeURIComponent(plan)}/${encodeURIComponent(id)}?after=${after}`;
   const res = await fetch(url);
   if (!res.ok) {
     throw new Error(`GET ${url} failed with ${res.status}`);
@@ -46,4 +46,12 @@ export function subscribe(onChange: () => void): () => void {
     stopPolling();
     events.close();
   };
+}
+
+export async function fetchAgents(): Promise<AgentsState> {
+  const res = await fetch("/api/agents?scope=all");
+  if (!res.ok) {
+    throw new Error(`GET /api/agents failed with ${res.status}`);
+  }
+  return (await res.json()) as AgentsState;
 }

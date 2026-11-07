@@ -23,7 +23,11 @@ function deciderTitle(decider: DeciderTaskView): string {
   return `probabilities: ${probabilities === "" ? "-" : probabilities}, confidence: ${confidence}, complexity: ${complexity}`;
 }
 
-function pickAttempt(lane: Lane, label: string | null): Attempt | null {
+function pickAttempt(lane: Lane, label: string | null, selectedId: string | null): Attempt | null {
+  if (selectedId !== null) {
+    const match = lane.attempts.find((attempt) => attempt.id === selectedId);
+    if (match) return match;
+  }
   if (label !== null) {
     const match = lane.attempts.find((attempt) => attempt.label === label);
     if (match) return match;
@@ -61,24 +65,27 @@ export function LaneCell(props: LaneCellProps) {
 
   if (lane === null) {
     return (
-      <div className={`lane lane-${kind} lane-empty`}>
-        <span className="lane-dash">-</span>
+      <div className={`lane lane-${kind} lane-empty`} aria-label={kind === "reviewer" ? "No pair reviewer" : "No implementer"}>
+        <span className="lane-dash">—</span>
+        <span className="lane-empty-label">{kind === "reviewer" ? "no pair" : "not started"}</span>
       </div>
     );
   }
 
-  const attempt = pickAttempt(lane, chosen);
+  const attempt = pickAttempt(lane, chosen, selectedId);
 
   if (attempt === null) {
     return (
       <div className={`lane lane-${kind} lane-empty`}>
         <span className="badge badge-waiting">{stateLabel("waiting")}</span>
+        <span className="lane-empty-label">queued</span>
         {badge}
       </div>
     );
   }
 
   const selected = selectedId !== null && selectedId === attempt.id;
+  const interactive = attempt.hasSession;
   const classes = ["lane", `lane-${kind}`];
   if (selected) classes.push("selected");
 
@@ -89,16 +96,21 @@ export function LaneCell(props: LaneCellProps) {
   return (
     <div
       className={classes.join(" ")}
-      role="button"
-      tabIndex={0}
-      aria-pressed={selected}
-      onClick={select}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          select();
-        }
-      }}
+      aria-label={`${kind} ${attempt.label}: ${stateLabel(attempt.state)}`}
+      role={interactive ? "button" : undefined}
+      tabIndex={interactive ? 0 : undefined}
+      aria-pressed={interactive ? selected : undefined}
+      onClick={interactive ? select : undefined}
+      onKeyDown={
+        interactive
+          ? (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                select();
+              }
+            }
+          : undefined
+      }
     >
       <div className="lane-head">
         <span className={`badge badge-${attempt.state}`}>{stateLabel(attempt.state)}</span>
@@ -114,6 +126,7 @@ export function LaneCell(props: LaneCellProps) {
                 onClick={(event) => {
                   event.stopPropagation();
                   setChosen(option.label);
+                  if (option.hasSession) onSelect(option.id);
                 }}
               >
                 {option.label}

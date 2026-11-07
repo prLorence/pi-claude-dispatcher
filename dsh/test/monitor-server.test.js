@@ -92,14 +92,14 @@ test("GET /api/state reports a missing plans folder without failing", async () =
 	}
 });
 
-test("GET /api/session returns entries and resumes from after", async () => {
+test("GET /api/monitor/session returns entries and resumes from after", async () => {
 	const h = await harness();
 	try {
 		writeSession(h.dirs[0], "p1", "p1.t1.a1", [sessionHeader(), userMsg("hello"), assistantMsg("hi")]);
-		const first = await (await fetch(`${h.base}/api/session/item-a/p1/p1.t1.a1`)).json();
+		const first = await (await fetch(`${h.base}/api/monitor/session/item-a/p1/p1.t1.a1`)).json();
 		assert.equal(first.entries.length, 2);
 		assert.equal(first.next, 3);
-		const second = await (await fetch(`${h.base}/api/session/item-a/p1/p1.t1.a1?after=${first.next}`)).json();
+		const second = await (await fetch(`${h.base}/api/monitor/session/item-a/p1/p1.t1.a1?after=${first.next}`)).json();
 		assert.equal(second.entries.length, 0);
 	} finally {
 		await h.close();
@@ -109,11 +109,11 @@ test("GET /api/session returns entries and resumes from after", async () => {
 test("unknown repos, bad ids and missing sessions return 400/404 without echoing", async () => {
 	const h = await harness();
 	try {
-		assert.equal((await fetch(`${h.base}/api/session/nope/p1/p1.a1`)).status, 404);
-		assert.equal((await fetch(`${h.base}/api/session/item-a/..%2F..%2Fetc/p1.a1`)).status, 400);
-		assert.equal((await fetch(`${h.base}/api/session/item-a/p1/nope`)).status, 404);
-		assert.equal((await fetch(`${h.base}/api/session/item-a/p1/p1.a1?after=x`)).status, 400);
-		const unknown = await (await fetch(`${h.base}/api/session/nope/p1/p1.a1`)).json();
+		assert.equal((await fetch(`${h.base}/api/monitor/session/nope/p1/p1.a1`)).status, 404);
+		assert.equal((await fetch(`${h.base}/api/monitor/session/item-a/..%2F..%2Fetc/p1.a1`)).status, 400);
+		assert.equal((await fetch(`${h.base}/api/monitor/session/item-a/p1/nope`)).status, 404);
+		assert.equal((await fetch(`${h.base}/api/monitor/session/item-a/p1/p1.a1?after=x`)).status, 400);
+		const unknown = await (await fetch(`${h.base}/api/monitor/session/nope/p1/p1.a1`)).json();
 		assert.equal(unknown.error, "not found");
 	} finally {
 		await h.close();
@@ -123,7 +123,7 @@ test("unknown repos, bad ids and missing sessions return 400/404 without echoing
 test("path traversal in a session id never reads outside the folder", async () => {
 	const h = await harness();
 	try {
-		const res = await fetch(`${h.base}/api/session/item-a/p1/..%2F..%2F..%2Fetc%2Fpasswd`);
+		const res = await fetch(`${h.base}/api/monitor/session/item-a/p1/..%2F..%2F..%2Fetc%2Fpasswd`);
 		assert.ok(res.status === 400 || res.status === 404);
 	} finally {
 		await h.close();
@@ -201,7 +201,7 @@ test("the monitor is read-only: the tree is byte-identical after every route", a
 		writeSession(h.dirs[0], "p1", "p1.t1.a1", [sessionHeader(), userMsg("hi"), assistantMsg("ok")]);
 		const before = snapshot(h.dirs[0]);
 		await fetch(`${h.base}/api/state`);
-		await fetch(`${h.base}/api/session/item-a/p1/p1.t1.a1`);
+		await fetch(`${h.base}/api/monitor/session/item-a/p1/p1.t1.a1`);
 		await fetch(`${h.base}/api/agents?scope=all`);
 		await fetch(`${h.base}/`);
 		await new Promise((r) => setTimeout(r, 30));

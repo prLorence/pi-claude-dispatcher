@@ -102,12 +102,12 @@ export function createMonitor({ repos, message = null, staticDir, pollMs = 500, 
 			const scope = url.searchParams.get("scope") === "all" ? "all" : "added";
 			return json(listAgentSessions({ home, repos, nowMs: now(), scope }));
 		}
-		if (pathname.startsWith("/api/session/")) {
+		if (pathname.startsWith("/api/monitor/session/")) {
 			const parts = pathname.split("/");
-			if (parts.length !== 6) return json({ error: "not found" }, 404);
-			const repoName = decodeSegment(parts[3]);
-			const planId = decodeSegment(parts[4]);
-			const sessionId = decodeSegment(parts[5]);
+			if (parts.length !== 7) return json({ error: "not found" }, 404);
+			const repoName = decodeSegment(parts[4]);
+			const planId = decodeSegment(parts[5]);
+			const sessionId = decodeSegment(parts[6]);
 			if (repoName === null || planId === null || sessionId === null) return json({ error: "bad id" }, 400);
 			const repo = byName.get(repoName);
 			if (repo === undefined) return json({ error: "not found" }, 404);
