@@ -91,3 +91,42 @@ so for that case use step 1.
   happened) stays in the credential store. Sign out through the UI or delete the
   record to remove it.
 - Nothing in the plan commits to git, so no commit needs reverting.
+
+---
+
+## Applied state (2026-11-07)
+
+The orchestrator applied the edit on 2026-11-07 at ~12:22 local. The applied
+diff is exactly the two blocks above. A fresh pre-edit backup was taken first:
+
+- `~/.dsh/backups/cordis.patch.yml.20261107-122032.before-mistral-apply`
+  (sha256 `3195caf20942eabe…`, 11 entries, allowedModels 6)
+
+The rollback steps above work unchanged against this backup. Note the two
+earlier documented references to `.bak-1793966369` and the original baseline
+checksum remain valid historical fallbacks.
+
+**A restart of the DSH app is still required** for the route and allowlist to
+load.
+
+
+---
+
+## Plugin mounting (2026-11-07)
+
+The profile edit alone is not enough: the sign-in flow is registered by the
+plugin package, which mounts through the profile manifest, not the patch file.
+The following were applied after the route edit:
+
+1. Symlink:
+   `~/.dsh/profiles/desktop/node_modules/@pi-harness/dsh-plugin-mistral-subscription`
+   -> `/Users/phetoush/Documents/repos/agent-dispatcher/dsh-mistral-subscription`
+2. `~/.dsh/profiles/desktop/package.json`: dependency entry (link:) and a bundle
+   entry under `dsh.profile.bundles` (now 16).
+3. Backup of the pre-edit manifest:
+   `~/.dsh/backups/package.json.20261107-122700.before-mistral` (name is the
+   timestamp at creation).
+
+Rollback of the mount = remove the symlink, the two package.json entries, and
+restart. The route block in cordis.patch.yml can stay or go; without the plugin
+it is inert.
