@@ -1,0 +1,4 @@
+- insert:
+    - id: mistral-subscription
+      name: '@pi-harness/dsh-plugin-mistral-subscription'
+      config: {}

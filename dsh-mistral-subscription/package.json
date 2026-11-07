@@ -1,14 +1,33 @@
 {
-  "name": "dsh-mistral-subscription",
+  "name": "@pi-harness/dsh-plugin-mistral-subscription",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "main": "lib/index.js",
-  "description": "Adds a Mistral subscription sign-in and provider route to DSH, so usage bills the plan's Vibe Code quota instead of API credits.",
+  "description": "Adds a Mistral subscription sign-in flow and provider route to DSH so usage bills to the plan's Vibe Code quota",
+  "exports": {
+    ".": "./lib/index.js",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/pkce.js",
+    "lib/vibe.js",
+    "test/*.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "route.example.yml",
+    "README.md"
+  ],
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "test": "node --test test/*.test.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
   }
 }

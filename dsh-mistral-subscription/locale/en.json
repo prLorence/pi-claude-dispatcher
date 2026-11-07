@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Mistral Subscription",
+    "description": "Signs in through console.mistral.ai so Mistral requests bill to the plan's Vibe Code quota instead of API credits."
+  }
+}
