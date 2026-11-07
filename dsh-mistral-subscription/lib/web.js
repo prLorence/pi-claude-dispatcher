@@ -45,6 +45,10 @@ async function readBody(res) {
 export async function registerWebRoutes(ctx) {
 	const disposers = [];
 
+	// Outcome of the most recent attempt, surfaced through /state.
+	let lastOutcome = null;
+	let lastError = null;
+
 	// The flow lives here too: one apply per package, and this package's apply
 	// (in index.js) delegates to this function. The flow and the routes share
 	// the same key and the same credential service.
@@ -70,7 +74,13 @@ export async function registerWebRoutes(ctx) {
 					const record = await ctx.credentials.readRecord(FLOW_KEY);
 					configured = record !== undefined && record !== null;
 				} catch {}
-				sendJson(res, 200, { configured, inFlight, key: FLOW_KEY });
+				sendJson(res, 200, {
+					configured,
+					inFlight,
+					key: FLOW_KEY,
+					outcome: lastOutcome,
+					error: lastError,
+				});
 			},
 		}),
 	);
@@ -84,29 +94,49 @@ export async function registerWebRoutes(ctx) {
 					sendJson(res, 405, { error: "POST only" });
 					return;
 				}
-				const origin = `http://127.0.0.1:${req.socket.localPort ?? ""}`;
 				void readBody(req).catch(() => ({}));
+				// The browser URL arrives through the session notification, which the
+				// flow raises before polling. Start the attempt without awaiting it,
+				// respond with the URL as soon as the notification lands, and let the
+				// attempt settle in the background; the client polls /state for the
+				// outcome and navigates (or shows) the URL itself.
+				let authorizeUrl;
 				try {
-					const outcome = await ctx.authorization.begin({
-						key: FLOW_KEY,
-						interaction: {
-							notify: () => void 0,
-							prompt: () => Promise.reject(new Error("UNSUPPORTED")),
-						},
-					});
-					sendJson(res, 200, {
-						status: outcome?.status ?? "unknown",
-						message:
-							outcome?.status === "authorized"
-								? "Signed in. Mistral requests now bill to the subscription."
-								: "Sign-in did not complete.",
-					});
+					const attempt = ctx.authorization
+						.begin({
+							key: FLOW_KEY,
+							interaction: {
+								notify: (n) => {
+									if (n && typeof n.url === "string") authorizeUrl = n.url;
+								},
+								prompt: () => Promise.reject(new Error("UNSUPPORTED")),
+							},
+						})
+						.then((outcome) => {
+							lastOutcome = outcome?.status ?? "unknown";
+							return outcome;
+						})
+						.catch((error) => {
+							lastError = String(error?.code ?? error?.name ?? "error");
+							lastOutcome = "failed";
+						});
+					void attempt;
+					// The notify fires synchronously inside begin() before the flow
+					// reaches its first await, but the seam may defer the call. Give
+					// the microtask queue a beat, then answer.
+					for (let i = 0; i < 50 && authorizeUrl === undefined; i++) {
+						await new Promise((r) => setTimeout(r, 20));
+					}
+					if (authorizeUrl === undefined) {
+						sendJson(res, 200, { started: false, error: "NO_URL" });
+						return;
+					}
+					sendJson(res, 200, { started: true, url: authorizeUrl });
 				} catch (error) {
 					const code = error?.code ?? error?.name ?? "error";
 					// No token material in any error path.
-					sendJson(res, 400, { status: "failed", error: String(code) });
+					sendJson(res, 400, { started: false, error: String(code) });
 				}
-				void origin;
 			},
 		}),
 	);
