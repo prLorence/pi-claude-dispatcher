@@ -10,6 +10,7 @@
 import { challengeFor, createVerifier } from "./pkce.js";
 import { exchangeForKey, startSignIn, waitForSignIn } from "./vibe.js";
 import { registerWebRoutes } from "./web.js";
+import { createProxyServer, DEFAULT_PROXY_PORT } from "./proxy.js";
 
 /** Credential record this flow writes. `<scope>/<id>`, id lowercase-hyphenated. */
 const FLOW_KEY = "llm-pi-ai/mistral-subscription";
@@ -127,7 +128,8 @@ export const inject = ["authorization", "credentials"];
 /**
  * Registers the flow (here, exactly once — web.js never does) plus the
  * settings surface (state / sign-in / sign-out / cancel routes for the Client
- * card), and returns ONE disposer covering flow + routes.
+ * card) and, when `config.proxyPort` is set, the localhost request normalizer
+ * (lib/proxy.js). Returns ONE disposer covering flow + routes + proxy.
  *
  * The routes are scoped on `["webServer", "connection"]`: the fence reads the
  * connection service from the injected scope, and a composition without it
@@ -136,12 +138,23 @@ export const inject = ["authorization", "credentials"];
  * must not be a hard requirement of the whole plugin.
  */
 export async function apply(ctx, config = {}) {
-  void config;
   const flow = createFlow({ key: FLOW_KEY, credentials: ctx.credentials });
   const disposeFlow = ctx.authorization.registerFlow(flow);
   const disposeRoutes = ctx.inject(["webServer", "connection"], (scoped) =>
     registerWebRoutes(scoped),
   );
+
+  // Request normalizer (lib/proxy.js). Enabled by `proxyPort` in the bundle
+  // config; absent (tests, minimal compositions) means no listener starts.
+  // `failoverModels` (optional) orders the 429 capacity failover.
+  let proxy = null;
+  let disposeProxy = async () => {};
+  if (typeof config.proxyPort === "number" && Number.isInteger(config.proxyPort) && config.proxyPort > 0) {
+    proxy = createProxyServer({ failoverModels: config.failoverModels });
+    const bound = await proxy.listen(config.proxyPort);
+    if (!bound.alreadyRunning) disposeProxy = () => proxy.close();
+  }
+
   return () => {
     let failure;
     try {
@@ -153,6 +166,12 @@ export async function apply(ctx, config = {}) {
       if (typeof disposeFlow === "function") disposeFlow();
     } catch (error) {
       failure ??= error;
+    }
+    const proxyDispose = disposeProxy();
+    if (proxyDispose && typeof proxyDispose.then === "function") {
+      return proxyDispose.then(() => {
+        if (failure !== undefined) throw failure;
+      });
     }
     if (failure !== undefined) throw failure;
   };

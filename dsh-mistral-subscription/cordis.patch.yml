@@ -1,4 +1,12 @@
 - insert:
     - id: mistral-subscription
       name: '@pi-harness/dsh-plugin-mistral-subscription'
-      config: {}
+      config:
+        # Starts the localhost request normalizer (lib/proxy.js) on this port;
+        # the llm-pi-ai route's baseURL points at it. Remove to disable.
+        proxyPort: 8477
+        # 429 failover order (after the requested model): capacity-starved
+        # models fall through to these, e.g. deepseek flash -> medium -> small.
+        failoverModels:
+          - mistral-medium-2604
+          - mistral-small-latest

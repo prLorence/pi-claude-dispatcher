@@ -159,6 +159,47 @@ has no Vibe Code entitlement at all; the subscription does not cover this path.
 The plugin itself has no usage endpoint. It only makes the request
 authenticate with the subscription's key; nothing in it reports spend.
 
+## Request normalizer (why the baseURL is localhost)
+
+pi-ai replays session history verbatim. A conversation previously run on another
+provider can carry `reasoning_content` on assistant messages, and Mistral's API
+rejects that field on requests with `422 extra_forbidden`. The plugin therefore
+starts a localhost-only normalizer (`lib/proxy.js`) on `proxyPort` (default
+8477, set in the bundle config), and the route's `baseURL` points at it:
+`http://127.0.0.1:8477/v1`. It deletes `reasoning_content`, `reasoning` and
+`reasoning_text` from assistant messages before forwarding to
+`https://api.mistral.ai`. Guards: 127.0.0.1 bind, `/v1/*` paths only, the
+`Authorization` header passes through untouched (the key is never read here),
+non-JSON bodies forward byte-for-byte, and streaming (SSE) pipes through
+unbuffered. If the port is already bound — a previous copy of the same proxy —
+the new instance does not own it and lets it serve. The proxy must run inside
+the harness runtime: Mistral's TLS edge rejects standalone node and bun
+clients with 401, while the Electron network stack passes.
+
+The normalizer also repairs two cross-provider history-replay failure modes
+and Mistral's own capacity errors:
+
+- **Foreign tool-call markup.** Conversations previously run on DeepSeek/GLM
+  models carry that family's native tool-call syntax (`｜DSML｜ invoke …`) in
+  assistant text. A non-DSML model imitates the pattern instead of emitting
+  proper tool calls, and the unparsable imitation surfaces as raw text. For
+  models whose ids do not start with `deepseek`, the normalizer cuts
+  assistant content at the first DSML marker.
+- **Capacity 429 failover.** A `429 backend_out_of_capacity` (Mistral code
+  3505) or rate-limit response on `/v1/chat/completions` is retried down the
+  `failoverModels` order (default `mistral-medium-2604` →
+  `mistral-small-latest`; the requested model is always tried first). A
+  failover answer carries `x-mistral-proxy-model: <id>` naming the model that
+  actually served it. Non-capacity 429s do not switch models.
+- **GLM content-block translation.** Mistral serves the Z.ai GLM family
+  (`zai-glm-5-3`, `zai-glm-5-3-flash`, `glm-5-2`) with `content` as typed
+  array blocks — `{type: "thinking", …}` for reasoning, a final plain string
+  or `{type: "text"}` block for the answer. pi-ai reads only string content
+  and would fail with `text-delta text must be a string`. For GLM-family
+  models the normalizer translates: thinking text maps to the standard
+  `reasoning_content` field, answer text stays `content`, on both the stream
+  and non-stream paths.
+
 ## Limitations
 
 - **No reasoning-effort control on this route, enforced.** Every model declares

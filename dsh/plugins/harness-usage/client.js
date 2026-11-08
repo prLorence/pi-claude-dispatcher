@@ -339,7 +339,16 @@ window.__ModuleLoader__.load({
 				{
 					key: item.key || label,
 					title: tooltip.join(' · '),
-					style: { display: 'grid', justifyItems: 'center', gap: 3, width: 84, minWidth: 0, padding: '2px 0 0' },
+					style: {
+					display: 'grid',
+					gridTemplateColumns: '84px',
+					alignContent: 'start',
+					justifyItems: 'center',
+					gap: 3,
+					width: 84,
+					minWidth: 0,
+					padding: '2px 0 0',
+				},
 				},
 				h(Donut, { percent, color, center: h(ProviderMark, { provider, size: 17 }) }),
 				h(

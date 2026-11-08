@@ -16,6 +16,7 @@
     "lib/vibe.js",
     "lib/web.js",
     "lib/fence.js",
+    "lib/proxy.js",
     "cordis.patch.yml",
     "locale/*.json",
     "route.example.yml",

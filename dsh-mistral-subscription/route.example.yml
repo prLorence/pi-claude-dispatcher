@@ -16,7 +16,13 @@
     providers:
       mistral-subscription:
         api: openai-completions
-        baseURL: https://api.mistral.ai/v1
+        # Through the plugin's localhost normalizer (lib/proxy.js), NOT the
+        # origin: pi-ai replays session history verbatim and a conversation
+        # previously run on another provider can carry `reasoning_content` on
+        # assistant messages, which Mistral rejects with 422 extra_forbidden.
+        # The normalizer strips those fields before forwarding to
+        # https://api.mistral.ai. Port must match the plugin bundle config.
+        baseURL: http://127.0.0.1:8477/v1
         # Mistral's API rejects OpenAI-only body fields with 422
         # extra_forbidden: `store` and the `developer` role. Both are
         # disabled here.
@@ -41,6 +47,29 @@
             input:
               - text
               - image
+            reasoningEfforts: false
+          # Z.ai GLM family served by Mistral: nonstandard content blocks
+          # (thinking arrays + text/string answer). The normalizer translates
+          # them to reasoning_content/content on the way back — without it
+          # pi-ai fails with "text-delta text must be a string". Text-only:
+          # image input unverified through this route.
+          - id: zai-glm-5-3
+            contextWindow: 1048576
+            maxTokens: 32768
+            input:
+              - text
+            reasoningEfforts: false
+          - id: zai-glm-5-3-flash
+            contextWindow: 1048576
+            maxTokens: 32768
+            input:
+              - text
+            reasoningEfforts: false
+          - id: glm-5-2
+            contextWindow: 1048576
+            maxTokens: 32768
+            input:
+              - text
             reasoningEfforts: false
           - id: mistral-medium-2604
             contextWindow: 262144
@@ -116,9 +145,12 @@
 #                            |   is probed
 # mistral-large-4            | arrays -> excluded; returns when
 #                            |   mistral-conversations is reachable
-# glm-5-2                    | arrays (GLM family) -> excluded; same return path
-# zai-glm-5-3                | arrays -> excluded; same return path
-# zai-glm-5-3-flash          | arrays -> excluded; same return path
+# glm-5-2                    | arrays (GLM family); thinking arrays + string
+#                            |   answer translate in the normalizer -> ACTIVE
+# zai-glm-5-3                | arrays (GLM family) -> ACTIVE via the
+#                            |   normalizer's GLM translation
+# zai-glm-5-3-flash          | arrays (GLM family) -> ACTIVE via the
+#                            |   normalizer's GLM translation
 # labs-leanstral-1-5-1       | org-admin gated -> excluded
 # Voxtral Small Transcribe   | transcription model behind the chat flag
 #                            |   -> excluded

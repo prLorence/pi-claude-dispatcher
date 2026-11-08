@@ -156,6 +156,29 @@ const EXPECTED_MODELS = [
     input: ["text", "image"],
     reasoningEfforts: false,
   },
+  // GLM trio: text-only (image unverified through this route), served via
+  // the normalizer's GLM content-block translation.
+  {
+    id: "zai-glm-5-3",
+    contextWindow: 1048576,
+    maxTokens: 32768,
+    input: ["text"],
+    reasoningEfforts: false,
+  },
+  {
+    id: "zai-glm-5-3-flash",
+    contextWindow: 1048576,
+    maxTokens: 32768,
+    input: ["text"],
+    reasoningEfforts: false,
+  },
+  {
+    id: "glm-5-2",
+    contextWindow: 1048576,
+    maxTokens: 32768,
+    input: ["text"],
+    reasoningEfforts: false,
+  },
   {
     id: "mistral-medium-2604",
     contextWindow: 262144,
@@ -213,7 +236,9 @@ test("route.example.yml is a single YAML document holding the entry list", () =>
 
 test("provider keeps the openai-completions route with the compat overrides", () => {
   assert.equal(route.api, "openai-completions");
-  assert.equal(route.baseURL, "https://api.mistral.ai/v1");
+  // Through the plugin's localhost normalizer, not the origin: it strips
+  // reasoning fields pi-ai replays from other providers' history (422 fix).
+  assert.equal(route.baseURL, "http://127.0.0.1:8477/v1");
   assert.deepEqual(route.compat, {
     supportsStore: false,
     supportsDeveloperRole: false,
@@ -226,12 +251,14 @@ test("active model set matches, deepseek-v4-1-flash-1017 first", () => {
   assert.equal(route.models[0].id, "deepseek-v4-1-flash-1017");
 });
 
-test("no GLM or mistral-large-4 model is advertised", () => {
+test("GLM models are translated by the normalizer, mistral-large-4 is not advertised", () => {
   const ids = route.models.map((model) => model.id);
-  assert.deepEqual(
-    ids.filter((id) => /(^|-)glm-|^mistral-large-4/.test(id)),
-    [],
-  );
+  // GLM family IS advertised now — the proxy translates its content blocks.
+  assert.deepEqual(ids.filter((id) => id.startsWith("zai-glm") || id === "glm-5-2"), [
+    "zai-glm-5-3",
+    "zai-glm-5-3-flash",
+    "glm-5-2",
+  ]);
   assert.ok(!ids.includes("mistral-large-4"), "mistral-large-4 streams arrays");
   assert.ok(!ids.includes("mistral-large-2512"), "mistral-large-2512 is unverified and held out");
 });
