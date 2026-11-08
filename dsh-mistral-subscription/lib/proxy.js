@@ -17,10 +17,16 @@
  * (Mistral code 3505) or rate-limit response is retried on the next model of
  * `failoverModels` (plugin config), transparently to the caller.
  *
+ * On the way back it translates Mistral's content-block arrays (thinking and
+ * text blocks) into the plain `reasoning_content`/`content` strings pi-ai
+ * parses — keyed on the response shape, so it covers every model whose
+ * thinking output takes that form, not one model family.
+ *
  * Scope guards: listens on 127.0.0.1 only, forwards `/v1/*` paths only; the
  * `Authorization` header passes through untouched (the key is never read,
  * logged, or added here); a body that does not parse as JSON forwards
- * byte-for-byte; streaming (SSE) responses pipe through chunk by chunk.
+ * byte-for-byte; streaming (SSE) responses are line-buffered and each event
+ * passes through (translated when it carries content blocks).
  */
 
 import { createServer } from "node:http";
@@ -150,29 +156,32 @@ export function createProxyServer({
 			res.end();
 			return;
 		}
-		if (isGlmModel(model)) {
-			// GLM responses carry content blocks pi-ai cannot parse: translate.
-			if ((upstreamResponse.headers.get("content-type") ?? "").includes("text/event-stream")) {
-				Readable.fromWeb(upstreamResponse.body)
-					.pipe(createGlmSseTransform())
-					.pipe(res)
-					.on("error", () => res.end());
-				return;
-			}
-			const text = await upstreamResponse.text();
-			try {
-				res.end(JSON.stringify(translateGlmResponseBody(JSON.parse(text))));
-			} catch {
-				res.end(text);
-			}
+		// Translation is keyed on the RESPONSE SHAPE, not the model id: with
+		// thinking on, every model this route serves can emit content-block
+		// arrays (GLM, but also mistral-medium-2604, mistral-small-latest and
+		// deepseek-v4-1-flash-1017), and pi-ai fails on them with
+		// `text-delta text must be a string`. Both translators are no-ops when
+		// content is a plain string, so they run for every response.
+		if ((upstreamResponse.headers.get("content-type") ?? "").includes("text/event-stream")) {
+			Readable.fromWeb(upstreamResponse.body)
+				.pipe(createGlmSseTransform())
+				.pipe(res)
+				.on("error", () => res.end());
 			return;
 		}
-		const stream = Readable.fromWeb(upstreamResponse.body);
-		stream.pipe(res);
-		stream.on("error", () => {
-			// Mid-stream failure after the head is sent: only the socket can end.
+		let text;
+		try {
+			text = await upstreamResponse.text();
+		} catch {
 			res.end();
-		});
+			return;
+		}
+		try {
+			res.end(JSON.stringify(translateGlmResponseBody(JSON.parse(text))));
+		} catch {
+			// Not JSON (or not a chat body): pass it through as received.
+			res.end(text);
+		}
 	}
 
 	const server = createServer(async (req, res) => {
@@ -215,6 +224,12 @@ export function createProxyServer({
 				if (model !== requested) {
 					const parsed = JSON.parse(body.toString("utf-8"));
 					parsed.model = model;
+					// The failover model may not accept the requested model's
+					// level (mistral-medium/small take only high/none and answer
+					// 400 code 3051 otherwise), so the level is dropped: the
+					// failover target answers with its default (no thinking)
+					// instead of hard-failing.
+					delete parsed.reasoning_effort;
 					attemptBody = Buffer.from(JSON.stringify(parsed), "utf-8");
 				}
 				const upstreamResponse = await forward(req.url, headers, attemptBody);
@@ -268,24 +283,19 @@ export function createProxyServer({
 }
 
 /**
- * GLM content-block translation.
+ * Content-block translation.
  *
- * Mistral serves the Z.ai GLM family with a nonstandard content shape:
- * reasoning arrives as `content` array blocks of `{type: "thinking",
+ * The shape is GLM-style (`translateGlm*` keeps the name), but ANY thinking
+ * model Mistral serves can emit it: with thinking on, the Z.ai GLM family,
+ * mistral-medium-2604, mistral-small-latest and deepseek-v4-1-flash-1017 all
+ * return reasoning as `content` array blocks of `{type: "thinking",
  * thinking: [{type: "text", text}]}` and the answer either as a final plain
  * string chunk (stream) or a `{type: "text"}` block (non-stream). pi-ai's
- * openai-completions parser reads only STRING content, so raw GLM output
- * fails as `text-delta text must be a string`. The proxy translates: thinking
- * text maps to the standard `reasoning_content` field, text blocks and string
- * chunks stay `content`.
+ * openai-completions parser reads only STRING content, so raw output fails as
+ * `text-delta text must be a string`. The proxy translates on every response:
+ * thinking text maps to the standard `reasoning_content` field, text blocks
+ * and string chunks stay `content`; plain-string content is untouched.
  */
-
-/** Model-id prefixes whose responses carry GLM content blocks. */
-const GLM_MODEL_PREFIXES = ["zai-glm", "glm-"];
-
-export function isGlmModel(model) {
-	return typeof model === "string" && GLM_MODEL_PREFIXES.some((prefix) => model.startsWith(prefix));
-}
 
 /** Splits one content-array block list into { reasoning, text } strings. */
 export function translateGlmBlocks(blocks) {

@@ -15,7 +15,6 @@ import test from "node:test";
 import {
 	createGlmSseTransform,
 	createProxyServer,
-	isGlmModel,
 	sanitizeBody,
 	translateGlmResponseBody,
 	translateGlmStreamChunk,
@@ -230,6 +229,66 @@ test("proxy fails over to the next model on a capacity 429", async (t) => {
 	// The failover answer names the model that actually served it.
 });
 
+test("failover switches the model and drops the requested reasoning_effort", async (t) => {
+	// medium/small take only high/none; a deepseek level (xhigh) would 400 with
+	// code 3051 on the failover target, so the retried body carries no level.
+	const bodies = [];
+	const proxy = createProxyServer({
+		failoverModels: ["mistral-medium-2604"],
+		fetchImpl: async (url, init) => {
+			bodies.push(JSON.parse(Buffer.from(init.body).toString()));
+			if (bodies.length === 1) {
+				return new Response(CAPACITY_429, { status: 429, headers: { "content-type": "application/json" } });
+			}
+			return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+		},
+	});
+	const { port } = await proxy.listen(0);
+	t.after(proxy.close);
+
+	const answer = await new Promise((resolve, reject) => {
+		const req = httpRequest(
+			{
+				host: "127.0.0.1",
+				port,
+				path: "/v1/chat/completions",
+				method: "POST",
+				headers: { "content-type": "application/json" },
+			},
+			(res) => {
+				const chunks = [];
+				res.on("data", (chunk) => chunks.push(chunk));
+				res.on("end", () =>
+					resolve({
+						status: res.statusCode,
+						model: res.headers["x-mistral-proxy-model"],
+						body: Buffer.concat(chunks),
+					}),
+				);
+			},
+		);
+		req.on("error", reject);
+		req.end(
+			JSON.stringify({
+				model: "deepseek-v4-1-flash-1017",
+				messages: [{ role: "user", content: "hi" }],
+				reasoning_effort: "xhigh",
+			}),
+		);
+	});
+
+	assert.equal(answer.status, 200);
+	assert.equal(answer.model, "mistral-medium-2604", "failover answer names the serving model");
+	assert.deepEqual(
+		bodies.map((body) => body.model),
+		["deepseek-v4-1-flash-1017", "mistral-medium-2604"],
+	);
+	assert.equal(bodies[0].reasoning_effort, "xhigh", "the first attempt keeps the requested level");
+	assert.ok(!("reasoning_effort" in bodies[1]), "the retried body carries no reasoning_effort");
+	// Everything else in the body survives the failover rewrite.
+	assert.deepEqual(bodies[1].messages, [{ role: "user", content: "hi" }]);
+});
+
 test("proxy exhausts candidates and replays the last 429 body", async (t) => {
 	const models = [];
 	const proxy = createProxyServer({
@@ -321,15 +380,100 @@ test("proxy serves a GLM SSE stream translated when the model is GLM", async (t)
 	assert.ok(!text.includes('"type":"thinking"'), "raw thinking blocks must not reach the client");
 });
 
-test("proxy does NOT translate SSE for non-GLM models", async (t) => {
+test("plain-string SSE passes through unchanged for any model, GLM included", async (t) => {
 	const sse = 'data: {"choices":[{"delta":{"content":"OK"}}]}\n\ndata: [DONE]\n\n';
+	for (const model of ["mistral-small-latest", "deepseek-v4-1-flash-1017", "zai-glm-5-3"]) {
+		const proxy = createProxyServer({
+			fetchImpl: async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } }),
+		});
+		const { port } = await proxy.listen(0);
+		t.after(proxy.close);
+		const answer = await proxyPost(port, "/v1/chat/completions", JSON.stringify({ model, messages: [] }));
+		const text = answer.body.toString();
+		assert.equal(text, sse, `${model}: string content must pass through byte-for-byte`);
+		assert.ok(!text.includes("reasoning_content"), `${model}: no spurious reasoning_content`);
+	}
+});
+
+test("thinking arrays from a NON-GLM model are translated on the SSE stream", async (t) => {
+	// mistral-medium-2604 with thinking on emits the same content-block arrays
+	// as GLM; keying the translation on the model id used to pass them through
+	// and pi-ai failed with "text-delta text must be a string".
+	const sse = [
+		'data: {"choices":[{"delta":{"role":"assistant","content":""}}]}',
+		'',
+		'data: {"choices":[{"delta":{"content":[{"type":"thinking","thinking":[{"type":"text","text":"thi"}],"closed":true}]}}]}',
+		'',
+		'data: {"choices":[{"delta":{"content":[{"type":"text","text":"OK"}]}}]}',
+		'',
+		'data: [DONE]',
+		'',
+	].join("\n");
 	const proxy = createProxyServer({
 		fetchImpl: async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } }),
 	});
 	const { port } = await proxy.listen(0);
 	t.after(proxy.close);
+	const answer = await proxyPost(
+		port,
+		"/v1/chat/completions",
+		JSON.stringify({ model: "mistral-medium-2604", messages: [], reasoning_effort: "high" }),
+	);
+	const text = answer.body.toString();
+	const events = text.split("\n\n").filter((block) => block.startsWith("data: ") && !block.includes("[DONE]"));
+	const deltas = events.map((event) => JSON.parse(event.slice(6)).choices[0].delta);
+	assert.equal(deltas[1].reasoning_content, "thi");
+	assert.equal(deltas[1].content, undefined);
+	assert.equal(deltas[2].content, "OK");
+	assert.ok(!text.includes('"type":"thinking"'), "raw thinking blocks must not reach the client");
+});
+
+test("a content array in a non-stream body is translated for a non-GLM model", async (t) => {
+	const payload = JSON.stringify({
+		choices: [
+			{
+				message: {
+					role: "assistant",
+					content: [
+						{ type: "thinking", thinking: [{ type: "text", text: "reason" }], closed: true },
+						{ type: "text", text: "OK" },
+					],
+				},
+			},
+		],
+	});
+	const proxy = createProxyServer({
+		fetchImpl: async () => new Response(payload, { status: 200, headers: { "content-type": "application/json" } }),
+	});
+	const { port } = await proxy.listen(0);
+	t.after(proxy.close);
+	const answer = await proxyPost(port, "/v1/chat/completions", JSON.stringify({ model: "deepseek-v4-1-flash-1017", messages: [] }));
+	const body = JSON.parse(answer.body.toString());
+	assert.equal(body.choices[0].message.reasoning_content, "reason");
+	assert.equal(body.choices[0].message.content, "OK");
+});
+
+test("a plain-string non-stream body passes through without reasoning_content", async (t) => {
+	const payload = JSON.stringify({ choices: [{ message: { role: "assistant", content: "OK" } }] });
+	const proxy = createProxyServer({
+		fetchImpl: async () => new Response(payload, { status: 200, headers: { "content-type": "application/json" } }),
+	});
+	const { port } = await proxy.listen(0);
+	t.after(proxy.close);
 	const answer = await proxyPost(port, "/v1/chat/completions", JSON.stringify({ model: "mistral-small-latest", messages: [] }));
-	assert.equal(answer.body.toString(), sse);
+	const body = JSON.parse(answer.body.toString());
+	assert.equal(body.choices[0].message.content, "OK");
+	assert.ok(!("reasoning_content" in body.choices[0].message), "no spurious reasoning_content");
+});
+
+test("a non-JSON upstream body passes through unchanged", async (t) => {
+	const proxy = createProxyServer({
+		fetchImpl: async () => new Response("not json at all", { status: 200, headers: { "content-type": "text/plain" } }),
+	});
+	const { port } = await proxy.listen(0);
+	t.after(proxy.close);
+	const answer = await proxyPost(port, "/v1/chat/completions", JSON.stringify({ model: "m", messages: [] }));
+	assert.equal(answer.body.toString(), "not json at all");
 });
 
 test("GLM SSE survives hostile chunk splits (mid-event, mid-multibyte-char)", async (t) => {

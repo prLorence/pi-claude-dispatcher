@@ -111,18 +111,28 @@ complete inventory, with per-model stream verdicts, lives at the bottom of
 probe; `mistral-large-4` and the `zai-glm-*` models stream typed-array blocks
 and are excluded.
 
-### No reasoning picker, by design
+### Reasoning pickers, live-verified per model
 
-Every model above declares `reasoningEfforts: false`. Sending a
-`reasoning_effort` parameter makes even the string-verdict models stream
-typed-array content blocks, which pi-ai's `openai-completions` parser rejects
-with `text-delta text must be a string` — and that parser reads only STRING
-content; no compat flag, model override or body field can teach it to read
-arrays. The parser that can (`mistral-conversations`) is not reachable from a
-hand-declared route: DSH's `PROTOCOLS` registry only maps
-`openai-completions`, `openai-responses` and `anthropic-messages`. When
-`mistral-conversations` becomes reachable upstream, the per-model
-`reasoningEfforts` entries go and a picker returns.
+Mistral's API now accepts `reasoning_effort` as a top-level string (probed
+2026-11-08). The route sets `compat.supportsReasoningEffort: true` and each
+model declares only the levels its API actually takes:
+
+| id | ladder |
+|---|---|
+| `deepseek-v4-1-flash-1017` | `off: none`, low, high, xhigh, max |
+| `mistral-medium-2604` | `off: none`, high |
+| `mistral-small-latest` | `off: none`, high |
+| `glm-5-2` | `off: none`, low, high, max |
+| `zai-glm-5-3`, `zai-glm-5-3-flash` | low, high, max — **no `off`**: `none` does not disable GLM thinking, so the level is omitted (an undeclared level is excluded from the picker) |
+| `ministral-*`, `codestral-2508` | `reasoningEfforts: false` — the API answers `reasoning_effort is not enabled for this model` |
+
+With thinking on, every model streams typed-array content blocks — which
+pi-ai's `openai-completions` parser rejects with `text-delta text must be a
+string` (it reads only STRING content). The normalizer translates them (see
+below). The parser that would read them natively
+(`mistral-conversations`) is not reachable from a hand-declared route: DSH's
+`PROTOCOLS` registry only maps `openai-completions`, `openai-responses` and
+`anthropic-messages`.
 
 ## Signing out
 
@@ -170,8 +180,9 @@ starts a localhost-only normalizer (`lib/proxy.js`) on `proxyPort` (default
 `reasoning_text` from assistant messages before forwarding to
 `https://api.mistral.ai`. Guards: 127.0.0.1 bind, `/v1/*` paths only, the
 `Authorization` header passes through untouched (the key is never read here),
-non-JSON bodies forward byte-for-byte, and streaming (SSE) pipes through
-unbuffered. If the port is already bound — a previous copy of the same proxy —
+non-JSON bodies forward byte-for-byte, and streaming (SSE) is line-buffered
+per event (translated when an event carries content blocks, otherwise passed
+through unchanged). If the port is already bound — a previous copy of the same proxy —
 the new instance does not own it and lets it serve. The proxy must run inside
 the harness runtime: Mistral's TLS edge rejects standalone node and bun
 clients with 401, while the Electron network stack passes.
@@ -191,20 +202,30 @@ and Mistral's own capacity errors:
   `mistral-small-latest`; the requested model is always tried first). A
   failover answer carries `x-mistral-proxy-model: <id>` naming the model that
   actually served it. Non-capacity 429s do not switch models.
-- **GLM content-block translation.** Mistral serves the Z.ai GLM family
-  (`zai-glm-5-3`, `zai-glm-5-3-flash`, `glm-5-2`) with `content` as typed
-  array blocks — `{type: "thinking", …}` for reasoning, a final plain string
-  or `{type: "text"}` block for the answer. pi-ai reads only string content
-  and would fail with `text-delta text must be a string`. For GLM-family
-  models the normalizer translates: thinking text maps to the standard
-  `reasoning_content` field, answer text stays `content`, on both the stream
-  and non-stream paths.
+- **Content-block translation, keyed on the response shape.** With thinking
+  on, *any* model this route serves — the Z.ai GLM family
+  (`zai-glm-5-3`, `zai-glm-5-3-flash`, `glm-5-2`) but also
+  `mistral-medium-2604`, `mistral-small-latest` and
+  `deepseek-v4-1-flash-1017` — returns `content` as typed array blocks:
+  `{type: "thinking", …}` for reasoning, a final plain string or
+  `{type: "text"}` block for the answer. pi-ai reads only string content and
+  would fail with `text-delta text must be a string`. The normalizer
+  translates on every response (the translators are no-ops for plain-string
+  content): thinking text maps to the standard `reasoning_content` field,
+  answer text stays `content`, on both the stream and non-stream paths.
+- **Reasoning effort on failover.** When the request switches to a failover
+  model, the normalizer deletes `reasoning_effort` before forwarding: the
+  failover model may not accept the requested model's level (mistral-medium
+  and mistral-small take only `high`/`none` and would answer 400 code 3051),
+  so it answers with its default — no thinking — instead of hard-failing.
 
 ## Limitations
 
-- **No reasoning-effort control on this route, enforced.** Every model declares
-  `reasoningEfforts: false` and the route's compat disables
-  `supportsReasoningEffort`; see "No reasoning picker, by design" above.
+- **Reasoning levels are per model, not free-form.** Each model offers only the
+  levels its API accepts (see "Reasoning pickers, live-verified per model");
+  a model outside the ladder set stays `reasoningEfforts: false`. A failover
+  answer does not carry the requested level — it runs at the failover model's
+  default.
 - **Partner-purchased plans cannot enable pay-as-you-go.** With such a plan, when
   the included quota is exhausted there is no overflow billing to fall back on:
   it is a hard stop, not a slower path. Requests fail until the quota resets or

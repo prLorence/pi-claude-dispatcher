@@ -154,44 +154,44 @@ const EXPECTED_MODELS = [
     contextWindow: 1048576,
     maxTokens: 32768,
     input: ["text", "image"],
-    reasoningEfforts: false,
+    reasoningEfforts: { off: "none", low: "low", high: "high", xhigh: "xhigh", max: "max" },
   },
   // GLM trio: text-only (image unverified through this route), served via
-  // the normalizer's GLM content-block translation.
+  // the normalizer's shape-keyed content-block translation.
   {
     id: "zai-glm-5-3",
     contextWindow: 1048576,
     maxTokens: 32768,
     input: ["text"],
-    reasoningEfforts: false,
+    reasoningEfforts: { low: "low", high: "high", max: "max" },
   },
   {
     id: "zai-glm-5-3-flash",
     contextWindow: 1048576,
     maxTokens: 32768,
     input: ["text"],
-    reasoningEfforts: false,
+    reasoningEfforts: { low: "low", high: "high", max: "max" },
   },
   {
     id: "glm-5-2",
     contextWindow: 1048576,
     maxTokens: 32768,
     input: ["text"],
-    reasoningEfforts: false,
+    reasoningEfforts: { off: "none", low: "low", high: "high", max: "max" },
   },
   {
     id: "mistral-medium-2604",
     contextWindow: 262144,
     maxTokens: 32768,
     input: ["text", "image"],
-    reasoningEfforts: false,
+    reasoningEfforts: { off: "none", high: "high" },
   },
   {
     id: "mistral-small-latest",
     contextWindow: 262144,
     maxTokens: 32768,
     input: ["text", "image"],
-    reasoningEfforts: false,
+    reasoningEfforts: { off: "none", high: "high" },
   },
   {
     id: "ministral-14b-2512",
@@ -242,7 +242,8 @@ test("provider keeps the openai-completions route with the compat overrides", ()
   assert.deepEqual(route.compat, {
     supportsStore: false,
     supportsDeveloperRole: false,
-    supportsReasoningEffort: false,
+    // reasoning_effort is a top-level string now (probed 2026-11-08).
+    supportsReasoningEffort: true,
   });
 });
 
@@ -263,13 +264,35 @@ test("GLM models are translated by the normalizer, mistral-large-4 is not advert
   assert.ok(!ids.includes("mistral-large-2512"), "mistral-large-2512 is unverified and held out");
 });
 
-test("every model declares reasoningEfforts: false explicitly", () => {
+test("non-reasoning models keep reasoningEfforts: false", () => {
   for (const model of route.models) {
     assert.ok(
       Object.hasOwn(model, "reasoningEfforts"),
       `${model.id} must declare reasoningEfforts explicitly`,
     );
-    assert.equal(model.reasoningEfforts, false, `${model.id} must disable the reasoning ladder`);
+    if (/^(ministral|codestral)/.test(model.id)) {
+      // "reasoning_effort is not enabled for this model" — keep them off.
+      assert.equal(model.reasoningEfforts, false, `${model.id} must disable the reasoning ladder`);
+    }
+  }
+});
+
+test("reasoning ladders are the live-verified per-model sets", () => {
+  const ladders = Object.fromEntries(
+    route.models.filter((model) => model.reasoningEfforts !== false).map((model) => [model.id, model.reasoningEfforts]),
+  );
+  assert.deepEqual(ladders, {
+    "deepseek-v4-1-flash-1017": { off: "none", low: "low", high: "high", xhigh: "xhigh", max: "max" },
+    // zai: no `off` — "none" does not disable GLM thinking.
+    "zai-glm-5-3": { low: "low", high: "high", max: "max" },
+    "zai-glm-5-3-flash": { low: "low", high: "high", max: "max" },
+    "glm-5-2": { off: "none", low: "low", high: "high", max: "max" },
+    "mistral-medium-2604": { off: "none", high: "high" },
+    "mistral-small-latest": { off: "none", high: "high" },
+  });
+  // Every level but `off` carries a wire string; every ladder offers one.
+  for (const [id, ladder] of Object.entries(ladders)) {
+    assert.ok(Object.keys(ladder).some((level) => level !== "off"), `${id} offers no level beyond off`);
   }
 });
 

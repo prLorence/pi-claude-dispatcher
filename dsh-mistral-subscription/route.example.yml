@@ -3,14 +3,14 @@
 # Single YAML document: a top-level LIST of settings entries, matching the
 # shape of ~/.dsh/profiles/*/cordis.patch.yml. Merge the entries you need.
 #
-# The model list is deliberately narrower than the reference `mistral`
-# provider (audit minor: uncommented divergence). With `api:
-# openai-completions`, pi-ai's delta parser reads only STRING content;
-# Mistral streams typed-array content blocks as soon as thinking is engaged.
-# No compat flag, model override or body field teaches that parser to read
-# arrays — the parser that can (`mistral-conversations`) is not reachable
-# from a hand-declared route. The complete inventory and the stream-shape
-# evidence are at the bottom of this file.
+# With `api: openai-completions`, pi-ai's delta parser reads only STRING
+# content; Mistral streams typed-array content blocks as soon as thinking is
+# engaged. The parser itself cannot be taught to read arrays — the parser
+# that can (`mistral-conversations`) is not reachable from a hand-declared
+# route — so the localhost normalizer translates the arrays into strings on
+# the way back, keyed on the response shape (see the compat block below).
+# Reasoning ladders below are live-verified per model. The complete inventory
+# and the stream-shape evidence are at the bottom of this file.
 - id: llm-pi-ai
   config:
     providers:
@@ -27,16 +27,17 @@
         # extra_forbidden: `store` and the `developer` role. Both are
         # disabled here.
         #
-        # supportsReasoningEffort: false is load-bearing for a second reason:
-        # sending reasoning_effort makes mistral-medium-2604 and
-        # mistral-small-latest stream typed-array content, which fails as
-        # `text-delta text must be a string`. Every model below therefore
-        # also declares `reasoningEfforts: false`, so no picker offers a
-        # level that would break the route.
+        # reasoning_effort IS accepted, as a top-level string (probed
+        # 2026-11-08); the old `thinking:{...}` object shape still 422s, so
+        # only the string form is ever sent. Thinking on makes every model
+        # below stream typed-array content, which the normalizer translates
+        # into reasoning_content/content — the translation is keyed on the
+        # response SHAPE now, not on a GLM model id, so mistral-medium/small
+        # and deepseek flash are covered too.
         compat:
           supportsStore: false
           supportsDeveloperRole: false
-          supportsReasoningEffort: false
+          supportsReasoningEffort: true
         # ACTIVE set. deepseek-v4-1-flash-1017 is the primary model: this
         # route exists to serve it. Ordered, first model wins the picker
         # default in some surfaces.
@@ -47,44 +48,64 @@
             input:
               - text
               - image
-            reasoningEfforts: false
+            reasoningEfforts:
+              off: none
+              low: low
+              high: high
+              xhigh: xhigh
+              max: max
           # Z.ai GLM family served by Mistral: nonstandard content blocks
           # (thinking arrays + text/string answer). The normalizer translates
           # them to reasoning_content/content on the way back — without it
-          # pi-ai fails with "text-delta text must be a string". Text-only:
-          # image input unverified through this route.
+          # pi-ai fails with "text-delta text must be a string". No `off`
+          # level: "none" does not disable GLM thinking, so the ladder simply
+          # omits it. Text-only: image input unverified through this route.
           - id: zai-glm-5-3
             contextWindow: 1048576
             maxTokens: 32768
             input:
               - text
-            reasoningEfforts: false
+            reasoningEfforts:
+              low: low
+              high: high
+              max: max
           - id: zai-glm-5-3-flash
             contextWindow: 1048576
             maxTokens: 32768
             input:
               - text
-            reasoningEfforts: false
+            reasoningEfforts:
+              low: low
+              high: high
+              max: max
           - id: glm-5-2
             contextWindow: 1048576
             maxTokens: 32768
             input:
               - text
-            reasoningEfforts: false
+            reasoningEfforts:
+              off: none
+              low: low
+              high: high
+              max: max
           - id: mistral-medium-2604
             contextWindow: 262144
             maxTokens: 32768
             input:
               - text
               - image
-            reasoningEfforts: false
+            reasoningEfforts:
+              off: none
+              high: high
           - id: mistral-small-latest
             contextWindow: 262144
             maxTokens: 32768
             input:
               - text
               - image
-            reasoningEfforts: false
+            reasoningEfforts:
+              off: none
+              high: high
           - id: ministral-14b-2512
             contextWindow: 262144
             maxTokens: 32768
@@ -148,9 +169,9 @@
 # glm-5-2                    | arrays (GLM family); thinking arrays + string
 #                            |   answer translate in the normalizer -> ACTIVE
 # zai-glm-5-3                | arrays (GLM family) -> ACTIVE via the
-#                            |   normalizer's GLM translation
+#                            |   normalizer's shape-keyed translation
 # zai-glm-5-3-flash          | arrays (GLM family) -> ACTIVE via the
-#                            |   normalizer's GLM translation
+#                            |   normalizer's shape-keyed translation
 # labs-leanstral-1-5-1       | org-admin gated -> excluded
 # Voxtral Small Transcribe   | transcription model behind the chat flag
 #                            |   -> excluded
@@ -160,8 +181,8 @@
 #
 # Two follow-ups unlock the excluded families:
 #   1. DSH exposing the `mistral-conversations` protocol to hand-declared
-#      routes: switch `api`, drop the compat block, declare real reasoning
-#      ladders, and re-add the GLM / large-4 family.
+#      routes: switch `api`, drop the compat block and re-read the arrays
+#      natively, and re-add the GLM / large-4 family.
 #   2. A stream-shape probe of mistral-large-2512; add it if it streams
 #      strings without a ladder.
 # Aliases deliberately not pinned (medium-3, small-2603, ministral-*-latest,
